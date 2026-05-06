@@ -15,7 +15,8 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   exit 1
 fi
 
-shellcheck wg-toolkit.sh uninstall.sh scripts/package-release.sh
+shellcheck wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh
+bash scripts/check-redaction.sh
 
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
@@ -25,7 +26,8 @@ tar -czf "$PACKAGE_PATH" \
   uninstall.sh \
   README.md \
   docs \
-  scripts/package-release.sh
+  scripts/package-release.sh \
+  scripts/check-redaction.sh
 
 if command -v sha256sum >/dev/null 2>&1; then
   sha256sum "$PACKAGE_PATH" >"$SHA_PATH"

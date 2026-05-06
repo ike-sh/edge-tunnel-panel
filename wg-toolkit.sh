@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="0.2.1-alpha"
+TOOL_VERSION="0.2.4-alpha"
 PROJECT_NAME="leikwan-wg-toolkit"
 PROJECT_TITLE="利群三机链式代理部署工具"
+PROJECT_DISPLAY_NAME="Leikwan WG Toolkit"
+PROJECT_AUTHOR="ike-sh"
+PROJECT_GITHUB="https://github.com/ike-sh/leikwan-wg-toolkit"
 DRY_RUN=0
 REBUILD_ROLE_OVERRIDE=""
 REBUILD_VLESSENC_ENCRYPTION=""
@@ -78,6 +81,19 @@ WG_IDENTITY_PUBLIC=""
 REALM_ENTRY_STEM="realm-leikwan"
 REALM_ENTRY_CONF="${REALM_DIR}/${REALM_ENTRY_STEM}.toml"
 REALM_ENTRY_SERVICE="/etc/systemd/system/${REALM_ENTRY_STEM}.service"
+FORWARD_TARGET="${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}"
+FORWARD_NFT_DIR="${STATE_DIR}/nftables"
+FORWARD_NFT_CONF="${FORWARD_NFT_DIR}/leikwan-forward.nft"
+FORWARD_NFT_SCRIPT="${FORWARD_NFT_DIR}/leikwan-forward-nft"
+FORWARD_NFT_SERVICE_NAME="leikwan-forward-nft"
+FORWARD_NFT_SERVICE="/etc/systemd/system/${FORWARD_NFT_SERVICE_NAME}.service"
+FORWARD_IPTABLES_DIR="${STATE_DIR}/iptables"
+FORWARD_IPTABLES_SCRIPT="${FORWARD_IPTABLES_DIR}/apply-iptables-forward.sh"
+FORWARD_IPTABLES_SERVICE_NAME="leikwan-forward-iptables"
+FORWARD_IPTABLES_SERVICE="/etc/systemd/system/${FORWARD_IPTABLES_SERVICE_NAME}.service"
+FORWARD_SYSCTL_CONF="/etc/sysctl.d/99-leikwan-forward.conf"
+SHORTCUT_LQ="/usr/local/bin/lq"
+SHORTCUT_LQ_UPPER="/usr/local/bin/LQ"
 
 if [[ -t 1 ]]; then
   RED=$'\033[31m'
@@ -173,6 +189,8 @@ ${PROJECT_TITLE}
   sudo bash wg-toolkit.sh --uninstall
   bash wg-toolkit.sh --help
   bash wg-toolkit.sh --version
+  lq
+  LQ
 
 定位：
   公网入口机 <原生 WireGuard UDP> 利群中转机 <Xray VLESS/Reality> 海外落地机
@@ -246,6 +264,21 @@ ensure_supported_os() {
   esac
 }
 
+normalize_menu_choice() {
+  local s="$1"
+  s="${s//$'\r'/}"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+prompt_menu_choice() {
+  local prompt="$1"
+  local choice
+  read -r -p "$prompt" choice
+  normalize_menu_choice "$choice"
+}
+
 prompt_yes_no() {
   local prompt="$1"
   local default="${2:-N}"
@@ -259,6 +292,7 @@ prompt_yes_no() {
 
   while true; do
     read -r -p "${prompt} ${suffix} " answer
+    answer="$(normalize_menu_choice "$answer")"
     answer="${answer:-$default}"
     case "$answer" in
       y|Y|yes|YES) return 0 ;;
@@ -274,9 +308,11 @@ prompt_value() {
   local value
   if [[ -n "$default" ]]; then
     read -r -p "${prompt} [${default}]: " value
+    value="${value//$'\r'/}"
     printf '%s' "${value:-$default}"
   else
     read -r -p "${prompt}: " value
+    value="${value//$'\r'/}"
     printf '%s' "$value"
   fi
 }
@@ -382,6 +418,138 @@ script_self_path() {
   else
     printf '%s' "$0"
   fi
+}
+
+print_banner() {
+  cat <<EOF
+--------------------------------------------------
+  ${PROJECT_DISPLAY_NAME}
+  ${PROJECT_TITLE}
+  Author : ${PROJECT_AUTHOR}
+  Version: ${TOOL_VERSION}
+  GitHub : ${PROJECT_GITHUB}
+--------------------------------------------------
+EOF
+}
+
+shortcut_marker() {
+  printf '%s' "# Managed by leikwan-wg-toolkit"
+}
+
+shortcut_is_managed() {
+  local path="$1"
+  [[ -f "$path" ]] && grep -qF "$(shortcut_marker)" "$path"
+}
+
+render_shortcut_script() {
+  local script_path="$1"
+  local quoted_script_path
+  printf -v quoted_script_path '%q' "$script_path"
+  cat <<EOF
+#!/usr/bin/env bash
+# Managed by leikwan-wg-toolkit
+exec bash ${quoted_script_path} "\$@"
+EOF
+}
+
+install_shortcut_file() {
+  local path="$1"
+  local script_path="$2"
+  local quiet="${3:-}"
+  local content
+
+  content="$(render_shortcut_script "$script_path")"
+
+  if [[ -e "$path" ]] && ! shortcut_is_managed "$path"; then
+    if ! prompt_yes_no "检测到 ${path} 已存在且不是 leikwan-wg-toolkit 创建，是否覆盖？" "N"; then
+      warn "${path} 已保留。"
+      return 0
+    fi
+  fi
+
+  if [[ "$quiet" == "quiet" && -f "$path" ]] && printf '%s\n' "$content" | cmp -s - "$path"; then
+    if (( DRY_RUN == 0 )); then
+      chmod +x "$path"
+    fi
+    return 0
+  fi
+
+  write_text_file "$path" "$content" 755 || true
+  if (( DRY_RUN == 0 )); then
+    chmod +x "$path"
+  fi
+}
+
+show_shortcut_status() {
+  local path target
+  echo
+  echo "${BOLD}快捷命令状态${RESET}"
+  for path in "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER"; do
+    if shortcut_is_managed "$path"; then
+      target="$(awk '/^exec bash / {print $3; exit}' "$path" 2>/dev/null || true)"
+      ok "${path} 已安装（${target:-unknown}）"
+    elif [[ -e "$path" ]]; then
+      warn "${path} 存在但不是本项目创建。"
+    else
+      warn "${path} 未安装。"
+    fi
+  done
+}
+
+print_shortcut_hint() {
+  cat <<EOF
+
+快捷命令：
+  lq
+  LQ
+
+以后可以直接运行：
+  lq
+进入工具。
+EOF
+}
+
+install_shortcuts() {
+  need_root_unless_dry_run
+  local quiet="${1:-}"
+  local script_path
+  script_path="$(script_self_path)"
+
+  if (( DRY_RUN == 0 )) && [[ ! -f "$script_path" ]]; then
+    warn "无法确认当前脚本真实路径：${script_path}，已跳过快捷命令安装。"
+    return 0
+  fi
+
+  install_shortcut_file "$SHORTCUT_LQ" "$script_path" "$quiet"
+  install_shortcut_file "$SHORTCUT_LQ_UPPER" "$script_path" "$quiet"
+  if [[ "$quiet" != "quiet" ]]; then
+    show_shortcut_status
+    print_shortcut_hint
+  fi
+}
+
+remove_shortcut_file() {
+  local path="$1"
+  if [[ ! -e "$path" ]]; then
+    warn "${path} 不存在，跳过。"
+    return 0
+  fi
+
+  if ! shortcut_is_managed "$path"; then
+    warn "${path} 存在但不是本项目创建，已保留。"
+    return 0
+  fi
+
+  backup_file "$path"
+  rm -f "$path"
+  ok "已删除快捷命令：${path}"
+}
+
+remove_shortcuts() {
+  need_root
+  init_log
+  remove_shortcut_file "$SHORTCUT_LQ"
+  remove_shortcut_file "$SHORTCUT_LQ_UPPER"
 }
 
 is_ipv4() {
@@ -1318,7 +1486,7 @@ ensure_wg_identity() {
     echo "1. 使用 key 文件：${private_file}" >&2
     echo "2. 使用 conf 文件：${conf}" >&2
     echo "3. 取消（默认）" >&2
-    read -r -p "请选择 [3]: " choice
+    choice="$(prompt_menu_choice "请选择 [3]: ")"
     choice="${choice:-3}"
     case "$choice" in
       1) selected="$key_private" ;;
@@ -1469,7 +1637,7 @@ show_wg_identity_menu() {
     echo "3. 重置本机 WireGuard Key"
     echo "0. 返回"
     local choice reset_choice
-    read -r -p "请选择：" choice
+    choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) show_wg_identity_for_iface "wg0" || true ;;
       2) show_wg_identity_for_iface "wg1" || true ;;
@@ -1477,15 +1645,17 @@ show_wg_identity_menu() {
         echo "1. 重置 wg0（利群中转机）"
         echo "2. 重置 wg1（公网入口机）"
         echo "0. 取消"
-        read -r -p "请选择：" reset_choice
+        reset_choice="$(prompt_menu_choice "请选择：")"
         case "$reset_choice" in
           1) reset_wg_identity "wg0" || true ;;
           2) reset_wg_identity "wg1" || true ;;
           0) ;;
+          "") echo "请输入选项编号。" ;;
           *) echo "无效选择。" ;;
         esac
         ;;
       0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
     esac
   done
@@ -1782,6 +1952,220 @@ configure_realm_entry_forward() {
   fi
 }
 
+render_forward_sysctl() {
+  cat <<EOF
+# Managed by leikwan-wg-toolkit
+net.ipv4.ip_forward=1
+EOF
+}
+
+configure_forward_sysctl() {
+  local content
+  content="$(render_forward_sysctl)"
+  write_text_file "$FORWARD_SYSCTL_CONF" "$content" 644 || true
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] 跳过 sysctl --system"
+    return 0
+  fi
+  run_cmd sysctl --system
+}
+
+render_nft_forward_config() {
+  cat <<EOF
+# Managed by leikwan-wg-toolkit
+table ip leikwan_nat {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    tcp dport ${CLIENT_ENTRY_PORT_DEFAULT} dnat to ${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}
+  }
+
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    ip daddr ${LEIKWAN_WG_IP} tcp dport ${CLIENT_ENTRY_PORT_DEFAULT} masquerade
+  }
+}
+
+table inet leikwan_filter {
+  chain forward {
+    type filter hook forward priority -100; policy accept;
+    ct state established,related accept
+    ip daddr ${LEIKWAN_WG_IP} tcp dport ${CLIENT_ENTRY_PORT_DEFAULT} accept
+    ip saddr ${LEIKWAN_WG_IP} tcp sport ${CLIENT_ENTRY_PORT_DEFAULT} accept
+  }
+}
+EOF
+}
+
+render_nft_forward_script() {
+  cat <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+CONF="${FORWARD_NFT_CONF}"
+case "\${1:-apply}" in
+  apply)
+    nft delete table ip leikwan_nat 2>/dev/null || true
+    nft delete table inet leikwan_filter 2>/dev/null || true
+    nft -f "\$CONF"
+    ;;
+  delete)
+    nft delete table ip leikwan_nat 2>/dev/null || true
+    nft delete table inet leikwan_filter 2>/dev/null || true
+    ;;
+  *)
+    echo "Usage: \$0 {apply|delete}" >&2
+    exit 2
+    ;;
+esac
+EOF
+}
+
+render_nft_forward_service() {
+  cat <<EOF
+# Managed by leikwan-wg-toolkit
+[Unit]
+Description=Leikwan nftables TCP forward
+Wants=network-online.target
+After=network-online.target wg-quick@wg1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${FORWARD_NFT_SCRIPT} apply
+ExecStop=${FORWARD_NFT_SCRIPT} delete
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+configure_nft_forward() {
+  local summary config_content script_content service_content
+  install_packages nftables
+  if (( DRY_RUN == 0 )) && ! command -v nft >/dev/null 2>&1; then
+    warn "未检测到 nft 命令，建议改用 iptables 内核转发。"
+    if prompt_yes_no "是否改用 iptables 转发？" "Y"; then
+      configure_iptables_forward
+      return
+    fi
+    return 1
+  fi
+  config_content="$(render_nft_forward_config)"
+  script_content="$(render_nft_forward_script)"
+  service_content="$(render_nft_forward_service)"
+  summary="方式：nftables 内核转发\n规则：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT}/tcp -> ${FORWARD_TARGET}\nSNAT：masquerade\n配置：${FORWARD_NFT_CONF}\n服务：${FORWARD_NFT_SERVICE_NAME}.service\nsysctl：${FORWARD_SYSCTL_CONF} 设置 net.ipv4.ip_forward=1\n动作：只管理 table ip leikwan_nat 和 table inet leikwan_filter，不 flush ruleset。"
+  if ! confirm_summary "公网入口机 nftables 转发摘要" "$summary"; then
+    warn "已取消 nftables 转发配置。"
+    return 0
+  fi
+  configure_forward_sysctl
+  if (( DRY_RUN == 0 )); then
+    install -d -m 755 "$FORWARD_NFT_DIR"
+  fi
+  write_text_file "$FORWARD_NFT_CONF" "$config_content" 644 || true
+  write_text_file "$FORWARD_NFT_SCRIPT" "$script_content" 755 || true
+  write_text_file "$FORWARD_NFT_SERVICE" "$service_content" 644 || true
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] 跳过启动 ${FORWARD_NFT_SERVICE_NAME}.service"
+    return 0
+  fi
+  run_cmd systemctl daemon-reload
+  run_cmd systemctl enable "${FORWARD_NFT_SERVICE_NAME}.service"
+  run_cmd systemctl restart "${FORWARD_NFT_SERVICE_NAME}.service"
+  ok "nftables 转发服务已启动：${FORWARD_NFT_SERVICE_NAME}.service"
+}
+
+render_iptables_forward_script() {
+  cat <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ACTION="\${1:-apply}"
+case "\$ACTION" in
+  apply)
+    iptables -t nat -C PREROUTING -p tcp --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j DNAT --to-destination ${FORWARD_TARGET} 2>/dev/null || iptables -t nat -A PREROUTING -p tcp --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j DNAT --to-destination ${FORWARD_TARGET}
+    iptables -t nat -C POSTROUTING -p tcp -d ${LEIKWAN_WG_IP} --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -p tcp -d ${LEIKWAN_WG_IP} --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j MASQUERADE
+    iptables -C FORWARD -p tcp -d ${LEIKWAN_WG_IP} --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j ACCEPT 2>/dev/null || iptables -A FORWARD -p tcp -d ${LEIKWAN_WG_IP} --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j ACCEPT
+    iptables -C FORWARD -p tcp -s ${LEIKWAN_WG_IP} --sport ${CLIENT_ENTRY_PORT_DEFAULT} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A FORWARD -p tcp -s ${LEIKWAN_WG_IP} --sport ${CLIENT_ENTRY_PORT_DEFAULT} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    ;;
+  delete)
+    while iptables -t nat -C PREROUTING -p tcp --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j DNAT --to-destination ${FORWARD_TARGET} 2>/dev/null; do iptables -t nat -D PREROUTING -p tcp --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j DNAT --to-destination ${FORWARD_TARGET}; done
+    while iptables -t nat -C POSTROUTING -p tcp -d ${LEIKWAN_WG_IP} --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j MASQUERADE 2>/dev/null; do iptables -t nat -D POSTROUTING -p tcp -d ${LEIKWAN_WG_IP} --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j MASQUERADE; done
+    while iptables -C FORWARD -p tcp -d ${LEIKWAN_WG_IP} --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j ACCEPT 2>/dev/null; do iptables -D FORWARD -p tcp -d ${LEIKWAN_WG_IP} --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j ACCEPT; done
+    while iptables -C FORWARD -p tcp -s ${LEIKWAN_WG_IP} --sport ${CLIENT_ENTRY_PORT_DEFAULT} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do iptables -D FORWARD -p tcp -s ${LEIKWAN_WG_IP} --sport ${CLIENT_ENTRY_PORT_DEFAULT} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; done
+    ;;
+  *)
+    echo "Usage: \$0 {apply|delete}" >&2
+    exit 2
+    ;;
+esac
+EOF
+}
+
+render_iptables_forward_service() {
+  cat <<EOF
+# Managed by leikwan-wg-toolkit
+[Unit]
+Description=Leikwan iptables TCP forward
+Wants=network-online.target
+After=network-online.target wg-quick@wg1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${FORWARD_IPTABLES_SCRIPT} apply
+ExecStop=${FORWARD_IPTABLES_SCRIPT} delete
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+configure_iptables_forward() {
+  local summary script_content service_content
+  install_packages iptables
+  script_content="$(render_iptables_forward_script)"
+  service_content="$(render_iptables_forward_service)"
+  summary="方式：iptables 内核转发\n规则：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT}/tcp -> ${FORWARD_TARGET}\nSNAT：MASQUERADE\n脚本：${FORWARD_IPTABLES_SCRIPT}\n服务：${FORWARD_IPTABLES_SERVICE_NAME}.service\nsysctl：${FORWARD_SYSCTL_CONF} 设置 net.ipv4.ip_forward=1\n动作：只添加/删除本项目精确规则，不 flush 任何链。"
+  if ! confirm_summary "公网入口机 iptables 转发摘要" "$summary"; then
+    warn "已取消 iptables 转发配置。"
+    return 0
+  fi
+  configure_forward_sysctl
+  if (( DRY_RUN == 0 )); then
+    install -d -m 755 "$FORWARD_IPTABLES_DIR"
+  fi
+  write_text_file "$FORWARD_IPTABLES_SCRIPT" "$script_content" 755 || true
+  write_text_file "$FORWARD_IPTABLES_SERVICE" "$service_content" 644 || true
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] 跳过启动 ${FORWARD_IPTABLES_SERVICE_NAME}.service"
+    return 0
+  fi
+  run_cmd systemctl daemon-reload
+  run_cmd systemctl enable "${FORWARD_IPTABLES_SERVICE_NAME}.service"
+  run_cmd systemctl restart "${FORWARD_IPTABLES_SERVICE_NAME}.service"
+  ok "iptables 转发服务已启动：${FORWARD_IPTABLES_SERVICE_NAME}.service"
+}
+
+choose_cloud_forward_mode() {
+  local choice
+  echo
+  echo "请选择公网入口转发方式："
+  echo "1. nftables 内核转发（推荐）"
+  echo "2. iptables 内核转发"
+  echo "3. realm 用户态转发"
+  echo "4. 不配置转发，只部署 WireGuard"
+  while true; do
+    choice="$(prompt_menu_choice "请选择 [1]: ")"
+    choice="${choice:-1}"
+    case "$choice" in
+      1) printf '%s' "nftables"; return 0 ;;
+      2) printf '%s' "iptables"; return 0 ;;
+      3) printf '%s' "realm"; return 0 ;;
+      4) printf '%s' "none"; return 0 ;;
+      *) echo "无效选择。" ;;
+    esac
+  done
+}
+
 deploy_cloud_entry() {
   need_root_unless_dry_run
   init_log
@@ -1793,7 +2177,7 @@ deploy_cloud_entry() {
   echo
   warn "公网入口机部署需要利群中转机的 PublicKey。若还没有，请先在利群中转机执行菜单 2，复制 LEIKWAN_PUBLIC_KEY。"
 
-  local leikwan_public_key wg_port private_key public_key wg_content endpoint summary proto
+  local leikwan_public_key wg_port private_key public_key wg_content endpoint summary proto forward_mode
   local saved_leikwan_public_key
   saved_leikwan_public_key="$(saved_param LEIKWAN_PUBLIC_KEY "$LEIKWAN_PEER_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
   [[ -n "$saved_leikwan_public_key" ]] && ok "已读取 LEIKWAN_PUBLIC_KEY。"
@@ -1817,15 +2201,29 @@ deploy_cloud_entry() {
     return 0
   fi
 
-  install_realm || return 1
-  while true; do
-    proto="$(prompt_value "请选择公网入口 30000 转发协议：tcp / udp / both" "tcp")"
-    case "$proto" in
-      tcp|udp|both) break ;;
-      *) echo "协议只能是 tcp、udp 或 both。" ;;
-    esac
-  done
-  configure_realm_entry_forward "$proto"
+  forward_mode="$(choose_cloud_forward_mode)"
+  case "$forward_mode" in
+    nftables)
+      configure_nft_forward
+      ;;
+    iptables)
+      configure_iptables_forward
+      ;;
+    realm)
+      install_realm || return 1
+      while true; do
+        proto="$(prompt_value "请选择公网入口 30000 转发协议：tcp / udp / both" "tcp")"
+        case "$proto" in
+          tcp|udp|both) break ;;
+          *) echo "协议只能是 tcp、udp 或 both。" ;;
+        esac
+      done
+      configure_realm_entry_forward "$proto"
+      ;;
+    none)
+      warn "已选择不配置公网入口转发。请自行确保 ${CLIENT_ENTRY_PORT_DEFAULT}/tcp 能到达 ${FORWARD_TARGET}。"
+      ;;
+  esac
 
   local cloud_output
   cloud_output="$(cat <<EOF
@@ -1833,10 +2231,18 @@ CLOUD_PUBLIC_KEY=${public_key}
 CLOUD_ENDPOINT=${endpoint:-请填写公网入口机 IPv4 或域名}
 CLOUD_WG_PORT=${wg_port}
 CLIENT_ENTRY_PORT=${CLIENT_ENTRY_PORT_DEFAULT}
+FORWARD_MODE=${forward_mode}
+FORWARD_TARGET=${FORWARD_TARGET}
 EOF
 )"
   print_copy_block "请复制回利群中转机" "$cloud_output" $'去利群中转机运行：\nbash wg-toolkit.sh\n选择：推荐部署向导 -> 利群中转机：导入 CLOUD + LANDING 参数并完成链式部署'
+  print_copy_block "公网入口机转发" "FORWARD_MODE=${forward_mode}
+CLIENT_ENTRY_PORT=${CLIENT_ENTRY_PORT_DEFAULT}
+FORWARD_TARGET=${FORWARD_TARGET}"
   write_output_file "cloud-entry" "$cloud_output"
+  if (( DRY_RUN == 0 )); then
+    print_shortcut_hint
+  fi
   print_cloud_acceptance_commands
 }
 
@@ -1879,7 +2285,7 @@ select_xray_service_target() {
     echo "2. 创建独立 xray-leikwan.service（推荐）"
     echo "3. 取消"
     local choice
-    read -r -p "请选择 [2]: " choice
+    choice="$(prompt_menu_choice "请选择 [2]: ")"
     choice="${choice:-2}"
     case "$choice" in
       1)
@@ -2145,8 +2551,11 @@ ${BOLD}公网入口机验收命令：${RESET}
 wg show
 ping -c 3 ${LEIKWAN_WG_IP}
 nc -vz ${LEIKWAN_WG_IP} ${CLIENT_ENTRY_PORT_DEFAULT}
-ss -lntup | grep ${CLIENT_ENTRY_PORT_DEFAULT}
-systemctl status ${REALM_ENTRY_STEM} --no-pager
+bash wg-toolkit.sh --doctor
+nft list ruleset | grep -A20 leikwan
+iptables -t nat -S | grep ${LEIKWAN_WG_IP} || true
+# nftables/iptables 内核转发不会有 ${CLIENT_ENTRY_PORT_DEFAULT} 用户态监听；realm 模式才检查：
+systemctl status ${REALM_ENTRY_STEM} --no-pager 2>/dev/null || true
 EOF
 }
 
@@ -2229,6 +2638,9 @@ EOF
 )"
   print_copy_block "请复制到利群中转机" "$landing_output" $'下一步去利群中转机：\nbash wg-toolkit.sh\n选择：查看 / 生成本机 WireGuard 身份\n拿到 LEIKWAN_PUBLIC_KEY 后去公网入口机部署'
   write_output_file "landing-server" "$landing_output"
+  if (( DRY_RUN == 0 )); then
+    print_shortcut_hint
+  fi
   print_landing_acceptance_commands "$landing_port"
 }
 
@@ -2520,6 +2932,9 @@ EOF
   print_copy_block "客户端导入链接" "CLIENT_LINK=${client_link}"
   write_output_file "leikwan-relay" "$relay_output"
   write_output_file "client-link" "$client_link_output"
+  if (( DRY_RUN == 0 )); then
+    print_shortcut_hint
+  fi
   print_relay_acceptance_commands "$landing_address" "$landing_port"
 }
 
@@ -2555,8 +2970,13 @@ test_cloud_entry() {
   fi
 
   echo
-  echo "${BOLD}公网入口机测试：ss -lntup | grep ${CLIENT_ENTRY_PORT_DEFAULT}${RESET}"
-  ss -lntup | grep "$CLIENT_ENTRY_PORT_DEFAULT" || warn "未看到 ${CLIENT_ENTRY_PORT_DEFAULT} 监听，请检查 realm。"
+  echo "${BOLD}公网入口机测试：转发方式与规则${RESET}"
+  validate_cloud_forwarding "$(cloud_forward_mode)" || true
+  if [[ "$(cloud_forward_mode)" == "realm" ]]; then
+    ss -lntup | grep "$CLIENT_ENTRY_PORT_DEFAULT" || warn "未看到 ${CLIENT_ENTRY_PORT_DEFAULT} 监听，请检查 realm。"
+  else
+    echo "nftables/iptables 为内核 DNAT，ss 不一定能看到 ${CLIENT_ENTRY_PORT_DEFAULT} 用户态监听。"
+  fi
 }
 
 test_leikwan_relay() {
@@ -2622,12 +3042,13 @@ link_test_menu() {
     echo "2. 利群中转机测试"
     echo "3. 海外落地机测试"
     echo "0. 返回主菜单"
-    read -r -p "请选择：" choice
+    choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) test_cloud_entry || true ;;
       2) test_leikwan_relay || true ;;
       3) test_landing_server || true ;;
       0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
     esac
   done
@@ -2991,7 +3412,7 @@ pbr_select_group() {
   if [[ "$allow_all" == "yes" ]]; then
     echo "A. 其他：显示所有内置线路组"
   fi
-  read -r -p "请选择线路组编号，或输入 A 查看全部，留空取消：" choice
+  choice="$(prompt_menu_choice "请选择线路组编号，或输入 A 查看全部，留空取消：")"
   [[ -z "$choice" ]] && return 255
 
   if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= count )); then
@@ -3007,7 +3428,7 @@ pbr_select_group() {
       printf '%-4d %-14s %-15s %s\n' "$idx" "$name" "$gw" "$pattern"
       idx=$((idx + 1))
     done < <(pbr_route_definitions)
-    read -r -p "请选择线路组编号，留空取消：" choice
+    choice="$(prompt_menu_choice "请选择线路组编号，留空取消：")"
     [[ -z "$choice" ]] && return 255
     if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice < idx )); then
       idx=1
@@ -3491,10 +3912,11 @@ pbr_delete_rule() {
   local kind file priority choice total line target group ips summary
   echo "1. 删除静态 IP/CIDR 规则"
   echo "2. 删除域名 DDNS 规则"
-  read -r -p "请选择：" kind
+  kind="$(prompt_menu_choice "请选择：")"
   case "$kind" in
     1) file="$PBR_STATIC_CONF"; priority="$PBR_STATIC_PRIORITY" ;;
     2) file="$PBR_DOMAIN_CONF"; priority="$PBR_DOMAIN_PRIORITY" ;;
+    "") warn "请输入选项编号。"; return 1 ;;
     *) warn "无效选择。"; return 1 ;;
   esac
   [[ -s "$file" ]] || {
@@ -3504,6 +3926,7 @@ pbr_delete_rule() {
 
   awk '{print NR". "$0}' "$file"
   choice="$(prompt_value "请输入要删除的编号")"
+  choice="$(normalize_menu_choice "$choice")"
   [[ "$choice" =~ ^[0-9]+$ ]] || {
     warn "编号无效。"
     return 1
@@ -3763,12 +4186,13 @@ pbr_import_existing_rules() {
       echo "2. 跳过"
       echo "3. 全部导入"
       echo "4. 取消"
-      read -r -p "请选择：" choice
+      choice="$(prompt_menu_choice "请选择：")"
       case "$choice" in
         1) ;;
         2) continue ;;
         3) import_all=1 ;;
         4) warn "已取消导入。"; break ;;
+        "") warn "请输入选项编号。"; continue ;;
         *) warn "无效选择，跳过。"; continue ;;
       esac
     fi
@@ -3866,7 +4290,7 @@ pbr_menu() {
     echo "8. 安装 / 重启 PBR 开机恢复服务"
     echo "9. 导入已有 PBR 规则"
     echo "0. 返回"
-    read -r -p "请选择：" choice
+    choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) pbr_detect_available_routes "show" "no" || true ;;
       2) pbr_add_static_route || true ;;
@@ -3878,6 +4302,7 @@ pbr_menu() {
       8) pbr_install_service || true ;;
       9) pbr_import_existing_rules || true ;;
       0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
     esac
   done
@@ -3906,6 +4331,9 @@ show_status() {
     || warn "未检测到 xray-leikwan.service / xray.service 或服务未运行。"
   [[ -x "$XRAY_BIN" ]] && "$XRAY_BIN" version 2>/dev/null | head -n 1 || true
 
+  echo
+  echo "${BOLD}公网入口转发状态${RESET}"
+  validate_cloud_forwarding "$(cloud_forward_mode)" || true
   echo
   echo "${BOLD}realm 状态${RESET}"
   local services=()
@@ -3947,6 +4375,11 @@ create_snapshot_backup() {
   [[ -e "$PBR_DDNS_SERVICE" ]] && paths+=("${PBR_DDNS_SERVICE#/}")
   [[ -e "$PBR_DDNS_TIMER" ]] && paths+=("${PBR_DDNS_TIMER#/}")
   [[ -e "$PBR_RT_TABLES" ]] && paths+=("${PBR_RT_TABLES#/}")
+  [[ -e "$FORWARD_NFT_DIR" ]] && paths+=("${FORWARD_NFT_DIR#/}")
+  [[ -e "$FORWARD_IPTABLES_DIR" ]] && paths+=("${FORWARD_IPTABLES_DIR#/}")
+  [[ -e "$FORWARD_NFT_SERVICE" ]] && paths+=("${FORWARD_NFT_SERVICE#/}")
+  [[ -e "$FORWARD_IPTABLES_SERVICE" ]] && paths+=("${FORWARD_IPTABLES_SERVICE#/}")
+  [[ -e "$FORWARD_SYSCTL_CONF" ]] && paths+=("${FORWARD_SYSCTL_CONF#/}")
 
   shopt -s nullglob
   local realm_files=("${REALM_DIR}"/*.toml /etc/systemd/system/realm-leikwan.service)
@@ -4024,12 +4457,13 @@ backup_restore_menu() {
     echo "2. 查看快照备份"
     echo "3. 从快照恢复"
     echo "0. 返回主菜单"
-    read -r -p "请选择：" choice
+    choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) create_snapshot_backup "manual" || true ;;
       2) list_snapshot_backups || true ;;
       3) restore_snapshot_backup || true ;;
       0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
     esac
   done
@@ -4094,6 +4528,66 @@ remove_project_realm_services() {
     ok "已删除 realm 服务：${stem}.service"
   done
   run_cmd systemctl daemon-reload || true
+}
+
+remove_nft_forward_rules() {
+  need_root
+  init_log
+  local summary="动作：停止并删除 ${FORWARD_NFT_SERVICE_NAME}.service，删除 table ip leikwan_nat 和 table inet leikwan_filter，备份后删除 ${FORWARD_NFT_DIR}。\n不会 flush ruleset，不删除用户其他 nftables 表。"
+  if ! confirm_summary "删除 nftables 转发规则摘要" "$summary"; then
+    warn "已取消删除 nftables 转发规则。"
+    return 0
+  fi
+  systemctl disable --now "${FORWARD_NFT_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  if command -v nft >/dev/null 2>&1; then
+    nft delete table ip leikwan_nat 2>/dev/null || true
+    nft delete table inet leikwan_filter 2>/dev/null || true
+  fi
+  [[ -f "$FORWARD_NFT_SERVICE" ]] && backup_file "$FORWARD_NFT_SERVICE" && rm -f "$FORWARD_NFT_SERVICE"
+  [[ -d "$FORWARD_NFT_DIR" ]] && backup_file "$FORWARD_NFT_DIR" && rm -rf "$FORWARD_NFT_DIR"
+  run_cmd systemctl daemon-reload || true
+  ok "已删除本项目 nftables 转发规则。"
+}
+
+remove_iptables_forward_rules() {
+  need_root
+  init_log
+  local summary="动作：停止并删除 ${FORWARD_IPTABLES_SERVICE_NAME}.service，执行本项目脚本 delete 删除精确 iptables 规则，备份后删除 ${FORWARD_IPTABLES_DIR}。\n不会 flush 任何链，不删除用户其他 iptables 规则。"
+  if ! confirm_summary "删除 iptables 转发规则摘要" "$summary"; then
+    warn "已取消删除 iptables 转发规则。"
+    return 0
+  fi
+  systemctl disable --now "${FORWARD_IPTABLES_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  if [[ -x "$FORWARD_IPTABLES_SCRIPT" ]]; then
+    "$FORWARD_IPTABLES_SCRIPT" delete || true
+  elif command -v iptables >/dev/null 2>&1; then
+    while iptables -t nat -C PREROUTING -p tcp --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j DNAT --to-destination "$FORWARD_TARGET" 2>/dev/null; do iptables -t nat -D PREROUTING -p tcp --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j DNAT --to-destination "$FORWARD_TARGET"; done
+    while iptables -t nat -C POSTROUTING -p tcp -d "$LEIKWAN_WG_IP" --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j MASQUERADE 2>/dev/null; do iptables -t nat -D POSTROUTING -p tcp -d "$LEIKWAN_WG_IP" --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j MASQUERADE; done
+    while iptables -C FORWARD -p tcp -d "$LEIKWAN_WG_IP" --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j ACCEPT 2>/dev/null; do iptables -D FORWARD -p tcp -d "$LEIKWAN_WG_IP" --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j ACCEPT; done
+    while iptables -C FORWARD -p tcp -s "$LEIKWAN_WG_IP" --sport "$CLIENT_ENTRY_PORT_DEFAULT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do iptables -D FORWARD -p tcp -s "$LEIKWAN_WG_IP" --sport "$CLIENT_ENTRY_PORT_DEFAULT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; done
+  fi
+  [[ -f "$FORWARD_IPTABLES_SERVICE" ]] && backup_file "$FORWARD_IPTABLES_SERVICE" && rm -f "$FORWARD_IPTABLES_SERVICE"
+  [[ -d "$FORWARD_IPTABLES_DIR" ]] && backup_file "$FORWARD_IPTABLES_DIR" && rm -rf "$FORWARD_IPTABLES_DIR"
+  run_cmd systemctl daemon-reload || true
+  ok "已删除本项目 iptables 转发规则。"
+}
+
+remove_forward_sysctl() {
+  need_root
+  init_log
+  if [[ ! -f "$FORWARD_SYSCTL_CONF" ]]; then
+    warn "未找到 ${FORWARD_SYSCTL_CONF}。"
+    return 0
+  fi
+  local summary="动作：备份并删除 ${FORWARD_SYSCTL_CONF}，然后执行 sysctl --system。\n不会修改其他 sysctl 文件。"
+  if ! confirm_summary "删除 IPv4 转发 sysctl 摘要" "$summary"; then
+    warn "已取消删除 sysctl 配置。"
+    return 0
+  fi
+  backup_file "$FORWARD_SYSCTL_CONF"
+  rm -f "$FORWARD_SYSCTL_CONF"
+  run_cmd sysctl --system || true
+  ok "已删除 ${FORWARD_SYSCTL_CONF}"
 }
 
 wg_config_is_managed() {
@@ -4182,7 +4676,11 @@ uninstall_cloud_entry() {
   init_log
   create_snapshot_backup "pre-uninstall-cloud" || true
   remove_wg_iface_if_managed "wg1"
+  remove_nft_forward_rules
+  remove_iptables_forward_rules
   remove_project_realm_services
+  remove_forward_sysctl
+  remove_shortcuts
 }
 
 uninstall_leikwan_relay() {
@@ -4191,6 +4689,7 @@ uninstall_leikwan_relay() {
   create_snapshot_backup "pre-uninstall-leikwan" || true
   remove_wg_iface_if_managed "wg0"
   remove_xray_config_with_double_confirm "利群中转机"
+  remove_shortcuts
 }
 
 uninstall_landing_server() {
@@ -4198,6 +4697,7 @@ uninstall_landing_server() {
   init_log
   create_snapshot_backup "pre-uninstall-landing" || true
   remove_xray_config_with_double_confirm "海外落地机"
+  remove_shortcuts
 }
 
 uninstall_menu() {
@@ -4209,15 +4709,24 @@ uninstall_menu() {
     echo "3. 卸载海外落地机组件"
     echo "4. 单独删除 IPv6 V6_LOCKDOWN 规则"
     echo "5. 仅删除 IPv4 PBR 规则"
+    echo "6. 删除 nftables 转发规则"
+    echo "7. 删除 iptables 转发规则"
+    echo "8. 删除 realm 转发服务"
+    echo "9. 删除快捷命令 lq / LQ"
     echo "0. 返回主菜单"
-    read -r -p "请选择：" choice
+    choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) uninstall_cloud_entry || true ;;
       2) uninstall_leikwan_relay || true ;;
       3) uninstall_landing_server || true ;;
       4) remove_ipv6_lockdown || true ;;
       5) pbr_remove_project_rules_only || true ;;
+      6) remove_nft_forward_rules || true ;;
+      7) remove_iptables_forward_rules || true ;;
+      8) remove_project_realm_services || true ;;
+      9) remove_shortcuts || true ;;
       0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
     esac
   done
@@ -4338,6 +4847,121 @@ validate_port_listen() {
   else
     validate_report warn "未检测到端口监听：${name} ${port}"
   fi
+}
+
+cloud_forward_mode() {
+  local mode
+  mode="$(saved_param FORWARD_MODE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
+  if [[ -n "$mode" ]]; then
+    printf '%s' "$mode"
+    return 0
+  fi
+  if systemctl list-unit-files --type=service --no-legend "${FORWARD_NFT_SERVICE_NAME}.service" 2>/dev/null | grep -q "^${FORWARD_NFT_SERVICE_NAME}.service"; then
+    printf '%s' "nftables"
+  elif systemctl list-unit-files --type=service --no-legend "${FORWARD_IPTABLES_SERVICE_NAME}.service" 2>/dev/null | grep -q "^${FORWARD_IPTABLES_SERVICE_NAME}.service"; then
+    printf '%s' "iptables"
+  elif systemctl list-unit-files --type=service --no-legend "${REALM_ENTRY_STEM}.service" 2>/dev/null | grep -q "^${REALM_ENTRY_STEM}.service"; then
+    printf '%s' "realm"
+  else
+    printf '%s' "unknown"
+  fi
+}
+
+validate_ip_forward_enabled() {
+  local value
+  value="$(sysctl -n net.ipv4.ip_forward 2>/dev/null || true)"
+  if [[ "$value" == "1" ]]; then
+    validate_report ok "net.ipv4.ip_forward=1"
+  else
+    validate_report warn "net.ipv4.ip_forward=${value:-unknown}，内核转发需要设置为 1"
+  fi
+}
+
+iptables_forward_rules_present() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  iptables -t nat -C PREROUTING -p tcp --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j DNAT --to-destination "$FORWARD_TARGET" 2>/dev/null || return 1
+  iptables -t nat -C POSTROUTING -p tcp -d "$LEIKWAN_WG_IP" --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j MASQUERADE 2>/dev/null || return 1
+  iptables -C FORWARD -p tcp -d "$LEIKWAN_WG_IP" --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j ACCEPT 2>/dev/null || return 1
+  iptables -C FORWARD -p tcp -s "$LEIKWAN_WG_IP" --sport "$CLIENT_ENTRY_PORT_DEFAULT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || return 1
+}
+
+validate_cloud_forwarding() {
+  local mode="${1:-$(cloud_forward_mode)}"
+  case "$mode" in
+    nftables)
+      validate_report ok "转发方式：nftables"
+      validate_command_exists nft || true
+      validate_service "$FORWARD_NFT_SERVICE_NAME" || true
+      validate_ip_forward_enabled
+      if command -v nft >/dev/null 2>&1 && nft list table ip leikwan_nat >/dev/null 2>&1 && nft list table inet leikwan_filter >/dev/null 2>&1; then
+        validate_report ok "nftables DNAT：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET}"
+      else
+        validate_report warn "未检测到 nftables leikwan_nat / leikwan_filter 表"
+      fi
+      ;;
+    iptables)
+      validate_report ok "转发方式：iptables"
+      validate_command_exists iptables || true
+      validate_service "$FORWARD_IPTABLES_SERVICE_NAME" || true
+      validate_ip_forward_enabled
+      if iptables_forward_rules_present; then
+        validate_report ok "iptables DNAT：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET}"
+      else
+        validate_report warn "未检测到完整 iptables DNAT/MASQUERADE/FORWARD 规则"
+      fi
+      ;;
+    realm)
+      validate_report ok "转发方式：realm"
+      validate_service "$REALM_ENTRY_STEM" || true
+      if [[ -f "$REALM_ENTRY_CONF" ]]; then
+        validate_report ok "realm 配置存在：${REALM_ENTRY_CONF}"
+      else
+        validate_report warn "realm 配置不存在：${REALM_ENTRY_CONF}"
+      fi
+      validate_port_listen "$CLIENT_ENTRY_PORT_DEFAULT" "公网客户端入口 / realm"
+      ;;
+    none)
+      validate_report info "转发方式：未配置"
+      ;;
+    *)
+      validate_report warn "未能识别公网入口转发方式"
+      ;;
+  esac
+}
+
+validate_cloud_forwarding_concise() {
+  local mode="${1:-$(cloud_forward_mode)}"
+  case "$mode" in
+    nftables)
+      if command -v nft >/dev/null 2>&1 && nft list table ip leikwan_nat >/dev/null 2>&1; then
+        validate_report ok "转发方式：nftables，${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET}"
+      else
+        validate_report warn "转发方式：nftables，但未检测到 leikwan_nat"
+      fi
+      validate_ip_forward_enabled
+      ;;
+    iptables)
+      if iptables_forward_rules_present; then
+        validate_report ok "转发方式：iptables，${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET}"
+      else
+        validate_report warn "转发方式：iptables，但规则不完整"
+      fi
+      validate_ip_forward_enabled
+      ;;
+    realm)
+      if systemctl is-active --quiet "${REALM_ENTRY_STEM}.service"; then
+        validate_report ok "转发方式：realm，${CLIENT_ENTRY_PORT_DEFAULT}"
+      else
+        validate_report warn "转发方式：realm，但服务未运行"
+      fi
+      ;;
+    none)
+      validate_report info "转发方式：未配置"
+      ;;
+    *)
+      validate_report warn "转发方式：未知"
+      ;;
+  esac
 }
 
 validate_ping() {
@@ -4478,15 +5102,9 @@ validate_all() {
   echo
   echo "${BOLD}4. 角色组件状态${RESET}"
   if role_has "$role" "cloud-entry"; then
-    validate_service "$REALM_ENTRY_STEM" || true
-    if [[ -f "$REALM_ENTRY_CONF" ]]; then
-      validate_report ok "realm 配置存在：${REALM_ENTRY_CONF}"
-    else
-      validate_report warn "realm 配置不存在：${REALM_ENTRY_CONF}"
-    fi
-    validate_port_listen "$CLIENT_ENTRY_PORT_DEFAULT" "公网客户端入口 / realm"
+    validate_cloud_forwarding "$(cloud_forward_mode)"
   else
-    validate_report info "realm-leikwan 属于公网入口机，当前角色缺失不报 WARN"
+    validate_report info "公网入口转发组件属于公网入口机，当前角色缺失不报 WARN"
   fi
   if role_has "$role" "leikwan-relay" || role_has "$role" "landing-server"; then
     validate_service "$XRAY_LEIKWAN_SERVICE_NAME" || true
@@ -4696,11 +5314,7 @@ validate_doctor_concise() {
   fi
 
   if role_has "$role" "cloud-entry"; then
-    if systemctl is-active --quiet "${REALM_ENTRY_STEM}.service"; then
-      validate_report ok "realm：${CLIENT_ENTRY_PORT_DEFAULT}"
-    else
-      validate_report warn "realm：未运行"
-    fi
+    validate_cloud_forwarding_concise "$(cloud_forward_mode)"
   elif role_has "$role" "leikwan-relay"; then
     if systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service"; then
       validate_report ok "Xray：${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}"
@@ -4755,6 +5369,8 @@ recommended_wizard_menu() {
     local role
     role="$(detect_current_role)"
     echo
+    print_banner
+    echo
     echo "${BOLD}极速部署向导${RESET}"
     echo "当前角色：${role}"
     local choice
@@ -4763,27 +5379,29 @@ recommended_wizard_menu() {
       echo "2. 查看 LANDING 参数"
       echo "3. doctor"
       echo "0. 返回"
-      read -r -p "请选择：" choice
+      choice="$(prompt_menu_choice "请选择：")"
       case "$choice" in
         1) deploy_landing_server || true ;;
         2) show_copy_params || true ;;
         3) validate_doctor_concise || true ;;
         0) return 0 ;;
+        "") echo "请输入选项编号。" ;;
         *) echo "无效选择。" ;;
       esac
     elif role_has "$role" "cloud-entry"; then
       echo "1. 导入 / 输入 LEIKWAN_PUBLIC_KEY"
-      echo "2. 部署 / 更新 WireGuard + realm"
+      echo "2. 部署 / 更新 WireGuard + 转发"
       echo "3. 查看 CLOUD 参数"
       echo "4. doctor"
       echo "0. 返回"
-      read -r -p "请选择：" choice
+      choice="$(prompt_menu_choice "请选择：")"
       case "$choice" in
         1) cloud_import_leikwan_public_key || true ;;
         2) deploy_cloud_entry || true ;;
         3) show_copy_params || true ;;
         4) validate_doctor_concise || true ;;
         0) return 0 ;;
+        "") echo "请输入选项编号。" ;;
         *) echo "无效选择。" ;;
       esac
     elif role_has "$role" "leikwan-relay"; then
@@ -4795,7 +5413,7 @@ recommended_wizard_menu() {
       echo "6. 查看客户端链接"
       echo "7. doctor"
       echo "0. 返回"
-      read -r -p "请选择：" choice
+      choice="$(prompt_menu_choice "请选择：")"
       case "$choice" in
         1) show_wg_identity_for_iface "wg0" || true ;;
         2) import_params_file || true ;;
@@ -4805,6 +5423,7 @@ recommended_wizard_menu() {
         6) view_client_link || true ;;
         7) validate_doctor_concise || true ;;
         0) return 0 ;;
+        "") echo "请输入选项编号。" ;;
         *) echo "无效选择。" ;;
       esac
     else
@@ -4812,12 +5431,13 @@ recommended_wizard_menu() {
       echo "2. 我这是公网入口机"
       echo "3. 我这是利群中转机"
       echo "0. 返回"
-      read -r -p "请选择：" choice
+      choice="$(prompt_menu_choice "请选择：")"
       case "$choice" in
         1) deploy_landing_server || true ;;
         2) cloud_import_leikwan_public_key || true; deploy_cloud_entry || true ;;
         3) show_wg_identity_for_iface "wg0" || true ;;
         0) return 0 ;;
+        "") echo "请输入选项编号。" ;;
         *) echo "无效选择。" ;;
       esac
     fi
@@ -4853,10 +5473,13 @@ deployment_overview() {
     echo "验收命令：wg show; ss -lntup | grep ${CLIENT_ENTRY_PORT_DEFAULT}; bash wg-toolkit.sh --doctor"
   elif role_has "$role" "cloud-entry"; then
     wg_pub="$(read_key_file "$CLOUD_WG_PUBLIC_FILE" 2>/dev/null || true)"
+    local forward_mode
+    forward_mode="$(cloud_forward_mode)"
     echo "WG：wg1 ${CLOUD_WG_ADDR}"
     [[ -n "$wg_pub" ]] && echo "本机 WG PublicKey：${wg_pub}"
-    systemctl is-active --quiet "${REALM_ENTRY_STEM}.service" && echo "realm：active" || echo "realm：inactive/unknown"
-    echo "公网入口：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT}"
+    echo "转发方式：${forward_mode}"
+    echo "入口端口：${CLIENT_ENTRY_PORT_DEFAULT}"
+    echo "目标：${FORWARD_TARGET}"
     echo "需要复制给利群：${CLOUD_OUTPUT_FILE}"
     echo
     echo "验收命令：wg show; ping ${LEIKWAN_WG_IP}; nc -vz ${LEIKWAN_WG_IP} ${CLIENT_ENTRY_PORT_DEFAULT}"
@@ -4888,9 +5511,10 @@ advanced_menu() {
     echo "11. 查看状态"
     echo "12. 备份 / 恢复"
     echo "13. 卸载"
+    echo "14. 安装 / 修复快捷命令"
     echo "0. 返回"
     local choice
-    read -r -p "请选择：" choice
+    choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) show_wg_identity_menu || true ;;
       2) deployment_overview || true ;;
@@ -4905,7 +5529,9 @@ advanced_menu() {
       11) show_status || true ;;
       12) backup_restore_menu || true ;;
       13) uninstall_menu || true ;;
+      14) install_shortcuts || true ;;
       0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
     esac
   done
@@ -4914,21 +5540,29 @@ advanced_menu() {
 main_menu() {
   need_root_unless_dry_run
   init_log
+  local shortcuts_checked=0
   while true; do
     echo
-    echo "${BOLD}${PROJECT_TITLE} ${TOOL_VERSION}${RESET}"
+    print_banner
+    echo
+    if (( shortcuts_checked == 0 && DRY_RUN == 0 )); then
+      install_shortcuts quiet || true
+      shortcuts_checked=1
+      echo
+    fi
     echo "1. 极速部署向导"
     echo "2. 查看复制参数 / 客户端链接"
     echo "3. 一键诊断 doctor"
     echo "4. 高级功能"
     echo "0. 退出"
-    read -r -p "请选择：" choice
+    choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) recommended_wizard_menu || true ;;
       2) show_copy_params || true ;;
       3) validate_doctor_concise || true ;;
       4) advanced_menu || true ;;
       0) echo "已退出。"; exit 0 ;;
+      "") echo "请输入选项编号。" ;;
       *) echo "无效选择，请重新输入。" ;;
     esac
   done

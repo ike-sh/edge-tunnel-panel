@@ -2,7 +2,7 @@
 
 本模块用于利群中转机把指定 IPv4 目标走指定出口，例如让 Reality 海外落地机 IP 走 `9929` 或 `CN2`。
 
-PBR 通常只需要在利群中转机启用。公网入口机只负责 WG + realm，海外落地机只负责 Reality inbound，默认不需要 PBR。
+PBR 通常只需要在利群中转机启用。公网入口机只负责 WG + 转发，海外落地机只负责 Reality inbound，默认不需要 PBR。
 
 它只处理项目保存或用户明确导入的 IPv4 PBR 规则：
 
@@ -27,12 +27,12 @@ IPv4 多出口策略路由
 4. 一键为当前 Reality 落地机指定出口
 ```
 
-如果落地机 IP 是 `216.45.59.72`，选择 `9929` 后会写入：
+如果落地机 IP 是 `<LANDING_PUBLIC_IP>`，选择 `9929` 后会写入：
 
 ```text
 /etc/leikwan-wg-toolkit/pbr/static-routes.conf
 
-216.45.59.72/32 9929
+<LANDING_PUBLIC_IP>/32 9929
 ```
 
 验收：
@@ -40,7 +40,7 @@ IPv4 多出口策略路由
 ```bash
 sudo bash wg-toolkit.sh --pbr-show
 ip rule show | egrep '15000|15005'
-ip route get 216.45.59.72
+ip route get <LANDING_PUBLIC_IP>
 ```
 
 `ip route get` 应显示走 `10.7.0.1` 这一类 `T_9929` 表中的出口。
@@ -50,13 +50,13 @@ ip route get 216.45.59.72
 如果机器已有手工规则：
 
 ```bash
-ip rule show | grep 216.45.59.72
+ip rule show | grep <LANDING_PUBLIC_IP>
 ```
 
 示例输出：
 
 ```text
-15000: from all to 216.45.59.72 lookup T_9929
+15000: from all to <LANDING_PUBLIC_IP> lookup T_9929
 ```
 
 导入到项目：
@@ -68,7 +68,7 @@ sudo bash wg-toolkit.sh --pbr-import-existing
 导入后会写入：
 
 ```text
-216.45.59.72/32 9929
+<LANDING_PUBLIC_IP>/32 9929
 ```
 
 再验证：
@@ -76,7 +76,7 @@ sudo bash wg-toolkit.sh --pbr-import-existing
 ```bash
 sudo bash wg-toolkit.sh --pbr-show
 sudo bash wg-toolkit.sh --pbr-audit
-ip route get 216.45.59.72
+ip route get <LANDING_PUBLIC_IP>
 ```
 
 导入不会删除原规则。因为目标、priority 和路由表相同，后续 `--pbr-apply` 会把它识别为本项目托管规则，避免重复添加。
@@ -127,7 +127,7 @@ domain group ip cidr table_id
 示例：
 
 ```text
-example.com 9929 1.2.3.4 1.2.3.4/32 101
+example.com 9929 192.0.2.123 192.0.2.123/32 101
 ```
 
 刷新流程：

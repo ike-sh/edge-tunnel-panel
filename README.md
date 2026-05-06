@@ -14,6 +14,8 @@
 
 ```bash
 sudo bash wg-toolkit.sh
+lq
+LQ
 bash wg-toolkit.sh --dry-run
 bash wg-toolkit.sh --validate
 bash wg-toolkit.sh --doctor
@@ -21,7 +23,7 @@ bash wg-toolkit.sh --doctor --verbose
 bash wg-toolkit.sh --show-wg-identity
 bash wg-toolkit.sh --show-wg-identity --role leikwan
 bash wg-toolkit.sh --rebuild-outputs
-bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem...'
+bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption '<VLESSENC_ENCRYPTION>'
 sudo bash wg-toolkit.sh --pbr-apply
 sudo bash wg-toolkit.sh --pbr-refresh-domains
 bash wg-toolkit.sh --pbr-show
@@ -32,11 +34,39 @@ bash wg-toolkit.sh --version
 sudo bash wg-toolkit.sh --uninstall
 ```
 
+首次运行 `sudo bash wg-toolkit.sh` 后，会自动安装 `lq` / `LQ` 快捷命令；之后可直接运行 `lq` 进入工具。快捷命令路径为 `/usr/local/bin/lq` 和 `/usr/local/bin/LQ`，推荐日常使用小写：
+
+```bash
+lq
+```
+
+如果快捷命令失效，可以重新运行：
+
+```bash
+sudo bash wg-toolkit.sh
+```
+
+然后进入“高级功能 -> 安装 / 修复快捷命令”。
+
 `--dry-run` 会进入同一套菜单，但角色部署只生成配置预览，不安装、不写入、不启动服务。dry-run 里的参数卡片会明确标注“不能用于真实部署”，避免误复制预览参数。
 
 `--validate` 会自动检查 wg、xray、realm、DNS、IPv6 防火墙、端口监听和已知链路连通性，输出完整报告。
 
 `--doctor` 默认输出简洁摘要；需要完整分组报告时使用 `--doctor --verbose`。doctor 不会进入交互 read，outputs 缺失时只提示修复命令。
+
+## Release Notes
+
+### 0.2.4-alpha
+
+- 新增 `lq` / `LQ` 快捷命令，默认托管到 `/usr/local/bin/`，卸载时只清理本项目创建的快捷命令。
+- 主菜单和极速部署向导增加项目启动横幅，显示作者、版本和 GitHub 地址；非交互命令保持机器可读输出。
+
+### 0.2.3-alpha
+
+- 新增公网入口机 `nftables` / `iptables` 内核转发模式，`nftables` 为默认推荐。
+- 保留 `realm-leikwan` 用户态转发作为兼容方案。
+- README/docs 脱敏，真实公网 IP、公钥、UUID、VLESSENC 和客户端链接统一改为占位符或 RFC5737 示例地址。
+- 新增 `scripts/check-redaction.sh`，打包前自动检查文档脱敏。
 
 ## 一键安装
 
@@ -89,6 +119,7 @@ curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/leikwan/leikwan-
 - 海外落地机参数：`/etc/leikwan-wg-toolkit/outputs/landing-server.env`
 - 利群中转机参数：`/etc/leikwan-wg-toolkit/outputs/leikwan-relay.env`
 - 客户端链接：`/etc/leikwan-wg-toolkit/outputs/client-link.txt`
+- 快捷命令：`/usr/local/bin/lq`、`/usr/local/bin/LQ`
 - 利群 WG Key：`/etc/wireguard/wg0_privatekey`、`/etc/wireguard/wg0_publickey`
 - 公网入口 WG Key：`/etc/wireguard/wg1_privatekey`、`/etc/wireguard/wg1_publickey`
 - IPv4 PBR 静态规则：`/etc/leikwan-wg-toolkit/pbr/static-routes.conf`
@@ -116,6 +147,14 @@ realm 和 Xray 的 GitHub Release 下载按以下顺序 fallback：
 ## 主菜单
 
 ```text
+--------------------------------------------------
+  Leikwan WG Toolkit
+  利群三机链式代理部署工具
+  Author : ike-sh
+  Version: 0.2.4-alpha
+  GitHub : https://github.com/ike-sh/leikwan-wg-toolkit
+--------------------------------------------------
+
 1. 极速部署向导
 2. 查看复制参数 / 客户端链接
 3. 一键诊断 doctor
@@ -139,6 +178,7 @@ IPv6 入站安全收口
 查看状态
 备份 / 恢复
 卸载
+安装 / 修复快捷命令
 ```
 
 ## 推荐部署顺序
@@ -163,7 +203,7 @@ IPv6 入站安全收口
 
 ```text
 1. 导入 / 输入 LEIKWAN_PUBLIC_KEY
-2. 部署 / 更新 WireGuard + realm
+2. 部署 / 更新 WireGuard + 转发
 3. 查看 CLOUD 参数
 4. doctor
 ```
@@ -227,10 +267,10 @@ sudo bash wg-toolkit.sh --rebuild-outputs
 
 ```bash
 sudo bash wg-toolkit.sh --rebuild-outputs \
-  --vlessenc-encryption 'mlkem768x25519plus.native.0rtt.xxx' \
-  --cloud-endpoint 8.163.46.205 \
+  --vlessenc-encryption '<VLESSENC_ENCRYPTION>' \
+  --cloud-endpoint <CLOUD_PUBLIC_IP> \
   --client-entry-port 30000 \
-  --landing-address 216.45.59.72 \
+  --landing-address <LANDING_PUBLIC_IP> \
   --landing-port 30004
 ```
 
@@ -271,14 +311,29 @@ KEY=value
 - Peer 使用利群中转机 PublicKey。
 - Peer `AllowedIPs = 10.198.1.1/32`。
 - 启用 `wg-quick@wg1`。
-- 安装 realm。
-- 创建 `realm-leikwan.service`：
+- 选择公网入口转发方式。
 
-```text
-0.0.0.0:30000 -> 10.198.1.1:30000
-```
+### 公网入口机转发模式
 
-默认只启用 TCP，可选择 `tcp` / `udp` / `both`。
+默认只转发 TCP `30000`，不默认开放 UDP `30000`。
+
+1. `nftables` 内核转发（推荐）
+   - 无用户态监听进程。
+   - 适合公网入口机检测更严格的环境。
+   - 需要 `net.ipv4.ip_forward=1`。
+   - 规则由 `leikwan-forward-nft.service` 加载，只管理 `leikwan_nat` / `leikwan_filter` 表。
+
+2. `iptables` 内核转发
+   - 兼容旧系统。
+   - 需要 `net.ipv4.ip_forward=1`。
+   - 规则由 `leikwan-forward-iptables.service` 精确添加/删除，不依赖 `iptables-persistent`。
+
+3. `realm` 用户态转发
+   - 兼容性好。
+   - 会有 `realm-leikwan` 进程监听 `30000`。
+
+4. 不配置转发
+   - 只部署 WireGuard，转发由用户自行处理。
 
 输出：
 
@@ -287,6 +342,8 @@ CLOUD_PUBLIC_KEY=...
 CLOUD_ENDPOINT=...
 CLOUD_WG_PORT=8301
 CLIENT_ENTRY_PORT=30000
+FORWARD_MODE=nftables
+FORWARD_TARGET=10.198.1.1:30000
 ```
 
 验收：
@@ -295,8 +352,9 @@ CLIENT_ENTRY_PORT=30000
 wg show
 ping -c 3 10.198.1.1
 nc -vz 10.198.1.1 30000
-ss -lntup | grep 30000
-systemctl status realm-leikwan --no-pager
+sudo bash wg-toolkit.sh --doctor
+nft list ruleset | grep -A20 leikwan
+iptables -t nat -S | grep 10.198.1.1 || true
 ```
 
 ## 海外落地机部署
@@ -325,7 +383,7 @@ LANDING_PORT=30004
 LANDING_UUID=...
 LANDING_PUBLIC_KEY=...
 LANDING_SHORT_ID=...
-LANDING_SERVER_NAME=www.microsoft.com
+LANDING_SERVER_NAME=www.microsoft.com  # 示例 serverName
 LANDING_FLOW=xtls-rprx-vision
 ```
 
@@ -368,7 +426,7 @@ ss -lntup | grep 30004
 输出客户端导入链接：
 
 ```text
-vless://ENTRY_UUID@CLOUD_ENDPOINT:30000?type=raw&security=none&encryption=VLESSENC_ENCRYPTION#Leikwan-WG-Xray-Reality
+vless://<ENTRY_UUID>@<CLOUD_PUBLIC_IP>:30000?type=raw&security=none&encryption=<VLESSENC_ENCRYPTION>#Leikwan-WG-Xray-Reality
 ```
 
 脚本会同时写入：
@@ -414,16 +472,16 @@ systemctl status xray-leikwan --no-pager
 - 检测到 `10.7.x.x` 显示 `9929`
 - 检测到 `10.8.x.x` 显示 `CN2`
 
-示例：指定落地机 `216.45.59.72` 走 `T_9929`：
+示例：指定落地机 `<LANDING_PUBLIC_IP>` 走 `T_9929`：
 
 ```text
-216.45.59.72 -> T_9929
+<LANDING_PUBLIC_IP> -> T_9929
 ```
 
 添加后验收：
 
 ```bash
-ip route get 216.45.59.72
+ip route get <LANDING_PUBLIC_IP>
 ip rule show | grep 15000
 ```
 
@@ -438,13 +496,13 @@ leikwan-pbr-ddns.timer
 如果机器上已有手工 PBR 规则，可以先审计再导入：
 
 ```bash
-ip rule show | grep 216.45.59.72
+ip rule show | grep <LANDING_PUBLIC_IP>
 ```
 
 示例：
 
 ```text
-15000: from all to 216.45.59.72 lookup T_9929
+15000: from all to <LANDING_PUBLIC_IP> lookup T_9929
 ```
 
 导入到项目：
@@ -458,7 +516,7 @@ sudo bash wg-toolkit.sh --pbr-import-existing
 ```bash
 sudo bash wg-toolkit.sh --pbr-show
 sudo bash wg-toolkit.sh --pbr-audit
-ip route get 216.45.59.72
+ip route get <LANDING_PUBLIC_IP>
 ```
 
 PBR apply / 卸载只删除项目配置或状态文件记录过的精确规则，不会按 priority `15000` / `15005` 全删，也不会删除未托管的手工规则。
@@ -479,10 +537,11 @@ PBR apply / 卸载只删除项目配置或状态文件记录过的精确规则�
 
 高级功能里的“卸载”分角色卸载：
 
-- 公网入口机：删除本项目创建的 `wg1` 和 `realm-leikwan.service`。
+- 公网入口机：删除本项目创建的 `wg1`、`leikwan-forward-nft.service`、`leikwan-forward-iptables.service`、`realm-leikwan.service` 和本项目转发规则。
 - 利群中转机：删除本项目创建的 `wg0`，Xray 配置删除需要二次确认。
 - 海外落地机：Xray 配置删除需要二次确认。
 - 可单独删除本项目托管的 IPv4 PBR 运行中规则，未托管同 priority 规则会保留。
 - 可单独删除 IPv6 `V6_LOCKDOWN`。
+- 可删除本项目创建的 `lq` / `LQ` 快捷命令；如果同名文件不是本项目创建，会 WARN 并保留。
 
 卸载不会删除用户已有的非本项目服务，也不会卸载软件包。Xray 二进制默认保留。

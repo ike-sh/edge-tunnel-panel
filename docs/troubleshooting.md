@@ -1,4 +1,4 @@
-# 排错说明
+﻿# 排错说明
 
 排错顺序：
 
@@ -20,7 +20,7 @@ bash wg-toolkit.sh --doctor
 [OK] 角色：leikwan-relay
 [OK] WG：handshake 14 秒前
 [OK] Xray：10.198.1.1:30000
-[OK] PBR：216.45.59.72 -> T_9929
+[OK] PBR：<LANDING_PUBLIC_IP> -> T_9929
 [OK] 客户端链接：存在
 ```
 
@@ -66,6 +66,35 @@ bash wg-toolkit.sh --doctor --verbose
 ```
 
 普通用户优先走“极速部署向导”。高级功能用于手动部署、导入参数、PBR、DNS、IPv6、备份恢复和卸载。
+
+## 快捷命令 lq / LQ
+
+安装或进入菜单后，脚本会自动创建：
+
+```text
+/usr/local/bin/lq
+/usr/local/bin/LQ
+```
+
+日常建议使用小写：
+
+```bash
+lq
+```
+
+如果快捷命令失效，先用原脚本进入菜单：
+
+```bash
+sudo bash wg-toolkit.sh
+```
+
+然后选择：
+
+```text
+高级功能 -> 安装 / 修复快捷命令
+```
+
+卸载时只会删除包含 `# Managed by leikwan-wg-toolkit` 标识的 `lq` / `LQ`。如果同名文件不是本项目创建，脚本会输出 WARN 并保留。
 
 ## dry-run 预演
 
@@ -137,7 +166,7 @@ sudo bash wg-toolkit.sh --rebuild-outputs
 
 ```bash
 sudo bash wg-toolkit.sh --rebuild-outputs
-sudo bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem...'
+sudo bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption '<VLESSENC_ENCRYPTION>'
 ```
 
 注意：服务端配置里的 `VLESSENC_DECRYPTION` 不能反推客户端链接需要的 `VLESSENC_ENCRYPTION`。如果旧输出里也没有，重建会生成 partial `leikwan-relay.env`，但不会生成 `client-link.txt`，并输出 WARN。
@@ -171,8 +200,9 @@ VLESSENC_ENCRYPTION
 wg show
 ping -c 3 10.198.1.1
 nc -vz 10.198.1.1 30000
-ss -lntup | grep 30000
-systemctl status realm-leikwan --no-pager
+sudo bash wg-toolkit.sh --doctor
+nft list ruleset | grep -A20 leikwan || true
+iptables -t nat -S | grep 10.198.1.1 || true
 ```
 
 如果 `latest handshake` 为空，优先检查：
@@ -184,6 +214,20 @@ systemctl status realm-leikwan --no-pager
 - `wg-quick@wg0` / `wg-quick@wg1` 是否启动
 
 如果 `nc -vz 10.198.1.1 30000` 失败，说明利群中转机上的 Xray inbound 可能未监听。
+
+公网入口转发有三种模式：
+
+- `nftables`：内核 DNAT/MASQUERADE，不会有 `30000` 用户态监听，检查 `leikwan-forward-nft.service` 和 `nft list ruleset`。
+- `iptables`：内核 DNAT/MASQUERADE，不会有 `30000` 用户态监听，检查 `leikwan-forward-iptables.service` 和 `iptables -t nat -S`。
+- `realm`：用户态转发，会有 `realm-leikwan` 进程监听 `30000`。
+
+nftables / iptables 模式都需要：
+
+```bash
+sysctl net.ipv4.ip_forward
+```
+
+输出应为 `net.ipv4.ip_forward = 1`。
 
 ## 利群中转机
 
@@ -223,7 +267,7 @@ systemctl status xray-leikwan --no-pager
 正确摘要应显示：
 
 ```text
-VLESSENC_DECRYPTION=mlkem...
+VLESSENC_DECRYPTION=<VLESSENC_DECRYPTION>
 ```
 
 不应显示：
@@ -466,7 +510,7 @@ sudo bash wg-toolkit.sh --pbr-audit
 如果看到未托管规则，例如：
 
 ```text
-15000: from all to 216.45.59.72 lookup T_9929
+15000: from all to <LANDING_PUBLIC_IP> lookup T_9929
 ```
 
 可以导入到项目：

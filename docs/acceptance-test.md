@@ -1,4 +1,4 @@
-# 实机验收清单
+﻿# 实机验收清单
 
 本文用于三台机器部署完成后的发布前验收。
 
@@ -28,12 +28,49 @@ sudo bash wg-toolkit.sh
 合格标准：首屏只显示 4 个主要入口：
 
 ```text
+--------------------------------------------------
+  Leikwan WG Toolkit
+  利群三机链式代理部署工具
+  Author : ike-sh
+  Version: 0.2.4-alpha
+  GitHub : https://github.com/ike-sh/leikwan-wg-toolkit
+--------------------------------------------------
+
 1. 极速部署向导
 2. 查看复制参数 / 客户端链接
 3. 一键诊断 doctor
 4. 高级功能
 0. 退出
 ```
+
+快捷命令验收：
+
+```bash
+command -v lq
+command -v LQ
+lq --version
+LQ --version
+```
+
+合格标准：
+
+- `lq --version` 和 `LQ --version` 均输出 `leikwan-wg-toolkit 0.2.4-alpha`。
+- `lq --show-wg-identity`、`lq --doctor`、`lq --pbr-show` 不输出大 banner。
+- 主菜单和极速部署向导显示虚线框，包含 `Author : ike-sh`、`Version: 0.2.4-alpha`、`GitHub : https://github.com/ike-sh/leikwan-wg-toolkit`。
+
+菜单输入回归：
+
+```text
+主菜单直接按回车
+主菜单输入 0
+主菜单输入 " 0 "
+主菜单粘贴 Windows CRLF 形式的 0\r
+```
+
+合格标准：
+
+- 直接按回车不会刷“无效选择”，可提示“请输入选项编号”并重新显示菜单。
+- `0`、` 0 `、`0\r` 都能正常退出或返回。
 
 查看部署输出：
 
@@ -52,9 +89,9 @@ ls -l /etc/leikwan-wg-toolkit/outputs/
 wg show
 ping -c 3 10.198.1.1
 nc -vz 10.198.1.1 30000
-ss -lntup | grep 30000
-systemctl status realm-leikwan --no-pager
-journalctl -u realm-leikwan -e --no-pager
+sudo bash wg-toolkit.sh --doctor
+nft list ruleset | grep -A20 leikwan || true
+iptables -t nat -S | grep 10.198.1.1 || true
 ```
 
 合格标准：
@@ -63,8 +100,9 @@ journalctl -u realm-leikwan -e --no-pager
 - `latest handshake` 存在且时间较新。
 - `ping 10.198.1.1` 成功。
 - `nc -vz 10.198.1.1 30000` 成功。
-- `ss` 能看到 `30000` 监听。
-- `realm-leikwan.service` 为 active/running。
+- `FORWARD_MODE` 对应的转发规则存在。
+- nftables / iptables 模式不要求 `ss` 看到 `30000` 用户态监听。
+- realm 模式下 `realm-leikwan.service` 为 active/running，且 `ss` 能看到 `30000` 监听。
 
 输出文件应包含：
 
@@ -73,6 +111,8 @@ CLOUD_PUBLIC_KEY
 CLOUD_ENDPOINT
 CLOUD_WG_PORT
 CLIENT_ENTRY_PORT
+FORWARD_MODE
+FORWARD_TARGET
 ```
 
 并存在：
@@ -179,7 +219,7 @@ privateKey
 合格标准：
 
 - 客户端连接到 `CLOUD_ENDPOINT:30000`。
-- 公网入口机 `realm-leikwan` 有连接日志。
+- 公网入口机 nftables / iptables / realm 转发命中；realm 模式才要求 `realm-leikwan` 有连接日志。
 - 利群中转机 `xray-leikwan` 有入站和出站日志。
 - 海外落地机 `xray-leikwan` 有 Reality 入站日志。
 - 实际业务访问出口为海外落地机。
@@ -193,15 +233,15 @@ sudo bash wg-toolkit.sh --pbr-audit
 sudo bash wg-toolkit.sh --pbr-show
 sudo bash wg-toolkit.sh --pbr-apply
 ip rule show | egrep '15000|15005'
-ip route get 216.45.59.72
+ip route get <LANDING_PUBLIC_IP>
 systemctl status leikwan-pbr.service --no-pager
 systemctl status leikwan-pbr-ddns.timer --no-pager
 ```
 
-如果为 Reality 落地机 `216.45.59.72` 指定 `9929` 出口：
+如果为 Reality 落地机 `<LANDING_PUBLIC_IP>` 指定 `9929` 出口：
 
 ```bash
-ip route get 216.45.59.72
+ip route get <LANDING_PUBLIC_IP>
 ```
 
 如已有手工规则，先导入再验收：
@@ -217,7 +257,7 @@ sudo bash wg-toolkit.sh --doctor
 - 如使用域名规则，`/var/lib/leikwan-wg-toolkit/pbr/domain-state.conf` 中存在已解析的 A 记录状态。
 - `/etc/iproute2/rt_tables` 中存在 `T_9929`、`T_CN2` 等项目表名。
 - `ip rule show` 中能看到 priority `15000` 或 `15005`。
-- `ip route get 216.45.59.72` 显示的路由使用指定表对应的出口。
+- `ip route get <LANDING_PUBLIC_IP>` 显示的路由使用指定表对应的出口。
 - `leikwan-pbr.service` 可执行成功。
 - 如使用域名规则，`leikwan-pbr-ddns.timer` 为 active。
 - 重复执行 `--pbr-apply` 不产生重复 `ip rule`。
@@ -262,11 +302,12 @@ cat /etc/wireguard/wg0_publickey
 
 ```bash
 systemctl is-active wg-quick@wg1
-systemctl is-active realm-leikwan
+bash wg-toolkit.sh --doctor
 test -f /etc/leikwan-wg-toolkit/outputs/cloud-entry.env
+grep '^FORWARD_MODE=' /etc/leikwan-wg-toolkit/outputs/cloud-entry.env
 ```
 
-合格标准：`wg1` active，`realm-leikwan` active，`cloud-entry.env` 存在。
+合格标准：`wg1` active，`cloud-entry.env` 存在，且 `FORWARD_MODE` 对应的 nftables / iptables / realm 转发检查通过。
 
 ### 4. 利群完成中转部署
 
@@ -283,7 +324,7 @@ grep '^CLIENT_LINK=' /etc/leikwan-wg-toolkit/outputs/client-link.txt
 
 ```bash
 sudo bash wg-toolkit.sh --pbr-show
-ip route get 216.45.59.72
+ip route get <LANDING_PUBLIC_IP>
 ```
 
 合格标准：`LANDING_ADDRESS -> T_9929` 或用户选择的线路组，`pbr-show` 无未托管规则。
@@ -321,7 +362,7 @@ sudo bash wg-toolkit.sh
 head -n 3 /root/leikwan-wg-toolkit-output.txt
 ```
 
-合格标准：菜单和输出始终显示 `0.2.1-alpha`，不会显示 `12 (bookworm)` 或 `13 (trixie)`。
+合格标准：菜单和输出始终显示 `0.2.4-alpha`，不会显示 `12 (bookworm)` 或 `13 (trixie)`。
 
 ### 10. 极速部署向导按角色显示
 
@@ -335,7 +376,7 @@ sudo bash wg-toolkit.sh
 合格标准：
 
 - 海外落地机只显示 Reality 落地、LANDING 参数、doctor。
-- 公网入口机只显示导入 LEIKWAN_PUBLIC_KEY、部署 WG + realm、CLOUD 参数、doctor。
+- 公网入口机只显示导入 LEIKWAN_PUBLIC_KEY、部署 WireGuard + 转发、CLOUD 参数、doctor。
 - 利群中转机只显示 LEIKWAN_PUBLIC_KEY、导入 CLOUD、导入 LANDING、完成链式部署、PBR、客户端链接、doctor。
 - unknown 角色只显示“我这是海外落地机 / 公网入口机 / 利群中转机”。
 
@@ -355,7 +396,7 @@ test -f /etc/leikwan-wg-toolkit/outputs/leikwan-relay.env
 补充 `VLESSENC_ENCRYPTION` 后执行：
 
 ```bash
-sudo bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem768x25519plus.native.0rtt.xxx'
+sudo bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption '<VLESSENC_ENCRYPTION>'
 test -f /etc/leikwan-wg-toolkit/outputs/client-link.txt
 grep '^CLIENT_LINK=' /etc/leikwan-wg-toolkit/outputs/client-link.txt
 ```
@@ -368,10 +409,10 @@ grep '^CLIENT_LINK=' /etc/leikwan-wg-toolkit/outputs/client-link.txt
 sudo rm -rf /etc/leikwan-wg-toolkit/outputs
 sudo rm -f /root/leikwan-wg-toolkit-output.txt
 sudo bash wg-toolkit.sh --rebuild-outputs \
-  --vlessenc-encryption 'mlkem768x25519plus.native.0rtt.xxx' \
-  --cloud-endpoint 8.163.46.205 \
+  --vlessenc-encryption '<VLESSENC_ENCRYPTION>' \
+  --cloud-endpoint <CLOUD_PUBLIC_IP> \
   --client-entry-port 30000 \
-  --landing-address 216.45.59.72 \
+  --landing-address <LANDING_PUBLIC_IP> \
   --landing-port 30004
 test -f /etc/leikwan-wg-toolkit/outputs/client-link.txt
 grep '^ENTRY_UUID=.' /etc/leikwan-wg-toolkit/outputs/client-link.txt
@@ -411,3 +452,67 @@ timeout 15 sudo bash wg-toolkit.sh --doctor --verbose
 - 只输出 outputs 缺失 WARN 和 `bash wg-toolkit.sh --rebuild-outputs` 修复命令。
 - 如果需要 `VLESSENC_ENCRYPTION`，只输出命令示例，不要求现场输入。
 - 同一次 doctor 执行不会重复提示 outputs 缺失。
+
+### 13. cloud-entry nftables 转发
+
+公网入口机选择 `nftables 内核转发` 后执行：
+
+```bash
+systemctl status leikwan-forward-nft --no-pager
+nft list ruleset | grep -A20 leikwan
+sysctl net.ipv4.ip_forward
+systemctl status realm-leikwan --no-pager 2>/dev/null || true
+```
+
+合格标准：
+
+- `leikwan-forward-nft.service` active/exited 或上次执行成功。
+- `nft list ruleset` 能看到 `leikwan_nat` 和 `leikwan_filter`。
+- `net.ipv4.ip_forward = 1`。
+- 不需要 `realm-leikwan` 进程。
+- 外部客户端连接 `<CLOUD_PUBLIC_IP>:30000` 能到 `10.198.1.1:30000`。
+
+### 14. cloud-entry iptables 转发
+
+公网入口机选择 `iptables 内核转发` 后执行：
+
+```bash
+systemctl status leikwan-forward-iptables --no-pager
+iptables -t nat -S | grep -- '--dport 30000'
+iptables -S FORWARD | grep '10.198.1.1'
+sysctl net.ipv4.ip_forward
+```
+
+合格标准：
+
+- `leikwan-forward-iptables.service` active/exited 或上次执行成功。
+- `iptables -t nat -S` 能看到 DNAT 到 `10.198.1.1:30000`。
+- `net.ipv4.ip_forward = 1`。
+- 重复部署不会产生重复规则。
+- 外部客户端连接 `<CLOUD_PUBLIC_IP>:30000` 能到 `10.198.1.1:30000`。
+
+### 15. redaction 脱敏检查
+
+```bash
+scripts/check-redaction.sh
+```
+
+合格标准：
+
+- README/docs 不包含真实公网 IP、公钥、UUID、VLESSENC 或真实 `CLIENT_LINK`。
+- 示例客户端链接使用：
+
+```text
+vless://<ENTRY_UUID>@<CLOUD_PUBLIC_IP>:30000?type=raw&security=none&encryption=<VLESSENC_ENCRYPTION>#Leikwan-WG-Xray-Reality
+```
+
+### 16. 快捷命令卸载
+
+```bash
+sudo bash wg-toolkit.sh --uninstall
+# 选择“删除快捷命令 lq / LQ”
+test ! -e /usr/local/bin/lq
+test ! -e /usr/local/bin/LQ
+```
+
+合格标准：本项目创建的 `/usr/local/bin/lq` 和 `/usr/local/bin/LQ` 被删除；如果同名文件没有 `# Managed by leikwan-wg-toolkit` 标识，脚本只输出 WARN 并保留。

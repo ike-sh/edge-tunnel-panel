@@ -11,7 +11,7 @@
   v
 公网入口机
   |
-  | realm: 0.0.0.0:30000 -> 10.198.1.1:30000
+  | nftables/iptables/realm: 0.0.0.0:30000 -> 10.198.1.1:30000
   | WireGuard 原生 UDP，默认 8301/udp
   v
 利群中转机
@@ -32,7 +32,7 @@ Internet
 
 - 对公网暴露 `30000` 客户端入口。
 - 运行 WireGuard `wg1`。
-- 运行 realm，把公网入口转发到利群中转机的 WG 内网地址。
+- 使用 `nftables` / `iptables` 内核转发，或兼容模式 `realm`，把公网入口转发到利群中转机的 WG 内网地址。
 
 默认配置：
 
@@ -40,8 +40,8 @@ Internet
 wg1 地址：10.198.1.2/24
 WireGuard ListenPort：8301/udp
 Peer AllowedIPs：10.198.1.1/32
-realm：0.0.0.0:30000 -> 10.198.1.1:30000
-realm 协议默认：tcp
+转发：0.0.0.0:30000/tcp -> 10.198.1.1:30000
+默认模式：nftables
 ```
 
 需要输入：
@@ -57,6 +57,8 @@ CLOUD_PUBLIC_KEY
 CLOUD_ENDPOINT
 CLOUD_WG_PORT
 CLIENT_ENTRY_PORT
+FORWARD_MODE
+FORWARD_TARGET
 ```
 
 ## 角色二：利群中转机
@@ -173,9 +175,25 @@ LANDING_FLOW
 
 最省心的方式是进入主菜单 `1. 极速部署向导`。新版向导会先识别当前机器角色，只显示这台机器需要做的几件事。
 
+安装或进入菜单后会自动创建快捷命令。以后可以直接运行：
+
+```bash
+lq
+```
+
+大写 `LQ` 也会创建作为兼容入口；Linux 命令区分大小写，日常推荐小写 `lq`。
+
 默认主菜单保持很短：
 
 ```text
+--------------------------------------------------
+  Leikwan WG Toolkit
+  利群三机链式代理部署工具
+  Author : ike-sh
+  Version: 0.2.4-alpha
+  GitHub : https://github.com/ike-sh/leikwan-wg-toolkit
+--------------------------------------------------
+
 1. 极速部署向导
 2. 查看复制参数 / 客户端链接
 3. 一键诊断 doctor
@@ -183,7 +201,7 @@ LANDING_FLOW
 0. 退出
 ```
 
-高级功能里保留完整手动部署、PBR、DNS、IPv6、备份、卸载等入口。
+高级功能里保留完整手动部署、PBR、DNS、IPv6、备份、卸载、安装 / 修复快捷命令等入口。
 
 ### 1. 海外落地机先生成 Reality 参数
 
@@ -239,6 +257,7 @@ CLI 直接查看，不进入交互菜单：
 
 ```bash
 sudo bash wg-toolkit.sh --show-wg-identity --role leikwan
+lq --show-wg-identity --role leikwan
 ```
 
 ### 3. 公网入口机部署
@@ -247,7 +266,7 @@ sudo bash wg-toolkit.sh --show-wg-identity --role leikwan
 
 ```text
 极速部署向导 -> 导入 / 输入 LEIKWAN_PUBLIC_KEY
-极速部署向导 -> 部署 / 更新 WireGuard + realm
+极速部署向导 -> 部署 / 更新 WireGuard + 转发
 ```
 
 拿到：
@@ -305,7 +324,7 @@ CLIENT_ENTRY_PORT
 最终链接格式：
 
 ```text
-vless://ENTRY_UUID@CLOUD_ENDPOINT:CLIENT_ENTRY_PORT?type=raw&security=none&encryption=VLESSENC_ENCRYPTION#Leikwan-WG-Xray-Reality
+vless://<ENTRY_UUID>@<CLOUD_PUBLIC_IP>:30000?type=raw&security=none&encryption=<VLESSENC_ENCRYPTION>#Leikwan-WG-Xray-Reality
 ```
 
 只使用 `VLESSENC_ENCRYPTION`，不要把 `VLESSENC_DECRYPTION` 放进客户端链接。
@@ -323,7 +342,7 @@ sudo bash wg-toolkit.sh --rebuild-outputs
 如果无法从旧输出读取 `VLESSENC_ENCRYPTION`，脚本会生成 partial `leikwan-relay.env`，但不会生成 `client-link.txt`。这时补充客户端 encryption 后重跑：
 
 ```bash
-sudo bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem...'
+sudo bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption '<VLESSENC_ENCRYPTION>'
 ```
 
 ## 角色向导
@@ -341,7 +360,7 @@ sudo bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem...'
 
 ```text
 1. 导入 / 输入 LEIKWAN_PUBLIC_KEY
-2. 部署 / 更新 WireGuard + realm
+2. 部署 / 更新 WireGuard + 转发
 3. 查看 CLOUD 参数
 4. doctor
 0. 返回
