@@ -155,6 +155,23 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 
 示例输出只包含 TCP 入口信息，不包含任何代理协议参数。
 
+EasyTier/tun 转发默认启用 TCP MSS clamp：
+
+```text
+tcp flags syn tcp option maxseg size set 1320
+```
+
+这条规则会写入项目 nftables 表，随 `leikwan-nft-forward.service` 持久化，用于避免双 NAT + tun 场景下部分 TCP 后端出现“有延迟但无法建立应用层连接”。
+
+默认 MSS 为实测稳定值 `1320`。如果个别线路仍不稳定，可临时用环境变量或配置文件降到 `1280` / `1200`：
+
+```bash
+sudo install -d -m 700 /etc/leikwan-wg-toolkit/nft
+printf 'TCP_MSS_CLAMP=1280\nENABLE_MSS_CLAMP=true\n' | sudo tee /etc/leikwan-wg-toolkit/nft/mss.env >/dev/null
+sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
+sudo lq forward apply-relay
+```
+
 ## 诊断
 
 ```bash

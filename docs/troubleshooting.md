@@ -75,6 +75,42 @@ relay 侧才会生成：
 tcp dport ENTRY_PORT dnat ip to TARGET_IP:TARGET_PORT
 ```
 
+## 有延迟但应用层连不上
+
+如果后端直连成功，但经 A -> EasyTier -> B 转发后连接失败，优先检查 TCP MSS clamp。
+
+典型场景：
+
+```text
+直连后端 TCP 服务成功
+A_PUBLIC_HOST:ENTRY_PORT -> A -> EasyTier/tun -> B -> TARGET_HOST:TARGET_PORT 失败
+```
+
+A 和 B 的项目 nftables 表都应该包含：
+
+```text
+tcp flags syn tcp option maxseg size set 1320
+```
+
+修复：
+
+```bash
+sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1  # A
+sudo lq forward apply-relay                                           # B
+sudo lq --doctor
+```
+
+doctor 显示 `TCP MSS clamp enabled: 1320` 即为启用。
+
+默认值 `1320` 是当前验证的最高稳定值。如果仍然出现“有延迟但无法连接”，建议依次降到 `1280`、`1200`：
+
+```bash
+sudo install -d -m 700 /etc/leikwan-wg-toolkit/nft
+printf 'TCP_MSS_CLAMP=1280\nENABLE_MSS_CLAMP=true\n' | sudo tee /etc/leikwan-wg-toolkit/nft/mss.env >/dev/null
+sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
+sudo lq forward apply-relay
+```
+
 `forwards.tsv` 必须是 8 列 TAB 分隔。默认请使用 `lq forward add/edit/delete`，不要手写空格对齐。
 
 v0.4 默认不再推荐 `lq forward import`。A 只需要配置入口端口池，B 负责所有 `forward add/edit/delete`。

@@ -54,6 +54,34 @@ B 侧根据 `forwards.tsv` 生成每个后端的 DNAT：
 /etc/leikwan-wg-toolkit/forwards/resolved.tsv
 ```
 
+## TCP MSS clamp
+
+EasyTier/tun 叠加 A/B 两侧 NAT 时，部分后端 TCP 协议会遇到 MTU/MSS 问题，表现为：
+
+- 后端直连成功。
+- 经 A -> EasyTier -> B 转发后有延迟、有握手迹象，但应用层连接失败。
+
+脚本默认在 A 和 B 的 `leikwan_forward` 表中加入：
+
+```text
+tcp flags syn tcp option maxseg size set 1320
+```
+
+该规则位于 `forward` hook，随 `/etc/leikwan-wg-toolkit/nft/leikwan-forward.nft` 和 `leikwan-nft-forward.service` 持久化，不需要手工创建临时 `lq_mss` 表。
+
+默认 MSS clamp 是 `1320`。如仍不稳定，可降到 `1280` 或故障兜底值 `1200`：
+
+```bash
+sudo install -d -m 700 /etc/leikwan-wg-toolkit/nft
+printf 'TCP_MSS_CLAMP=1280\nENABLE_MSS_CLAMP=true\n' | sudo tee /etc/leikwan-wg-toolkit/nft/mss.env >/dev/null
+```
+
+也可以临时用环境变量覆盖：
+
+```bash
+sudo env LEIKWAN_TCP_MSS_CLAMP=1200 lq forward apply-relay
+```
+
 ## ip_forward
 
 A 和 B 都需要：

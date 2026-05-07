@@ -40,6 +40,8 @@ RELAY_ET_IP="10.198.1.1"
 ENTRY_ET_IP_DEFAULT="10.198.1.2"
 ENTRY_EXPOSE_START_DEFAULT="10000"
 ENTRY_EXPOSE_END_DEFAULT="19999"
+DEFAULT_TCP_MSS_CLAMP="1320"
+ENABLE_MSS_CLAMP="true"
 EASYTIER_VERSION="${EASYTIER_VERSION:-v2.4.5}"
 EASYTIER_CORE_BIN="/usr/local/bin/easytier-core"
 EASYTIER_CLI_BIN="/usr/local/bin/easytier-cli"
@@ -52,6 +54,7 @@ EASYTIER_RELAY_SERVICE_NAME="easytier-relay"
 EASYTIER_RELAY_SERVICE="/etc/systemd/system/${EASYTIER_RELAY_SERVICE_NAME}.service"
 
 NFT_RULE_FILE="${NFT_DIR}/leikwan-forward.nft"
+MSS_CONFIG="${NFT_DIR}/mss.env"
 NFT_SERVICE_NAME="leikwan-nft-forward"
 NFT_SERVICE="/etc/systemd/system/${NFT_SERVICE_NAME}.service"
 FORWARD_SYSCTL="/etc/sysctl.d/99-leikwan-forward.conf"
@@ -947,6 +950,40 @@ nft_has_relay_dnat() {
     grep -Fq "tcp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
 }
 
+is_mss_value() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 500 && value <= 1460 ))
+}
+
+mss_clamp_enabled() {
+  local config_value value
+  config_value="$(env_file_get "$MSS_CONFIG" ENABLE_MSS_CLAMP)"
+  value="${LEIKWAN_ENABLE_MSS_CLAMP:-${config_value:-$ENABLE_MSS_CLAMP}}"
+  case "$value" in
+    true|TRUE|yes|YES|1|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+tcp_mss_clamp_value() {
+  local config_value value
+  config_value="$(env_file_get "$MSS_CONFIG" TCP_MSS_CLAMP)"
+  [[ -n "$config_value" ]] || config_value="$(env_file_get "$MSS_CONFIG" DEFAULT_TCP_MSS_CLAMP)"
+  value="${LEIKWAN_TCP_MSS_CLAMP:-${TCP_MSS_CLAMP:-${config_value:-$DEFAULT_TCP_MSS_CLAMP}}}"
+  if is_mss_value "$value"; then
+    printf '%s' "$value"
+  else
+    printf '%s' "$DEFAULT_TCP_MSS_CLAMP"
+  fi
+}
+
+nft_has_mss_clamp() {
+  local mss
+  mss="$(tcp_mss_clamp_value)"
+  nft list table inet leikwan_forward 2>/dev/null |
+    grep -Fq "tcp option maxseg size set ${mss}"
+}
+
 entry_exists() {
   local name="$1"
   entries_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}'
@@ -1570,11 +1607,12 @@ configure_forward_sysctl() {
 }
 
 render_nft_cloud() {
-  local relay_ip start end
+  local relay_ip start end mss
   if [[ ! -f "$ENTRY_EXPOSE_ENV" ]]; then
     fail "公网入口端口池未配置，请执行 lq entry expose-range。"
     return 1
   fi
+  mss="$(tcp_mss_clamp_value)"
   relay_ip="$(entry_expose_relay_ip)"
   start="$(entry_expose_start)"
   end="$(entry_expose_end)"
@@ -1591,8 +1629,13 @@ EOF
   cat <<EOF
   }
   chain forward {
-    type filter hook forward priority filter; policy accept;
+    type filter hook forward priority mangle; policy accept;
     ct state established,related accept
+EOF
+  if mss_clamp_enabled; then
+    printf '    tcp flags syn tcp option maxseg size set %s\n' "$mss"
+  fi
+  cat <<EOF
     ip daddr ${relay_ip} tcp dport ${start}-${end} accept
 EOF
   cat <<EOF
@@ -1608,7 +1651,8 @@ EOF
 }
 
 render_nft_relay() {
-  local et_iface name entry_port target_host target_ip target_port out_iface route_table enabled comment
+  local et_iface name entry_port target_host target_ip target_port out_iface route_table enabled comment mss
+  mss="$(tcp_mss_clamp_value)"
   et_iface="$(et_iface_by_ip "$RELAY_ET_IP")"
   [[ -n "$et_iface" ]] || et_iface="easytier0"
   cat <<EOF
@@ -1623,9 +1667,12 @@ EOF
   cat <<EOF
   }
   chain forward {
-    type filter hook forward priority filter; policy accept;
+    type filter hook forward priority mangle; policy accept;
     ct state established,related accept
 EOF
+  if mss_clamp_enabled; then
+    printf '    tcp flags syn tcp option maxseg size set %s\n' "$mss"
+  fi
   while IFS=$'\034' read -r name entry_port target_host target_ip target_port out_iface route_table enabled comment; do
     [[ "$enabled" == "true" && -n "$target_ip" ]] || continue
     if [[ -n "$out_iface" ]]; then
@@ -2004,6 +2051,16 @@ report_ping_quality() {
   fi
 }
 
+report_mss_clamp_status() {
+  local mss
+  mss="$(tcp_mss_clamp_value)"
+  if nft_has_mss_clamp; then
+    report OK "TCP MSS clamp enabled: ${mss}"
+  else
+    report WARN "TCP MSS clamp 未启用，EasyTier/tun 转发 Reality/Vision 可能出现 有延迟但无法连接"
+  fi
+}
+
 doctor_cloud() {
   report OK "角色：cloud-entry"
   local entry_ip port iface service_name relay_ip start end
@@ -2026,6 +2083,7 @@ doctor_cloud() {
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
     report OK "nftables table inet leikwan_forward 存在"
     if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; fi
+    report_mss_clamp_status
   else
     report WARN "nftables 项目表不存在"
   fi
@@ -2071,6 +2129,7 @@ doctor_relay() {
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
     report OK "nftables table inet leikwan_forward 存在"
     if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; fi
+    report_mss_clamp_status
   else
     report WARN "nftables 项目表不存在"
   fi

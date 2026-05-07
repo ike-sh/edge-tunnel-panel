@@ -79,7 +79,9 @@ sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
 
 - `nft list table inet leikwan_forward` 存在。
 - A 侧有 `tcp dport 10000-19999 dnat ip to 10.198.1.1`。
+- A 侧有 `tcp flags syn tcp option maxseg size set 1320`。
 - A doctor 显示 `[OK] 入口端口池：10000-19999 -> 10.198.1.1`。
+- A doctor 显示 `[OK] TCP MSS clamp enabled: 1320`。
 
 在 B 使用快速转发添加：
 
@@ -102,7 +104,9 @@ target_port=30004
 
 - `nft list table inet leikwan_forward` 存在。
 - B 侧有 `tcp dport 10001 dnat ip to <resolved-target>:30004`。
+- B 侧有 `tcp flags syn tcp option maxseg size set 1320`。
 - B doctor 显示 `hk relay DNAT 正常`。
+- B doctor 显示 `[OK] TCP MSS clamp enabled: 1320`。
 - 外部访问 `A_PUBLIC_HOST:10001` 能到达后端 TCP 服务。
 
 新增第二个后端：
@@ -129,6 +133,25 @@ nc -vz -w 5 A_PUBLIC_HOST 10002
 ```
 
 合格标准：两条连接都成功；新增第二个后端时不需要修改 A。
+
+## MSS clamp 验收
+
+已验证故障模型：
+
+```text
+直连 TARGET_HOST:TARGET_PORT 成功。
+经 A_PUBLIC_HOST:ENTRY_PORT -> A -> EasyTier/tun -> B -> TARGET_HOST:TARGET_PORT 初始失败。
+A/B 的 leikwan_forward 表加入 MSS 1320 后链路成功。
+```
+
+合格标准：
+
+- A 和 B 都不需要手工创建 `lq_mss` 临时表。
+- `/etc/leikwan-wg-toolkit/nft/leikwan-forward.nft` 包含 `tcp option maxseg size set 1320`。
+- `leikwan-nft-forward.service` 重启后 MSS clamp 仍存在。
+- `sudo lq --doctor` 对 A/B 都显示 `TCP MSS clamp enabled: 1320`。
+- 修改 `/etc/leikwan-wg-toolkit/nft/mss.env` 为 `TCP_MSS_CLAMP=1280` 后重新应用，doctor 显示 `TCP MSS clamp enabled: 1280`。
+- 如果 1320/1280 仍不稳定，可降到故障兜底值 `1200`。
 
 删除一个后端：
 
