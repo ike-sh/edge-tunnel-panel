@@ -1,253 +1,93 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="0.2.9-alpha"
+TOOL_VERSION="0.4.0-alpha"
 PROJECT_NAME="leikwan-wg-toolkit"
-PROJECT_TITLE="利群三机链式代理部署工具"
-PROJECT_DISPLAY_NAME="Leikwan WG Toolkit"
+PROJECT_TITLE="利群高铁四层转发工具"
 PROJECT_AUTHOR="ike-sh"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-wg-toolkit"
+
 DRY_RUN=0
-REBUILD_ROLE_OVERRIDE=""
-REBUILD_VLESSENC_ENCRYPTION=""
-REBUILD_CLOUD_ENDPOINT=""
-REBUILD_CLIENT_ENTRY_PORT=""
-REBUILD_LANDING_ADDRESS=""
-REBUILD_LANDING_PORT=""
-OUTPUTS_REBUILD_NOTICE_SHOWN=0
+VERBOSE_DOCTOR=0
+DEPS_APT_UPDATED=0
+DEPS_INSTALLED_THIS_RUN=""
 
 LOG_FILE="/var/log/leikwan-wg-toolkit.log"
-OUTPUT_FILE="/root/leikwan-wg-toolkit-output.txt"
-BACKUP_DIR="/var/backups/leikwan-wg-toolkit"
 STATE_DIR="/etc/leikwan-wg-toolkit"
+BACKUP_DIR="/var/backups/leikwan-wg-toolkit"
 OUTPUT_DIR="${STATE_DIR}/outputs"
-CLOUD_OUTPUT_FILE="${OUTPUT_DIR}/cloud-entry.env"
-LANDING_OUTPUT_FILE="${OUTPUT_DIR}/landing-server.env"
-RELAY_OUTPUT_FILE="${OUTPUT_DIR}/leikwan-relay.env"
-CLIENT_LINK_FILE="${OUTPUT_DIR}/client-link.txt"
-CLIENT_LINKS_FILE="${OUTPUT_DIR}/client-links.txt"
-LEIKWAN_PEER_FILE="${OUTPUT_DIR}/leikwan-peer.env"
-LANDINGS_DIR="${STATE_DIR}/landings"
-ACTIVE_LANDING_FILE="${LANDINGS_DIR}/current"
-ACTIVE_LANDING_ENV="${LANDINGS_DIR}/current.env"
-REALM_DIR="${STATE_DIR}/realm"
+NFT_DIR="${STATE_DIR}/nft"
+ENTRY_DIR="${STATE_DIR}/entry"
+ENTRIES_DIR="${STATE_DIR}/entries"
+FORWARDS_DIR="${STATE_DIR}/forwards"
 PBR_DIR="${STATE_DIR}/pbr"
-PBR_STATE_DIR="/var/lib/leikwan-wg-toolkit/pbr"
+EASYTIER_DIR="${STATE_DIR}/easytier"
+REPORT_FILE="/root/leikwan-debug-report.txt"
+
+ENTRIES_TSV="${ENTRIES_DIR}/entries.tsv"
+FORWARDS_TSV="${FORWARDS_DIR}/forwards.tsv"
+RESOLVED_TSV="${FORWARDS_DIR}/resolved.tsv"
+FORWARD_TXT="${OUTPUT_DIR}/forward-endpoints.txt"
+FORWARD_TSV="${OUTPUT_DIR}/forward-endpoints.tsv"
+ENTRY_EXPOSE_ENV="${ENTRY_DIR}/expose.env"
+NETWORK_ENV="${EASYTIER_DIR}/network.env"
+NETWORK_PAIRING_FILE="${OUTPUT_DIR}/easytier-network-code.env"
+ENTRY_PAIRING_FILE="${OUTPUT_DIR}/easytier-entry-code.env"
+DEPS_MARKER="${STATE_DIR}/.deps-installed"
+
+ET_NET="10.198.1.0/24"
+RELAY_ET_IP="10.198.1.1"
+ENTRY_ET_IP_DEFAULT="10.198.1.2"
+ENTRY_EXPOSE_START_DEFAULT="10000"
+ENTRY_EXPOSE_END_DEFAULT="19999"
+EASYTIER_VERSION="${EASYTIER_VERSION:-v2.4.5}"
+EASYTIER_CORE_BIN="/usr/local/bin/easytier-core"
+EASYTIER_CLI_BIN="/usr/local/bin/easytier-cli"
+FAST_PORT_RANGE_START="8000"
+FAST_PORT_RANGE_END="9000"
+DEFAULT_EASYTIER_PORT="8301"
+EASYTIER_PORT_DEFAULT="$DEFAULT_EASYTIER_PORT"
+EASYTIER_PROTOCOL_DEFAULT="tcp"
+EASYTIER_RELAY_SERVICE_NAME="easytier-relay"
+EASYTIER_RELAY_SERVICE="/etc/systemd/system/${EASYTIER_RELAY_SERVICE_NAME}.service"
+
+NFT_RULE_FILE="${NFT_DIR}/leikwan-forward.nft"
+NFT_SERVICE_NAME="leikwan-nft-forward"
+NFT_SERVICE="/etc/systemd/system/${NFT_SERVICE_NAME}.service"
+FORWARD_SYSCTL="/etc/sysctl.d/99-leikwan-forward.conf"
+
 PBR_STATIC_CONF="${PBR_DIR}/static-routes.conf"
-PBR_DOMAIN_CONF="${PBR_DIR}/domain-routes.conf"
-PBR_GROUP_CONF="${PBR_DIR}/route-groups.conf"
-PBR_DOMAIN_STATE="${PBR_STATE_DIR}/domain-state.conf"
 PBR_RT_TABLES="/etc/iproute2/rt_tables"
-PBR_STATIC_PRIORITY="15000"
-PBR_DOMAIN_PRIORITY="15005"
-PBR_SERVICE_NAME="leikwan-pbr"
-PBR_SERVICE="/etc/systemd/system/${PBR_SERVICE_NAME}.service"
-PBR_DDNS_SERVICE_NAME="leikwan-pbr-ddns"
-PBR_DDNS_SERVICE="/etc/systemd/system/${PBR_DDNS_SERVICE_NAME}.service"
-PBR_DDNS_TIMER="/etc/systemd/system/${PBR_DDNS_SERVICE_NAME}.timer"
+PBR_PRIORITY="15000"
 
-WG_NET_DEFAULT="10.198.1.0/24"
-LEIKWAN_WG_CONF="/etc/wireguard/wg0.conf"
-CLOUD_WG_CONF="/etc/wireguard/wg1.conf"
-LEIKWAN_WG_PRIVATE_FILE="/etc/wireguard/wg0_privatekey"
-LEIKWAN_WG_PUBLIC_FILE="/etc/wireguard/wg0_publickey"
-CLOUD_WG_PRIVATE_FILE="/etc/wireguard/wg1_privatekey"
-CLOUD_WG_PUBLIC_FILE="/etc/wireguard/wg1_publickey"
-LEIKWAN_WG_ADDR="10.198.1.1/24"
-CLOUD_WG_ADDR="10.198.1.2/24"
-LEIKWAN_WG_IP="10.198.1.1"
-CLOUD_WG_IP="10.198.1.2"
-CLOUD_WG_PORT_DEFAULT="8301"
-WG_MTU_DEFAULT="1280"
-WG_KEEPALIVE_DEFAULT="25"
-
-CLIENT_ENTRY_PORT_DEFAULT="30000"
-LANDING_PORT_DEFAULT="30004"
-LANDING_SERVER_NAME_DEFAULT="www.microsoft.com"
-LANDING_TARGET_DEFAULT="www.microsoft.com:443"
-LANDING_FLOW_DEFAULT="xtls-rprx-vision"
-
-XRAY_BIN="/usr/local/bin/xray"
-XRAY_CONFIG="/usr/local/etc/xray/leikwan/config.json"
-XRAY_LEIKWAN_SERVICE_NAME="xray-leikwan"
-XRAY_LEIKWAN_SERVICE="/etc/systemd/system/${XRAY_LEIKWAN_SERVICE_NAME}.service"
-XRAY_SYSTEM_SERVICE_NAME="xray"
-XRAY_SYSTEM_SERVICE="/etc/systemd/system/${XRAY_SYSTEM_SERVICE_NAME}.service"
-ACTIVE_XRAY_SERVICE_NAME="${XRAY_LEIKWAN_SERVICE_NAME}"
-ACTIVE_XRAY_SERVICE="${XRAY_LEIKWAN_SERVICE}"
-XRAY_MARKER_DIR="${STATE_DIR}/xray"
-XRAY_VLESSENC_LAST="${XRAY_MARKER_DIR}/vlessenc-last.txt"
-VLESSENC_DECRYPTION_RESULT=""
-VLESSENC_ENCRYPTION_RESULT=""
-WG_IDENTITY_PRIVATE=""
-WG_IDENTITY_PUBLIC=""
-
-REALM_ENTRY_STEM="realm-leikwan"
-REALM_ENTRY_CONF="${REALM_DIR}/${REALM_ENTRY_STEM}.toml"
-REALM_ENTRY_SERVICE="/etc/systemd/system/${REALM_ENTRY_STEM}.service"
-FORWARD_TARGET_MODE="direct-leikwan-xray"
-FORWARD_TARGET_TYPE="xray"
-FORWARD_TARGET_ADDRESS="${LEIKWAN_WG_IP}"
-FORWARD_TARGET_PORT="${CLIENT_ENTRY_PORT_DEFAULT}"
-FORWARD_TARGET_PROTOCOL="tcp"
-FORWARD_TARGET_REMARK="default direct to leikwan relay xray"
-FORWARD_TARGET_RESOLVED_IP="${LEIKWAN_WG_IP}"
-FORWARD_TARGET="${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}"
-FORWARD_TARGETS_DIR="${STATE_DIR}/forward-targets"
-FORWARD_TARGET_CURRENT="${FORWARD_TARGETS_DIR}/current.env"
-FORWARD_NFT_DIR="${STATE_DIR}/nftables"
-FORWARD_NFT_CONF="${FORWARD_NFT_DIR}/leikwan-forward.nft"
-FORWARD_NFT_SCRIPT="${FORWARD_NFT_DIR}/leikwan-forward-nft"
-FORWARD_NFT_SERVICE_NAME="leikwan-forward-nft"
-FORWARD_NFT_SERVICE="/etc/systemd/system/${FORWARD_NFT_SERVICE_NAME}.service"
-FORWARD_IPTABLES_DIR="${STATE_DIR}/iptables"
-FORWARD_IPTABLES_SCRIPT="${FORWARD_IPTABLES_DIR}/apply-iptables-forward.sh"
-FORWARD_IPTABLES_SERVICE_NAME="leikwan-forward-iptables"
-FORWARD_IPTABLES_SERVICE="/etc/systemd/system/${FORWARD_IPTABLES_SERVICE_NAME}.service"
-FORWARD_SYSCTL_CONF="/etc/sysctl.d/99-leikwan-forward.conf"
 BBR_SYSCTL_CONF="/etc/sysctl.d/99-leikwan-bbr.conf"
-OFFICIAL_OPTIMIZE_URL="http://files.leikwanhost.com/optimize.sh"
-OFFICIAL_OPTIMIZE_PATH="/root/optimize.sh"
+DNS_RESOLVED_CONF="/etc/systemd/resolved.conf.d/99-leikwan-dns.conf"
 SHORTCUT_LQ="/usr/local/bin/lq"
 SHORTCUT_LQ_UPPER="/usr/local/bin/LQ"
-ENTRIES_DIR="${STATE_DIR}/entries"
-DEPLOY_STATE_FILE="${STATE_DIR}/state.json"
-DEBUG_REPORT_FILE="/root/leikwan-debug-report.txt"
-SELECTED_LANDING_FILE=""
-SELECTED_LANDING_NAME=""
 
 if [[ -t 1 ]]; then
-  RED=$'\033[31m'
-  GREEN=$'\033[32m'
-  YELLOW=$'\033[33m'
-  BLUE=$'\033[34m'
-  BOLD=$'\033[1m'
-  RESET=$'\033[0m'
+  RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BLUE=$'\033[34m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
 else
-  RED=""
-  GREEN=""
-  YELLOW=""
-  BLUE=""
-  BOLD=""
-  RESET=""
+  RED=""; GREEN=""; YELLOW=""; BLUE=""; BOLD=""; RESET=""
 fi
 
 on_error() {
   local rc=$?
-  local line=${1:-unknown}
-  log "错误：脚本在第 ${line} 行退出，退出码 ${rc}"
-  echo "${RED}发生错误，已写入日志：${LOG_FILE}${RESET}" >&2
+  echo "${RED}错误：脚本在第 ${1:-unknown} 行退出，状态 ${rc}${RESET}" >&2
   exit "$rc"
 }
 trap 'on_error "$LINENO"' ERR
 
-init_log() {
-  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-    mkdir -p "$(dirname "$LOG_FILE")"
-    touch "$LOG_FILE"
-    chmod 600 "$LOG_FILE" || true
-  fi
-}
-
 log() {
-  local msg="$*"
-  if [[ -e "$LOG_FILE" && -w "$LOG_FILE" ]]; then
-    printf '[%s] %s\n' "$(date '+%F %T')" "$msg" >>"$LOG_FILE"
-  fi
+  [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
+  mkdir -p "$(dirname "$LOG_FILE")"
+  printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE"
 }
 
-info() {
-  echo "${BLUE}==>${RESET} $*"
-  log "INFO $*"
-}
-
-ok() {
-  echo "${GREEN}[OK]${RESET} $*"
-  log "OK $*"
-}
-
-warn() {
-  echo "${YELLOW}注意：${RESET}$*"
-  log "WARN $*"
-}
-
-fail() {
-  echo "${RED}错误：${RESET}$*" >&2
-  log "ERROR $*"
-}
-
-run_cmd() {
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过执行：$*"
-    log "DRY-RUN skip command: $*"
-    return 0
-  fi
-
-  log "执行：$*"
-  local output
-  if output="$("$@" 2>&1)"; then
-    [[ -n "$output" ]] && log "$output"
-    return 0
-  fi
-  local rc=$?
-  [[ -n "$output" ]] && {
-    log "$output"
-    echo "$output" >&2
-  }
-  return "$rc"
-}
-
-print_help() {
-  cat <<EOF
-${PROJECT_NAME} ${TOOL_VERSION}
-${PROJECT_TITLE}
-
-用法：
-  sudo bash wg-toolkit.sh
-  bash wg-toolkit.sh --dry-run
-  bash wg-toolkit.sh --validate
-  bash wg-toolkit.sh --doctor
-  sudo bash wg-toolkit.sh --uninstall
-  bash wg-toolkit.sh --help
-  bash wg-toolkit.sh --version
-  lq
-  LQ
-
-定位：
-  公网入口机 <原生 WireGuard UDP> 利群中转机 <Xray VLESS/Reality> 海外落地机
-
-限制：
-  本项目只允许使用原生 WireGuard UDP 作为公网入口机到利群主机的传输层。
-  不实现 FRP、UoT/Phantun、WireGuard over WSS、OpenVPN TCP、SoftEther、gost、udp2raw 等 TCP/fake TCP 隧道。
-
-默认：
-  WG 网段：${WG_NET_DEFAULT}
-  公网入口机 wg1：${CLOUD_WG_ADDR}，监听 ${CLOUD_WG_PORT_DEFAULT}/udp
-  利群中转机 wg0：${LEIKWAN_WG_ADDR}
-  客户端入口端口：${CLIENT_ENTRY_PORT_DEFAULT}
-  海外落地 Reality 端口：${LANDING_PORT_DEFAULT}
-
-子命令：
-  --dry-run    进入菜单，但角色部署只生成配置预览，不安装、不写入、不启动服务
-  --validate   输出详细诊断报告
-  --doctor     输出简洁诊断摘要
-  --doctor --verbose     输出详细诊断报告
-  --show-wg-identity     查看/生成本机 WireGuard 身份，不启动 wg，不写 Peer
-  --show-wg-identity --role leikwan|cloud
-  --rebuild-outputs      从当前已运行配置重建 outputs 和 /root 输出
-  --vlessenc-encryption VALUE   配合 --rebuild-outputs 补充客户端 encryption
-  --cloud-endpoint VALUE        配合 --rebuild-outputs 指定 CLOUD_ENDPOINT
-  --client-entry-port VALUE     配合 --rebuild-outputs 指定 CLIENT_ENTRY_PORT
-  --landing-address VALUE       配合 --rebuild-outputs 指定 LANDING_ADDRESS
-  --landing-port VALUE          配合 --rebuild-outputs 指定 LANDING_PORT
-  --pbr-apply             应用本项目保存的 IPv4 PBR 静态和域名规则
-  --pbr-refresh-domains   刷新域名 A 记录并更新本项目 IPv4 PBR 域名规则
-  --pbr-show              查看本项目 IPv4 PBR 配置和当前规则
-  --pbr-audit             审计当前 IPv4 PBR 规则，不修改系统
-  --pbr-import-existing   导入已有 priority 15000/15005 IPv4 PBR 规则
-  --refresh-forward-target 刷新公网入口域名转发目标并重载当前转发规则
-EOF
-}
+ok() { echo "${GREEN}[OK]${RESET} $*"; log "OK $*"; }
+info() { echo "${BLUE}[INFO]${RESET} $*"; log "INFO $*"; }
+warn() { echo "${YELLOW}[WARN]${RESET} $*"; log "WARN $*"; }
+fail() { echo "${RED}[FAIL]${RESET} $*" >&2; log "FAIL $*"; }
 
 need_root() {
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
@@ -257,33 +97,8 @@ need_root() {
 }
 
 need_root_unless_dry_run() {
-  if (( DRY_RUN == 1 )); then
-    warn "当前为 --dry-run，仅生成预览，不写入系统。"
-    return 0
-  fi
+  (( DRY_RUN == 1 )) && return 0
   need_root
-}
-
-ensure_supported_os() {
-  if [[ ! -r /etc/os-release ]]; then
-    fail "无法识别系统版本，仅支持 Debian 12/13、Ubuntu 22.04/24.04。"
-    exit 1
-  fi
-
-  local os_id os_version pretty_name
-  os_id="$(awk -F= '$1=="ID" {gsub(/"/, "", $2); print $2; exit}' /etc/os-release)"
-  os_version="$(awk -F= '$1=="VERSION_ID" {gsub(/"/, "", $2); print $2; exit}' /etc/os-release)"
-  pretty_name="$(awk -F= '$1=="PRETTY_NAME" {gsub(/"/, "", $2); print $2; exit}' /etc/os-release)"
-
-  case "${os_id}:${os_version}" in
-    debian:12|debian:13|ubuntu:22.04|ubuntu:24.04)
-      ok "系统检查通过：${pretty_name:-${os_id} ${os_version}}"
-      ;;
-    *)
-      fail "当前系统为 ${pretty_name:-unknown}，仅支持 Debian 12/13、Ubuntu 22.04/24.04。"
-      exit 1
-      ;;
-  esac
 }
 
 normalize_menu_choice() {
@@ -295,25 +110,28 @@ normalize_menu_choice() {
 }
 
 prompt_menu_choice() {
-  local prompt="$1"
-  local choice
-  read -r -p "$prompt" choice
-  normalize_menu_choice "$choice"
+  local prompt="$1" value
+  read -r -p "$prompt" value || value=""
+  normalize_menu_choice "$value"
+}
+
+prompt_value() {
+  local prompt="$1" default="${2:-}" value
+  if [[ -n "$default" ]]; then
+    read -r -p "${prompt} [${default}]: " value || value=""
+    value="$(normalize_menu_choice "$value")"
+    printf '%s' "${value:-$default}"
+  else
+    read -r -p "${prompt}: " value || value=""
+    normalize_menu_choice "$value"
+  fi
 }
 
 prompt_yes_no() {
-  local prompt="$1"
-  local default="${2:-N}"
-  local suffix answer
-
-  if [[ "$default" =~ ^[Yy]$ ]]; then
-    suffix="[Y/n]"
-  else
-    suffix="[y/N]"
-  fi
-
+  local prompt="$1" default="${2:-N}" answer suffix
+  [[ "$default" =~ ^[Yy]$ ]] && suffix="[Y/n]" || suffix="[y/N]"
   while true; do
-    read -r -p "${prompt} ${suffix} " answer
+    read -r -p "${prompt} ${suffix} " answer || answer=""
     answer="$(normalize_menu_choice "$answer")"
     answer="${answer:-$default}"
     case "$answer" in
@@ -324,128 +142,98 @@ prompt_yes_no() {
   done
 }
 
-prompt_value() {
-  local prompt="$1"
-  local default="${2:-}"
-  local value
-  if [[ -n "$default" ]]; then
-    read -r -p "${prompt} [${default}]: " value
-    value="${value//$'\r'/}"
-    printf '%s' "${value:-$default}"
-  else
-    read -r -p "${prompt}: " value
-    value="${value//$'\r'/}"
-    printf '%s' "$value"
-  fi
-}
-
 is_port() {
-  local port="$1"
-  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 ))
+  local p="$1"
+  [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 ))
 }
 
 prompt_port() {
-  local prompt="$1"
-  local default="$2"
-  local value
+  local prompt="$1" default="$2" value
   while true; do
     value="$(prompt_value "$prompt" "$default")"
-    if is_port "$value"; then
-      printf '%s' "$value"
-      return 0
-    fi
-    echo "端口必须是 1-65535 的数字。"
+    is_port "$value" && printf '%s' "$value" && return 0
+    echo "端口必须是 1-65535。"
   done
 }
 
-validate_wg_key() {
-  [[ "$1" =~ ^[A-Za-z0-9+/]{43}=$ ]]
+is_ipv4() {
+  local ip="$1" a b c d
+  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r a b c d <<<"$ip"
+  for x in "$a" "$b" "$c" "$d"; do (( x >= 0 && x <= 255 )) || return 1; done
 }
 
-prompt_wg_key() {
-  local prompt="$1"
-  local key
-  while true; do
-    key="$(prompt_value "$prompt")"
-    if validate_wg_key "$key"; then
-      printf '%s' "$key"
-      return 0
-    fi
-    echo "WireGuard 公钥格式不正确，请确认复制完整。"
-  done
-}
-
-prompt_wg_key_default() {
-  local prompt="$1"
-  local default="${2:-}"
-  local key
-  while true; do
-    key="$(prompt_value "$prompt" "$default")"
-    if validate_wg_key "$key"; then
-      printf '%s' "$key"
-      return 0
-    fi
-    echo "WireGuard 公钥格式不正确，请确认复制完整。"
-  done
-}
-
-validate_endpoint_host() {
-  [[ -n "$1" && ! "$1" =~ [[:space:]/] ]]
-}
-
-prompt_endpoint_host() {
-  local prompt="$1"
-  local default="${2:-}"
-  local host
-  while true; do
-    host="$(prompt_value "$prompt" "$default")"
-    if validate_endpoint_host "$host"; then
-      printf '%s' "$host"
-      return 0
-    fi
-    echo "请输入公网 IP 或域名，不要包含协议、端口或空格。"
-  done
-}
-
-prompt_endpoint_host_default() {
-  local prompt="$1"
-  local default="${2:-}"
-  prompt_endpoint_host "$prompt" "$default"
-}
-
-prompt_non_empty() {
-  local prompt="$1"
-  local default="${2:-}"
-  local value
+prompt_host() {
+  local prompt="$1" default="${2:-}" value
   while true; do
     value="$(prompt_value "$prompt" "$default")"
-    if [[ -n "$value" ]]; then
-      printf '%s' "$value"
-      return 0
-    fi
-    echo "该项不能为空。"
+    [[ -n "$value" && ! "$value" =~ [[:space:]/] ]] && printf '%s' "$value" && return 0
+    echo "请输入 IP 或域名，不要包含协议、端口或空格。"
   done
 }
 
-trim_spaces() {
-  local value="$1"
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
-  printf '%s' "$value"
+safe_name() {
+  local name="$1"
+  name="$(normalize_menu_choice "$name")"
+  name="${name// /-}"
+  name="$(printf '%s' "$name" | sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^-+//; s/-+$//')"
+  [[ -n "$name" ]] || name="default"
+  printf '%s' "$name"
 }
 
-script_self_path() {
-  if command -v readlink >/dev/null 2>&1; then
-    readlink -f "$0" 2>/dev/null || printf '%s' "$0"
+backup_file() {
+  local path="$1" safe dest
+  [[ -e "$path" ]] || return 0
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] 备份 ${path}"
+    return 0
+  fi
+  mkdir -p "$BACKUP_DIR"
+  safe="${path#/}"; safe="${safe//\//__}"
+  dest="${BACKUP_DIR}/${safe}.$(date '+%Y%m%d-%H%M%S').bak"
+  cp -a "$path" "$dest"
+  ok "已备份 ${path} -> ${dest}"
+}
+
+write_file() {
+  local path="$1" content="$2" mode="${3:-600}" tmp
+  if (( DRY_RUN == 1 )); then
+    echo
+    echo "${BOLD}[DRY-RUN] ${path}${RESET}"
+    printf '%s\n' "$content"
+    return 0
+  fi
+  mkdir -p "$(dirname "$path")"
+  tmp="$(mktemp)"
+  printf '%s\n' "$content" >"$tmp"
+  if [[ -f "$path" ]] && cmp -s "$tmp" "$path"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  backup_file "$path"
+  install -m "$mode" "$tmp" "$path"
+  rm -f "$tmp"
+  ok "已写入 ${path}"
+}
+
+confirm_summary() {
+  local title="$1" summary="$2"
+  echo
+  echo "${BOLD}${title}${RESET}"
+  echo "----------------------------------------"
+  printf '%b\n' "$summary"
+  echo "----------------------------------------"
+  if (( DRY_RUN == 1 )); then
+    prompt_yes_no "确认生成以上预览吗？" "Y"
   else
-    printf '%s' "$0"
+    prompt_yes_no "确认写入 / 执行吗？" "N"
   fi
 }
 
 print_banner() {
   cat <<EOF
 --------------------------------------------------
-  ${PROJECT_DISPLAY_NAME}
+  Leikwan WG Toolkit
   ${PROJECT_TITLE}
   Author : ${PROJECT_AUTHOR}
   Version: ${TOOL_VERSION}
@@ -454,2637 +242,388 @@ print_banner() {
 EOF
 }
 
-shortcut_marker() {
-  printf '%s' "# Managed by leikwan-wg-toolkit"
-}
-
-shortcut_is_managed() {
-  local path="$1"
-  [[ -f "$path" ]] && grep -qF "$(shortcut_marker)" "$path"
-}
-
-render_shortcut_script() {
-  local script_path="$1"
-  local quoted_script_path
-  printf -v quoted_script_path '%q' "$script_path"
+print_help() {
   cat <<EOF
-#!/usr/bin/env bash
-# Managed by leikwan-wg-toolkit
-exec bash ${quoted_script_path} "\$@"
+${PROJECT_NAME} ${TOOL_VERSION}
+
+用法：
+  sudo bash wg-toolkit.sh
+  sudo bash wg-toolkit.sh --doctor
+  sudo bash wg-toolkit.sh --doctor --verbose
+  sudo bash wg-toolkit.sh pair relay-init
+  sudo bash wg-toolkit.sh pair entry-join [pairing-file|-]
+  sudo bash wg-toolkit.sh pair relay-join [pairing-file|-]
+  sudo bash wg-toolkit.sh pair status
+  sudo bash wg-toolkit.sh entry expose-range [--range 10000-19999] [--relay-ip 10.198.1.1]
+  sudo bash wg-toolkit.sh forward add
+  sudo bash wg-toolkit.sh forward edit [name]
+  sudo bash wg-toolkit.sh forward delete [name]
+  sudo bash wg-toolkit.sh forward list
+  sudo bash wg-toolkit.sh forward apply-relay
+  sudo bash wg-toolkit.sh --pbr-apply
+  sudo bash wg-toolkit.sh --uninstall
+  bash wg-toolkit.sh --help
+  bash wg-toolkit.sh --version
+
+定位：
+  公网入口 + 利群中转的纯四层 TCP 转发工具。
+  传输层使用 EasyTier，转发层使用 nftables。
+  默认 EasyTier 虚拟网段：${ET_NET}，relay：${RELAY_ET_IP}。
+  默认 EasyTier TCP 端口：${DEFAULT_EASYTIER_PORT}，位于利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。
+  不部署后端协议，不生成代理客户端链接。
 EOF
 }
 
-install_shortcut_file() {
-  local path="$1"
-  local script_path="$2"
-  local quiet="${3:-}"
-  local content
-
-  content="$(render_shortcut_script "$script_path")"
-
-  if [[ -e "$path" ]] && ! shortcut_is_managed "$path"; then
-    if ! prompt_yes_no "检测到 ${path} 已存在且不是 leikwan-wg-toolkit 创建，是否覆盖？" "N"; then
-      warn "${path} 已保留。"
-      return 0
-    fi
-  fi
-
-  if [[ "$quiet" == "quiet" && -f "$path" ]] && printf '%s\n' "$content" | cmp -s - "$path"; then
-    if (( DRY_RUN == 0 )); then
-      chmod +x "$path"
-    fi
-    return 0
-  fi
-
-  write_text_file "$path" "$content" 755 || true
+ensure_base_dirs() {
   if (( DRY_RUN == 0 )); then
-    chmod +x "$path"
+    install -d -m 700 "$STATE_DIR" "$ENTRY_DIR" "$ENTRIES_DIR" "$FORWARDS_DIR" "$OUTPUT_DIR" "$NFT_DIR" "$PBR_DIR" "$EASYTIER_DIR"
   fi
 }
 
-show_shortcut_status() {
-  local path target
-  echo
-  echo "${BOLD}快捷命令状态${RESET}"
-  for path in "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER"; do
-    if shortcut_is_managed "$path"; then
-      target="$(awk '/^exec bash / {print $3; exit}' "$path" 2>/dev/null || true)"
-      ok "${path} 已安装（${target:-unknown}）"
-    elif [[ -e "$path" ]]; then
-      warn "${path} 存在但不是本项目创建。"
-    else
-      warn "${path} 未安装。"
-    fi
-  done
-}
-
-print_shortcut_hint() {
-  cat <<EOF
-
-快捷命令：
-  lq
-  LQ
-
-以后可以直接运行：
-  lq
-进入工具。
-EOF
-}
-
-install_shortcuts() {
-  need_root_unless_dry_run
-  local quiet="${1:-}"
-  local script_path
-  script_path="$(script_self_path)"
-
-  if (( DRY_RUN == 0 )) && [[ ! -f "$script_path" ]]; then
-    warn "无法确认当前脚本真实路径：${script_path}，已跳过快捷命令安装。"
-    return 0
-  fi
-
-  install_shortcut_file "$SHORTCUT_LQ" "$script_path" "$quiet"
-  install_shortcut_file "$SHORTCUT_LQ_UPPER" "$script_path" "$quiet"
-  if [[ "$quiet" != "quiet" ]]; then
-    show_shortcut_status
-    print_shortcut_hint
-  fi
-}
-
-remove_shortcut_file() {
-  local path="$1"
-  if [[ ! -e "$path" ]]; then
-    warn "${path} 不存在，跳过。"
-    return 0
-  fi
-
-  if ! shortcut_is_managed "$path"; then
-    warn "${path} 存在但不是本项目创建，已保留。"
-    return 0
-  fi
-
-  backup_file "$path"
-  rm -f "$path"
-  ok "已删除快捷命令：${path}"
-}
-
-remove_shortcuts() {
-  need_root
-  init_log
-  remove_shortcut_file "$SHORTCUT_LQ"
-  remove_shortcut_file "$SHORTCUT_LQ_UPPER"
-}
-
-is_ipv4() {
-  local ip="$1"
-  local o1 o2 o3 o4
-  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-  IFS=. read -r o1 o2 o3 o4 <<<"$ip"
-  for octet in "$o1" "$o2" "$o3" "$o4"; do
-    (( octet >= 0 && octet <= 255 )) || return 1
-  done
-}
-
-normalize_ipv4_cidr() {
-  local value="$1"
-  local ip prefix
-  value="$(trim_spaces "$value")"
-  [[ -n "$value" ]] || return 1
-  if is_ipv4 "$value"; then
-    printf '%s/32' "$value"
-    return 0
-  fi
-  [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || return 1
-  ip="${value%/*}"
-  prefix="${value#*/}"
-  is_ipv4 "$ip" || return 1
-  (( prefix >= 0 && prefix <= 32 )) || return 1
-  printf '%s' "$value"
-}
-
-backup_file() {
-  local path="$1"
-  [[ -e "$path" ]] || return 0
-
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将备份：${path}"
-    log "DRY-RUN backup ${path}"
-    return 0
-  fi
-
-  mkdir -p "$BACKUP_DIR"
-  local safe="${path#/}"
-  safe="${safe//\//__}"
-  local dest
-  dest="${BACKUP_DIR}/${safe}.$(date '+%Y%m%d-%H%M%S').bak"
-
-  cp -a "$path" "$dest"
-  ok "已备份 ${path} -> ${dest}"
-}
-
-write_text_file() {
-  local path="$1"
-  local content="$2"
-  local mode="${3:-600}"
-  local tmp
-
-  if (( DRY_RUN == 1 )); then
-    echo
-    echo "${BOLD}[DRY-RUN] 配置预览：${path} (mode ${mode})${RESET}"
-    echo "----------------------------------------"
-    printf '%s\n' "$content"
-    echo "----------------------------------------"
-    log "DRY-RUN preview file ${path}"
-    return 0
-  fi
-
-  mkdir -p "$(dirname "$path")"
-  tmp="$(mktemp)"
-  printf '%s\n' "$content" >"$tmp"
-
-  if [[ -f "$path" ]] && cmp -s "$tmp" "$path"; then
-    rm -f "$tmp"
-    ok "${path} 已是目标状态，跳过写入。"
-    return 1
-  fi
-
-  backup_file "$path"
-  install -m "$mode" "$tmp" "$path"
-  rm -f "$tmp"
-  ok "已写入 ${path}"
-  return 0
-}
-
-write_output_file() {
-  local role="$1"
-  local content="$2"
-  local final_content role_file=""
-
-  final_content="$(cat <<EOF
-# Generated by leikwan-wg-toolkit ${TOOL_VERSION}
-# Role: ${role}
-# Time: $(date '+%F %T %z')
-
-${content}
-EOF
-)"
-
-  case "$role" in
-    cloud-entry) role_file="$CLOUD_OUTPUT_FILE" ;;
-    landing-server) role_file="$LANDING_OUTPUT_FILE" ;;
-    leikwan-relay) role_file="$RELAY_OUTPUT_FILE" ;;
-    client-link) role_file="$CLIENT_LINK_FILE" ;;
+package_command() {
+  case "$1" in
+    iproute2) printf '%s' ip ;;
+    curl) printf '%s' curl ;;
+    jq) printf '%s' jq ;;
+    tar) printf '%s' tar ;;
+    unzip) printf '%s' unzip ;;
+    nftables) printf '%s' nft ;;
+    netcat-openbsd) printf '%s' nc ;;
+    iptables-persistent) printf '%s' ip6tables-save ;;
+    ca-certificates) printf '%s' "" ;;
+    coreutils) printf '%s' base64 ;;
+    openssl) printf '%s' openssl ;;
+    *) printf '%s' "$1" ;;
   esac
-
-  if (( DRY_RUN == 1 )); then
-    echo
-    echo "${BOLD}[DRY-RUN] 部署输出文件预览：${OUTPUT_FILE}${RESET}"
-    echo "----------------------------------------"
-    printf '%s\n' "$final_content"
-    echo "----------------------------------------"
-    if [[ -n "$role_file" ]]; then
-      echo
-      echo "${BOLD}[DRY-RUN] 角色输出文件预览：${role_file}${RESET}"
-      echo "----------------------------------------"
-      printf '%s\n' "$final_content"
-      echo "----------------------------------------"
-    fi
-    return 0
-  fi
-
-  install -d -m 755 "$OUTPUT_DIR"
-  if [[ -n "$role_file" ]]; then
-    write_text_file "$role_file" "$final_content" 600 || true
-    ok "角色输出已保存：${role_file}"
-  fi
-  write_text_file "$OUTPUT_FILE" "$final_content" 600 || true
-  ok "部署输出已保存：${OUTPUT_FILE}"
 }
 
-print_copy_block() {
-  local title="$1"
-  local content="$2"
-  local next="${3:-}"
-  echo
-  echo "=================================================="
+install_packages() {
+  local packages=("$@") missing=() pkg cmd
   if (( DRY_RUN == 1 )); then
-    echo "【DRY-RUN 预览参数，不能用于真实部署】"
-    echo "【${title}】"
-  else
-    echo "【${title}】"
+    echo "[DRY-RUN] apt-get install ${packages[*]}"
+    return 0
   fi
-  printf '%s\n' "$content"
-  echo "=================================================="
-  if [[ -n "$next" ]]; then
-    echo
-    echo "下一步："
-    printf '%s\n' "$next"
-    echo "=================================================="
+  for pkg in "${packages[@]}"; do
+    case " ${DEPS_INSTALLED_THIS_RUN} " in *" ${pkg} "*) continue ;; esac
+    cmd="$(package_command "$pkg")"
+    if [[ -n "$cmd" ]] && command -v "$cmd" >/dev/null 2>&1; then
+      continue
+    fi
+    if [[ -z "$cmd" && -f "$DEPS_MARKER" ]]; then
+      continue
+    fi
+    missing+=("$pkg")
+  done
+  ((${#missing[@]} > 0)) || return 0
+  ensure_base_dirs
+  export DEBIAN_FRONTEND=noninteractive
+  if (( DEPS_APT_UPDATED == 0 )); then
+    apt-get update
+    DEPS_APT_UPDATED=1
   fi
+  apt-get install -y "${missing[@]}"
+  for pkg in "${missing[@]}"; do
+    DEPS_INSTALLED_THIS_RUN="${DEPS_INSTALLED_THIS_RUN} ${pkg}"
+  done
+  date '+%F %T' >"$DEPS_MARKER"
+}
+
+detect_public_ipv4() {
+  curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null ||
+    curl -4 -fsS --max-time 8 https://ifconfig.me 2>/dev/null ||
+    hostname -I 2>/dev/null | awk '{print $1}'
 }
 
 env_file_get() {
-  local file="$1"
-  local key="$2"
-  [[ -f "$file" ]] || return 1
-  awk -F= -v k="$key" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' "$file"
+  local file="$1" key="$2"
+  awk -F= -v k="$key" '
+    $1 == k {
+      sub(/^[^=]*=/, "")
+      gsub(/\r$/, "")
+      print
+      exit
+    }
+  ' "$file" 2>/dev/null
 }
 
-profile_safe_name() {
-  local name="$1"
-  name="$(trim_spaces "$name")"
-  name="${name// /-}"
-  name="$(printf '%s' "$name" | sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^-+//; s/-+$//')"
-  [[ -n "$name" ]] || name="default"
-  printf '%s' "$name"
+tcp_reachable() {
+  local host="$1" port="$2"
+  command -v nc >/dev/null 2>&1 || return 2
+  nc -vz -w 3 "$host" "$port" >/dev/null 2>&1
+}
+
+is_fast_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= FAST_PORT_RANGE_START && port <= FAST_PORT_RANGE_END ))
+}
+
+warn_if_slow_easytier_port() {
+  local port="$1"
+  if ! is_fast_port "$port"; then
+    warn "当前 EasyTier 端口 ${port} 不在利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}，可能导致高延迟。"
+    return 1
+  fi
+  return 0
+}
+
+confirm_easytier_port() {
+  local port="$1"
+  warn_if_slow_easytier_port "$port" && return 0
+  prompt_yes_no "是否继续使用该端口？" "N"
+}
+
+normalize_easytier_port() {
+  local port="$1"
+  if [[ "$port" == "11010" ]]; then
+    warn "检测到旧配对码使用 11010，不在利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。"
+    if prompt_yes_no "是否自动改为推荐白名单端口 ${DEFAULT_EASYTIER_PORT}？" "Y"; then
+      port="$DEFAULT_EASYTIER_PORT"
+    fi
+  fi
+  confirm_easytier_port "$port" || return 1
+  printf '%s' "$port"
+}
+
+random_hex() {
+  local bytes="${1:-16}"
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex "$bytes"
+  else
+    od -An -N "$bytes" -tx1 /dev/urandom | tr -d ' \n'
+  fi
+}
+
+ensure_tsv_files() {
+  ensure_base_dirs
+  [[ -f "$ENTRIES_TSV" ]] || write_file "$ENTRIES_TSV" $'# entry_name\tpublic_host\tet_ip\teasytier_protocol\teasytier_port\tweight\tenabled' 600
+  [[ -f "$FORWARDS_TSV" ]] || write_file "$FORWARDS_TSV" $'# name\tentry_port\ttarget_host\ttarget_port\tout_iface\troute_table\tenabled\tcomment' 600
 }
 
 resolve_ipv4_first() {
   local host="$1"
-  if is_ipv4 "$host"; then
-    printf '%s' "$host"
-    return 0
-  fi
-  getent ahostsv4 "$host" 2>/dev/null | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $1; exit}' \
-    || getent ahosts "$host" 2>/dev/null | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $1; exit}'
+  if is_ipv4 "$host"; then printf '%s' "$host"; return 0; fi
+  getent ahostsv4 "$host" 2>/dev/null | awk '$1 ~ /^[0-9]+\./ {print $1; exit}' ||
+    getent ahosts "$host" 2>/dev/null | awk '$1 ~ /^[0-9]+\./ {print $1; exit}'
 }
 
-saved_param() {
-  local key="$1"
-  shift
-  local file value
-  for file in "$@"; do
-    value="$(env_file_get "$file" "$key" 2>/dev/null || true)"
-    if [[ -n "$value" ]]; then
-      printf '%s' "$value"
+easytier_validate_help() {
+  "$EASYTIER_CORE_BIN" --help >/dev/null 2>&1 || return 1
+  "$EASYTIER_CLI_BIN" --help >/dev/null 2>&1 || return 1
+}
+
+easytier_help_has() {
+  "$EASYTIER_CORE_BIN" --help 2>&1 | grep -q -- "$1"
+}
+
+easytier_help_text() {
+  "$EASYTIER_CORE_BIN" --help 2>&1 || true
+}
+
+easytier_disable_listener_arg() {
+  local help opt
+  help="$(easytier_help_text)"
+  for opt in --no-listener --no-listeners --disable-listener --disable-listeners; do
+    if grep -Fq -- "$opt" <<<"$help"; then
+      printf '%q ' "$opt"
       return 0
     fi
   done
   return 1
 }
 
-# shellcheck disable=SC2329  # Invoked from write_deploy_state here-doc substitutions.
-json_escape_unquoted() {
-  local value="${1:-}"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  value="${value//$'\n'/\\n}"
-  printf '%s' "$value"
-}
-
-write_deploy_state() {
-  local role="$1"
-  local current_step="$2"
-  local completed_steps="$3"
-  local missing_fields="$4"
-  local next_action="$5"
-  local content tmp safe dest
-  content="$(cat <<EOF
-{
-  "ROLE": "$(json_escape_unquoted "$role")",
-  "CURRENT_STEP": "$(json_escape_unquoted "$current_step")",
-  "COMPLETED_STEPS": "$(json_escape_unquoted "$completed_steps")",
-  "MISSING_FIELDS": "$(json_escape_unquoted "$missing_fields")",
-  "NEXT_ACTION": "$(json_escape_unquoted "$next_action")",
-  "ACTIVE_LANDING_NAME": "$(json_escape_unquoted "$(active_landing_name 2>/dev/null || true)")",
-  "FORWARD_TARGET_MODE": "$(json_escape_unquoted "$(current_forward_target_field TARGET_NAME 2>/dev/null || printf '%s' "$FORWARD_TARGET_MODE")")"
-}
-EOF
-)"
-  if (( DRY_RUN == 1 )); then
-    return 0
-  fi
-  mkdir -p "$(dirname "$DEPLOY_STATE_FILE")"
-  tmp="$(mktemp)"
-  printf '%s\n' "$content" >"$tmp"
-  if [[ -f "$DEPLOY_STATE_FILE" ]] && cmp -s "$tmp" "$DEPLOY_STATE_FILE"; then
-    rm -f "$tmp"
-    return 0
-  fi
-  if [[ -f "$DEPLOY_STATE_FILE" ]]; then
-    mkdir -p "$BACKUP_DIR"
-    safe="${DEPLOY_STATE_FILE#/}"
-    safe="${safe//\//__}"
-    dest="${BACKUP_DIR}/${safe}.$(date '+%Y%m%d-%H%M%S').bak"
-    cp -a "$DEPLOY_STATE_FILE" "$dest" 2>/dev/null || true
-  fi
-  install -m 600 "$tmp" "$DEPLOY_STATE_FILE"
-  rm -f "$tmp"
-}
-
-state_any_client_link() {
-  env_file_get "$CLIENT_LINK_FILE" CLIENT_LINK 2>/dev/null ||
-    env_file_get "$RELAY_OUTPUT_FILE" CLIENT_LINK 2>/dev/null ||
-    env_file_get "$OUTPUT_FILE" CLIENT_LINK 2>/dev/null
-}
-
-relay_state_landing_address() {
-  local value=""
-  value="$(saved_param LANDING_ADDRESS "$RELAY_OUTPUT_FILE" "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$value" ]] && value="$(xray_relay_outbound_field address 2>/dev/null || true)"
-  printf '%s' "$value"
-}
-
-relay_state_has_cloud_params() {
-  local endpoint="" entry_port="" link=""
-  link="$(state_any_client_link 2>/dev/null || true)"
-  if [[ -n "$link" ]]; then
-    return 0
-  fi
-  endpoint="$(saved_param CLOUD_ENDPOINT "$RELAY_OUTPUT_FILE" "$CLIENT_LINK_FILE" "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  entry_port="$(saved_param CLIENT_ENTRY_PORT "$RELAY_OUTPUT_FILE" "$CLIENT_LINK_FILE" "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -n "$endpoint" && -n "$entry_port" ]]
-}
-
-relay_state_has_landing_params() {
-  local address="" port=""
-  address="$(relay_state_landing_address 2>/dev/null || true)"
-  port="$(saved_param LANDING_PORT "$RELAY_OUTPUT_FILE" "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$port" ]] && port="$(xray_relay_outbound_field port 2>/dev/null || true)"
-  [[ -n "$address" && -n "$port" ]]
-}
-
-relay_state_has_client_link() {
-  [[ -n "$(state_any_client_link 2>/dev/null || true)" ]]
-}
-
-derive_deploy_state() {
-  local role completed="" missing="" current_step="" next_action=""
-  local has_cloud=0 has_landing=0 has_client_link=0 has_pbr=0 landing_address="" pbr_group=""
-  role="$(detect_current_role 2>/dev/null || printf '%s' unknown)"
-
-  if role_has "$role" "leikwan-relay"; then
-    if [[ -f "$LEIKWAN_WG_PUBLIC_FILE" ]] || [[ -f "$LEIKWAN_WG_CONF" ]]; then
-      completed="${completed}LEIKWAN_PUBLIC_KEY "
-    else
-      missing="${missing}LEIKWAN_PUBLIC_KEY "
-    fi
-    relay_state_has_cloud_params && has_cloud=1
-    relay_state_has_landing_params && has_landing=1
-    relay_state_has_client_link && has_client_link=1
-    landing_address="$(relay_state_landing_address 2>/dev/null || true)"
-    if is_ipv4 "$landing_address"; then
-      pbr_group="$(pbr_static_managed_group "${landing_address}/32" 2>/dev/null || true)"
-      [[ -n "$pbr_group" ]] && has_pbr=1
-    fi
-    if (( has_cloud == 1 )); then
-      completed="${completed}CLOUD 参数 "
-    else
-      missing="${missing}CLOUD 参数 "
-    fi
-    if (( has_landing == 1 )); then
-      completed="${completed}LANDING 参数 "
-    else
-      missing="${missing}LANDING 参数 "
-    fi
-    if (( has_client_link == 1 )); then
-      completed="${completed}CLIENT_LINK "
-    else
-      missing="${missing}CLIENT_LINK "
-    fi
-    if (( has_pbr == 1 )); then
-      completed="${completed}PBR "
-    fi
-    current_step="leikwan-relay"
-    if [[ "$missing" == *"LANDING 参数"* ]]; then
-      next_action="导入 LANDING 参数"
-    elif [[ "$missing" == *"CLOUD 参数"* ]]; then
-      next_action="导入 CLOUD 参数"
-    elif [[ "$missing" == *"CLIENT_LINK"* ]]; then
-      next_action="完成链式代理部署"
-    else
-      next_action="无需操作，链路已完成"
-    fi
-  elif role_has "$role" "cloud-entry"; then
-    if [[ -s "$LEIKWAN_PEER_FILE" ]] || saved_param LEIKWAN_PUBLIC_KEY "$OUTPUT_FILE" >/dev/null 2>&1; then
-      completed="${completed}LEIKWAN_PUBLIC_KEY "
-    else
-      missing="${missing}LEIKWAN_PUBLIC_KEY "
-    fi
-    if [[ -s "$CLOUD_OUTPUT_FILE" ]]; then
-      completed="${completed}CLOUD 参数 "
-    else
-      missing="${missing}CLOUD 参数 "
-    fi
-    current_step="cloud-entry"
-    next_action="导入 LEIKWAN_PUBLIC_KEY 并部署 WireGuard + 转发"
-  elif role_has "$role" "landing-server"; then
-    if [[ -s "$LANDING_OUTPUT_FILE" ]]; then
-      completed="${completed}LANDING 参数 "
-      next_action="复制 LANDING 参数到利群中转机"
-    else
-      missing="${missing}LANDING 参数 "
-      next_action="部署 / 更新 Reality 落地"
-    fi
-    current_step="landing-server"
-  else
-    current_step="unknown"
-    next_action="进入极速部署向导选择机器角色"
-  fi
-
-  printf 'ROLE=%s\nCURRENT_STEP=%s\nCOMPLETED_STEPS=%s\nMISSING_FIELDS=%s\nNEXT_ACTION=%s\n' \
-    "$role" "$current_step" "$(trim_spaces "$completed")" "$(trim_spaces "$missing")" "$next_action"
-}
-
-state_field() {
-  local key="$1"
-  local state="$2"
-  awk -F= -v k="$key" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' <<<"$state"
-}
-
-show_deploy_state_text() {
-  local state role completed missing next_action
-  state="$(derive_deploy_state)"
-  role="$(state_field ROLE "$state")"
-  completed="$(state_field COMPLETED_STEPS "$state")"
-  missing="$(state_field MISSING_FIELDS "$state")"
-  next_action="$(state_field NEXT_ACTION "$state")"
-  echo "当前角色：${role:-unknown}"
-  echo "已完成：${completed:-无}"
-  echo "缺少：${missing:-无}"
-  echo "下一步：${next_action:-运行 doctor 验收}"
-}
-
-maybe_show_resume_prompt() {
-  local state role current_step completed missing next_action choice
-  state="$(derive_deploy_state)"
-  role="$(state_field ROLE "$state")"
-  current_step="$(state_field CURRENT_STEP "$state")"
-  completed="$(state_field COMPLETED_STEPS "$state")"
-  missing="$(state_field MISSING_FIELDS "$state")"
-  next_action="$(state_field NEXT_ACTION "$state")"
-  write_deploy_state "$role" "$current_step" "$completed" "$missing" "$next_action"
-
-  [[ -n "$missing" && "$role" != "unknown" ]] || return 0
-
-  echo
-  echo "${BOLD}检测到未完成部署：${RESET}"
-  show_deploy_state_text
-  echo "1. 继续上次流程"
-  echo "2. 查看状态"
-  echo "3. 忽略"
-  choice="$(prompt_menu_choice "请选择 [3]: ")"
-  choice="${choice:-3}"
-  case "$choice" in
-    1) recommended_wizard_menu || true ;;
-    2) show_deploy_state_text ;;
-    3) ;;
-    *) warn "已忽略断点提示。" ;;
+easytier_arch_family() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf '%s' 'x86_64' ;;
+    aarch64|arm64) printf '%s' 'aarch64' ;;
+    *) fail "暂不支持自动安装 EasyTier 的架构：$(uname -m)"; return 1 ;;
   esac
 }
 
-rebuild_cli_param() {
-  local key="$1"
-  case "$key" in
-    VLESSENC_ENCRYPTION) printf '%s' "$REBUILD_VLESSENC_ENCRYPTION" ;;
-    CLOUD_ENDPOINT) printf '%s' "$REBUILD_CLOUD_ENDPOINT" ;;
-    CLIENT_ENTRY_PORT) printf '%s' "$REBUILD_CLIENT_ENTRY_PORT" ;;
-    LANDING_ADDRESS) printf '%s' "$REBUILD_LANDING_ADDRESS" ;;
-    LANDING_PORT) printf '%s' "$REBUILD_LANDING_PORT" ;;
-    *) return 1 ;;
-  esac
-}
-
-saved_param_with_cli() {
-  local key="$1"
-  shift
-  local value
-  value="$(rebuild_cli_param "$key" 2>/dev/null || true)"
-  if [[ -n "$value" ]]; then
-    printf '%s' "$value"
-    return 0
-  fi
-  saved_param "$key" "$@"
-}
-
-client_link_query_value() {
-  local link="$1"
-  local key="$2"
-  local query pair k v
-  local -a pairs
-  query="${link#*\?}"
-  [[ "$query" != "$link" ]] || return 1
-  query="${query%%#*}"
-  IFS='&' read -ra pairs <<<"$query"
-  for pair in "${pairs[@]}"; do
-    k="${pair%%=*}"
-    v="${pair#*=}"
-    if [[ "$k" == "$key" ]]; then
-      printf '%s' "$v"
-      return 0
-    fi
-  done
-  return 1
-}
-
-urldecode() {
-  local value="$1"
-  printf '%b' "${value//%/\\x}"
-}
-
-parse_client_link_fields() {
-  local link="$1"
-  local rest authority uuid hostport endpoint port encryption
-  [[ "$link" == vless://* ]] || return 1
-  rest="${link#vless://}"
-  rest="${rest%%#*}"
-  if [[ "$rest" == *\?* ]]; then
-    authority="${rest%%\?*}"
-  else
-    authority="$rest"
-  fi
-  [[ "$authority" == *@* ]] || return 1
-  uuid="${authority%%@*}"
-  hostport="${authority#*@}"
-  endpoint="${hostport%:*}"
-  port="${hostport##*:}"
-  encryption="$(client_link_query_value "$link" encryption 2>/dev/null || true)"
-  if [[ -n "$encryption" ]]; then
-    encryption="$(urldecode "$encryption")"
-  fi
-  [[ -n "$uuid" ]] && printf 'ENTRY_UUID=%s\n' "$uuid"
-  [[ -n "$endpoint" && "$endpoint" != "$hostport" ]] && printf 'CLOUD_ENDPOINT=%s\n' "$endpoint"
-  [[ -n "$port" && "$port" != "$hostport" ]] && printf 'CLIENT_ENTRY_PORT=%s\n' "$port"
-  [[ -n "$encryption" ]] && printf 'VLESSENC_ENCRYPTION=%s\n' "$encryption"
-}
-
-client_link_field() {
-  local link="$1"
-  local key="$2"
-  parse_client_link_fields "$link" | awk -F= -v k="$key" '$1 == k {sub(/^[^=]*=/, ""); print; exit}'
-}
-
-migrate_legacy_client_link_output() {
-  [[ -f "$OUTPUT_FILE" ]] || return 1
-  local link content parsed key value
-  link="$(env_file_get "$OUTPUT_FILE" CLIENT_LINK 2>/dev/null || true)"
-  [[ -n "$link" ]] || return 1
-  parsed="$(parse_client_link_fields "$link" 2>/dev/null || true)"
-  content=""
-  for key in ENTRY_UUID VLESSENC_ENCRYPTION CLOUD_ENDPOINT CLIENT_ENTRY_PORT LANDING_ADDRESS LANDING_PORT; do
-    value="$(env_file_get "$OUTPUT_FILE" "$key" 2>/dev/null || true)"
-    if [[ -z "$value" ]]; then
-      value="$(awk -F= -v k="$key" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' <<<"$parsed")"
-    fi
-    printf -v content '%s%s=%s\n' "$content" "$key" "$value"
-  done
-  printf -v content '%sCLIENT_LINK=%s' "$content" "$link"
-  write_output_file "client-link" "$content"
-  ok "已从 ${OUTPUT_FILE} 迁移 CLIENT_LINK 到 ${CLIENT_LINK_FILE}"
-}
-
-infer_env_role() {
-  local content="$1"
-  if grep -q '^CLIENT_LINK=' <<<"$content"; then
-    printf '%s' "leikwan-relay"
-  elif grep -q '^CLOUD_PUBLIC_KEY=' <<<"$content"; then
-    printf '%s' "cloud-entry"
-  elif grep -q '^LANDING_ADDRESS=' <<<"$content"; then
-    printf '%s' "landing-server"
-  else
-    printf '%s' "unknown"
-  fi
-}
-
-validate_env_content() {
-  local role="$1"
-  local content="$2"
-  local missing="" key
-  case "$role" in
-    cloud-entry)
-      for key in CLOUD_PUBLIC_KEY CLOUD_ENDPOINT CLOUD_WG_PORT CLIENT_ENTRY_PORT; do
-        grep -q "^${key}=" <<<"$content" || missing="${missing}${key} "
-      done
-      ;;
-    landing-server)
-      for key in LANDING_ADDRESS LANDING_PORT LANDING_UUID LANDING_PUBLIC_KEY LANDING_SHORT_ID LANDING_SERVER_NAME LANDING_FLOW; do
-        grep -q "^${key}=" <<<"$content" || missing="${missing}${key} "
-      done
-      ;;
-    leikwan-relay)
-      grep -q '^CLIENT_LINK=' <<<"$content" || missing="CLIENT_LINK "
-      ;;
-    *)
-      missing="无法识别参数文件角色 "
-      ;;
-  esac
-  if [[ -n "$missing" ]]; then
-    fail "参数文件缺少：${missing}"
-    return 1
-  fi
-}
-
-import_params_file() {
-  need_root_unless_dry_run
-  init_log
-  local input content role target summary line
-  echo
-  echo "请输入 env 文件路径，或直接粘贴 KEY=value 内容。"
-  input="$(prompt_non_empty "路径或第一行")"
-  if [[ -f "$input" ]]; then
-    content="$(grep -E '^[A-Z0-9_]+=' "$input" || true)"
-  else
-    content="$input"
-    echo "继续粘贴，每行 KEY=value；输入空行结束。"
-    while IFS= read -r line; do
-      [[ -z "$line" ]] && break
-      content="${content}"$'\n'"${line}"
-    done
-    content="$(printf '%s\n' "$content" | grep -E '^[A-Z0-9_]+=' || true)"
-  fi
-  role="$(infer_env_role "$content")"
-  validate_env_content "$role" "$content" || return 1
-  case "$role" in
-    cloud-entry) target="$CLOUD_OUTPUT_FILE" ;;
-    landing-server) target="$LANDING_OUTPUT_FILE" ;;
-    leikwan-relay) target="$RELAY_OUTPUT_FILE" ;;
-    *) return 1 ;;
-  esac
-  summary="识别角色：${role}\n写入：${target}\n内容：\n${content}"
-  if ! confirm_summary "导入参数文件摘要" "$summary"; then
-    return 0
-  fi
-  write_output_file "$role" "$content"
-  if [[ "$role" == "leikwan-relay" ]] && grep -q '^CLIENT_LINK=' <<<"$content"; then
-    write_output_file "client-link" "$content"
-  fi
-}
-
-cloud_import_leikwan_public_key() {
-  need_root_unless_dry_run
-  init_log
-  local key content summary
-  key="$(prompt_wg_key "请粘贴利群中转机 LEIKWAN_PUBLIC_KEY")"
-  content="LEIKWAN_PUBLIC_KEY=${key}"
-  summary="写入：${LEIKWAN_PEER_FILE}\n用途：公网入口机部署 wg1 时自动填入利群 Peer PublicKey。\n\n${content}"
-  if ! confirm_summary "导入 LEIKWAN_PUBLIC_KEY 摘要" "$summary"; then
-    return 0
-  fi
-  write_text_file "$LEIKWAN_PEER_FILE" "$content" 600 || true
-  print_copy_block "已保存利群 PublicKey" "$content"
-}
-
-view_client_link() {
-  local link=""
-  link="$(env_file_get "$CLIENT_LINK_FILE" CLIENT_LINK 2>/dev/null || true)"
-  [[ -z "$link" ]] && link="$(env_file_get "$RELAY_OUTPUT_FILE" CLIENT_LINK 2>/dev/null || true)"
-  [[ -z "$link" ]] && link="$(env_file_get "$OUTPUT_FILE" CLIENT_LINK 2>/dev/null || true)"
-  if [[ -z "$link" ]]; then
-    migrate_legacy_client_link_output >/dev/null 2>&1 || true
-    link="$(env_file_get "$CLIENT_LINK_FILE" CLIENT_LINK 2>/dev/null || true)"
-  elif [[ ! -s "$CLIENT_LINK_FILE" && -f "$OUTPUT_FILE" ]]; then
-    migrate_legacy_client_link_output || true
-  fi
-  if [[ -z "$link" ]]; then
-    warn "未找到 CLIENT_LINK。缺少 VLESSENC_ENCRYPTION 时无法生成链接。"
-    echo "请运行：bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem...'"
-    return 1
-  fi
-  print_copy_block "客户端导入链接" "CLIENT_LINK=${link}"
-}
-
-parse_wg_listen_port() {
-  local conf="$1"
-  [[ -f "$conf" ]] || return 1
-  awk -F= 'tolower($1) ~ /^[[:space:]]*listenport[[:space:]]*$/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$conf"
-}
-
-parse_wg_endpoint_host() {
-  local conf="$1"
-  [[ -f "$conf" ]] || return 1
-  awk -F= 'tolower($1) ~ /^[[:space:]]*endpoint[[:space:]]*$/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); sub(/:[0-9]+$/, "", $2); print $2; exit}' "$conf"
-}
-
-parse_wg_endpoint_port() {
-  local conf="$1"
-  [[ -f "$conf" ]] || return 1
-  awk -F= 'tolower($1) ~ /^[[:space:]]*endpoint[[:space:]]*$/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); n=split($2, a, ":"); print a[n]; exit}' "$conf"
-}
-
-parse_realm_listen_port() {
-  [[ -f "$REALM_ENTRY_CONF" ]] || return 1
-  awk -F= '/^[[:space:]]*listen[[:space:]]*=/ {
-    gsub(/["[:space:]]/, "", $2)
-    n=split($2, a, ":")
-    print a[n]
-    exit
-  }' "$REALM_ENTRY_CONF"
-}
-
-parse_realm_remote_endpoint() {
-  [[ -f "$REALM_ENTRY_CONF" ]] || return 1
-  awk -F= '/^[[:space:]]*remote[[:space:]]*=/ {
-    gsub(/^[[:space:]"'\''"]+|[[:space:]"'\''"]+$/, "", $2)
-    print $2
-    exit
-  }' "$REALM_ENTRY_CONF"
-}
-
-endpoint_host_part() {
-  local endpoint="$1"
-  endpoint="${endpoint#\"}"
-  endpoint="${endpoint%\"}"
-  printf '%s' "${endpoint%:*}"
-}
-
-endpoint_port_part() {
-  local endpoint="$1"
-  endpoint="${endpoint#\"}"
-  endpoint="${endpoint%\"}"
-  printf '%s' "${endpoint##*:}"
-}
-
-parse_nft_dnat_endpoint() {
-  [[ -f "$FORWARD_NFT_CONF" ]] || return 1
-  awk '/dnat[[:space:]]+to[[:space:]]+/ {
-    for (i = 1; i <= NF; i++) {
-      if ($i == "to" && (i + 1) <= NF) {
-        gsub(/[;{}]/, "", $(i + 1))
-        print $(i + 1)
-        exit
-      }
-    }
-  }' "$FORWARD_NFT_CONF"
-}
-
-parse_nft_listen_port() {
-  [[ -f "$FORWARD_NFT_CONF" ]] || return 1
-  awk '/tcp[[:space:]]+dport[[:space:]]+/ {
-    for (i = 1; i <= NF; i++) {
-      if ($i == "dport" && (i + 1) <= NF) {
-        gsub(/[;{}]/, "", $(i + 1))
-        print $(i + 1)
-        exit
-      }
-    }
-  }' "$FORWARD_NFT_CONF"
-}
-
-parse_iptables_dnat_endpoint() {
-  [[ -f "$FORWARD_IPTABLES_SCRIPT" ]] || return 1
-  awk '{
-    for (i = 1; i <= NF; i++) {
-      if ($i == "--to-destination" && (i + 1) <= NF) {
-        print $(i + 1)
-        exit
-      }
-    }
-  }' "$FORWARD_IPTABLES_SCRIPT"
-}
-
-parse_iptables_listen_port() {
-  [[ -f "$FORWARD_IPTABLES_SCRIPT" ]] || return 1
-  awk '{
-    for (i = 1; i <= NF; i++) {
-      if ($i == "--dport" && (i + 1) <= NF) {
-        print $(i + 1)
-        exit
-      }
-    }
-  }' "$FORWARD_IPTABLES_SCRIPT"
-}
-
-current_wg_public_key() {
-  local iface="$1"
-  local public_file="$2"
-  local private_file="$3"
-  local key=""
-  if command -v wg >/dev/null 2>&1; then
-    key="$(wg show "$iface" public-key 2>/dev/null || true)"
-  fi
-  if [[ -z "$key" && -f "$public_file" ]]; then
-    key="$(read_key_file "$public_file" 2>/dev/null || true)"
-  fi
-  if [[ -z "$key" && -f "$private_file" ]] && command -v wg >/dev/null 2>&1; then
-    key="$(wg pubkey <"$private_file" 2>/dev/null || true)"
-  fi
-  [[ -n "$key" ]] || return 1
-  printf '%s' "$key"
-}
-
-infer_forward_mode_from_configs() {
-  local mode=""
-  mode="$(saved_param FORWARD_MODE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  if [[ -n "$mode" ]]; then
-    printf '%s' "$mode"
-  elif [[ -f "$FORWARD_NFT_CONF" || -f "$FORWARD_NFT_SERVICE" ]]; then
-    printf '%s' nftables
-  elif [[ -f "$FORWARD_IPTABLES_SCRIPT" || -f "$FORWARD_IPTABLES_SERVICE" ]]; then
-    printf '%s' iptables
-  elif [[ -f "$REALM_ENTRY_CONF" || -f "$REALM_ENTRY_SERVICE" ]]; then
-    printf '%s' realm
-  else
-    cloud_forward_mode
-  fi
-}
-
-infer_forward_target_from_configs() {
-  local mode="$1"
-  local endpoint="" address="" port="" resolved="" name="custom" type="custom" remark="rebuilt from forwarding config"
-  case "$mode" in
-    realm) endpoint="$(parse_realm_remote_endpoint 2>/dev/null || true)" ;;
-    nftables) endpoint="$(parse_nft_dnat_endpoint 2>/dev/null || true)" ;;
-    iptables) endpoint="$(parse_iptables_dnat_endpoint 2>/dev/null || true)" ;;
-    *) return 1 ;;
-  esac
-  [[ -n "$endpoint" ]] || return 1
-  address="$(endpoint_host_part "$endpoint")"
-  port="$(endpoint_port_part "$endpoint")"
-  [[ -n "$address" ]] || return 1
-  [[ -n "$port" && "$port" != "$address" ]] || port="$CLIENT_ENTRY_PORT_DEFAULT"
-  if [[ "$address" == "$LEIKWAN_WG_IP" && "$port" == "$CLIENT_ENTRY_PORT_DEFAULT" ]]; then
-    name="direct-leikwan-xray"
-    type="xray"
-    remark="default direct to leikwan relay xray"
-  fi
-  if is_ipv4 "$address"; then
-    resolved="$address"
-  fi
-  set_forward_target_runtime "$name" "$type" "$address" "$port" "tcp" "$remark" "$resolved"
-}
-
-xray_public_from_private() {
-  local private_key="$1"
-  local output public_key
-  [[ -x "$XRAY_BIN" ]] || return 1
-  output="$("$XRAY_BIN" x25519 -i "$private_key" 2>/dev/null || true)"
-  public_key="$(printf '%s\n' "$output" | awk -F': *' 'tolower($1) ~ /public/ {print $2; exit}')"
-  [[ -n "$public_key" ]] || return 1
-  printf '%s' "$public_key"
-}
-
-xray_relay_inbound_field() {
-  local field="$1"
-  [[ -f "$XRAY_CONFIG" ]] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
-  case "$field" in
-    port)
-      jq -r '.inbounds[]? | select(.protocol=="vless") | select((.settings.decryption // "") != "none") | .port // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-    id)
-      jq -r '.inbounds[]? | select(.protocol=="vless") | select((.settings.decryption // "") != "none") | .settings.clients[0].id // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-    decryption)
-      jq -r '.inbounds[]? | select(.protocol=="vless") | select((.settings.decryption // "") != "none") | .settings.decryption // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-  esac
-}
-
-xray_relay_outbound_field() {
-  local field="$1"
-  [[ -f "$XRAY_CONFIG" ]] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
-  case "$field" in
-    address)
-      jq -r '.outbounds[]? | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .settings.vnext[0].address // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-    port)
-      jq -r '.outbounds[]? | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .settings.vnext[0].port // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-    id)
-      jq -r '.outbounds[]? | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .settings.vnext[0].users[0].id // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-    flow)
-      jq -r '.outbounds[]? | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .settings.vnext[0].users[0].flow // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-    publicKey)
-      jq -r '.outbounds[]? | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .streamSettings.realitySettings.publicKey // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-    shortId)
-      jq -r '.outbounds[]? | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .streamSettings.realitySettings.shortId // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-    serverName)
-      jq -r '.outbounds[]? | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .streamSettings.realitySettings.serverName // empty' "$XRAY_CONFIG" | head -n 1
-      ;;
-  esac
-}
-
-rebuild_cloud_output() {
-  local public_key="" endpoint="" endpoint_type="" wg_port="" entry_port="" forward_mode="" content=""
-  public_key="$(current_wg_public_key "wg1" "$CLOUD_WG_PUBLIC_FILE" "$CLOUD_WG_PRIVATE_FILE" 2>/dev/null || true)"
-  if [[ -z "$public_key" ]]; then
-    ensure_wg_identity "wg1" || return 1
-    public_key="$WG_IDENTITY_PUBLIC"
-  fi
-  endpoint="$(saved_param_with_cli CLOUD_ENDPOINT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  endpoint_type="$(saved_param CLOUD_ENDPOINT_TYPE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  endpoint_type="${endpoint_type:-auto-ip}"
-  [[ -z "$endpoint" ]] && endpoint="$(detect_public_ipv4)"
-  [[ -z "$endpoint" ]] && endpoint="$(prompt_endpoint_host "请输入公网入口机 CLOUD_ENDPOINT")"
-  wg_port="$(parse_wg_listen_port "$CLOUD_WG_CONF" 2>/dev/null || true)"
-  wg_port="${wg_port:-$CLOUD_WG_PORT_DEFAULT}"
-  entry_port="$(saved_param_with_cli CLIENT_ENTRY_PORT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$entry_port" ]] && entry_port="$(parse_realm_listen_port 2>/dev/null || true)"
-  [[ -z "$entry_port" ]] && entry_port="$(parse_nft_listen_port 2>/dev/null || true)"
-  [[ -z "$entry_port" ]] && entry_port="$(parse_iptables_listen_port 2>/dev/null || true)"
-  entry_port="${entry_port:-$CLIENT_ENTRY_PORT_DEFAULT}"
-  forward_mode="$(infer_forward_mode_from_configs)"
-  load_current_forward_target
-  infer_forward_target_from_configs "$forward_mode" 2>/dev/null || true
-  content="$(cat <<EOF
-CLOUD_PUBLIC_KEY=${public_key}
-CLOUD_ENDPOINT=${endpoint}
-CLOUD_ENDPOINT_TYPE=${endpoint_type:-auto-ip}
-CLOUD_WG_PORT=${wg_port}
-CLIENT_ENTRY_PORT=${entry_port}
-FORWARD_MODE=${forward_mode}
-FORWARD_TARGET=${FORWARD_TARGET}
-FORWARD_TARGET_MODE=${FORWARD_TARGET_MODE}
-FORWARD_TARGET_ADDRESS=${FORWARD_TARGET_ADDRESS}
-FORWARD_TARGET_PORT=${FORWARD_TARGET_PORT}
-FORWARD_TARGET_RESOLVED_IP=${FORWARD_TARGET_RESOLVED_IP}
-EOF
-)"
-  write_output_file "cloud-entry" "$content"
-  print_copy_block "复制回利群中转机" "$content"
-}
-
-rebuild_cloud_output_auto() {
-  local public_key="" endpoint="" endpoint_type="" wg_port="" entry_port="" forward_mode="" content=""
-  public_key="$(current_wg_public_key "wg1" "$CLOUD_WG_PUBLIC_FILE" "$CLOUD_WG_PRIVATE_FILE" 2>/dev/null || true)"
-  [[ -n "$public_key" ]] || return 1
-  endpoint="$(saved_param CLOUD_ENDPOINT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  endpoint_type="$(saved_param CLOUD_ENDPOINT_TYPE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  endpoint_type="${endpoint_type:-auto-ip}"
-  [[ -z "$endpoint" ]] && endpoint="$(detect_public_ipv4 2>/dev/null || true)"
-  [[ -n "$endpoint" ]] || return 1
-  wg_port="$(parse_wg_listen_port "$CLOUD_WG_CONF" 2>/dev/null || true)"
-  wg_port="${wg_port:-$CLOUD_WG_PORT_DEFAULT}"
-  entry_port="$(saved_param CLIENT_ENTRY_PORT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$entry_port" ]] && entry_port="$(parse_realm_listen_port 2>/dev/null || true)"
-  [[ -z "$entry_port" ]] && entry_port="$(parse_nft_listen_port 2>/dev/null || true)"
-  [[ -z "$entry_port" ]] && entry_port="$(parse_iptables_listen_port 2>/dev/null || true)"
-  entry_port="${entry_port:-$CLIENT_ENTRY_PORT_DEFAULT}"
-  forward_mode="$(infer_forward_mode_from_configs)"
-  load_current_forward_target
-  infer_forward_target_from_configs "$forward_mode" 2>/dev/null || true
-  content="$(cat <<EOF
-CLOUD_PUBLIC_KEY=${public_key}
-CLOUD_ENDPOINT=${endpoint}
-CLOUD_ENDPOINT_TYPE=${endpoint_type:-auto-ip}
-CLOUD_WG_PORT=${wg_port}
-CLIENT_ENTRY_PORT=${entry_port}
-FORWARD_MODE=${forward_mode}
-FORWARD_TARGET=${FORWARD_TARGET}
-FORWARD_TARGET_MODE=${FORWARD_TARGET_MODE}
-FORWARD_TARGET_ADDRESS=${FORWARD_TARGET_ADDRESS}
-FORWARD_TARGET_PORT=${FORWARD_TARGET_PORT}
-FORWARD_TARGET_RESOLVED_IP=${FORWARD_TARGET_RESOLVED_IP}
-EOF
-)"
-  write_output_file "cloud-entry" "$content"
-}
-
-rebuild_landing_output() {
-  local landing_address="" landing_port="" landing_uuid="" landing_public_key="" landing_short_id="" landing_server_name="" landing_flow="" private_key="" content="" landing_direct_link=""
-  [[ -f "$XRAY_CONFIG" ]] || {
-    fail "未找到 ${XRAY_CONFIG}，无法重建落地机输出。"
-    return 1
-  }
-  command -v jq >/dev/null 2>&1 || {
-    fail "需要 jq 解析 Xray 配置。"
-    return 1
-  }
-  landing_address="$(saved_param_with_cli LANDING_ADDRESS "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_address" ]] && landing_address="$(detect_public_ipv4)"
-  [[ -z "$landing_address" ]] && landing_address="$(prompt_endpoint_host "请输入海外落地机 LANDING_ADDRESS")"
-  landing_port="$(saved_param_with_cli LANDING_PORT "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_port" ]] && landing_port="$(jq -r '.inbounds[]? | select(.streamSettings.security=="reality") | .port // empty' "$XRAY_CONFIG" | head -n 1)"
-  landing_uuid="$(jq -r '.inbounds[]? | select(.streamSettings.security=="reality") | .settings.clients[0].id // empty' "$XRAY_CONFIG" | head -n 1)"
-  landing_flow="$(jq -r '.inbounds[]? | select(.streamSettings.security=="reality") | .settings.clients[0].flow // empty' "$XRAY_CONFIG" | head -n 1)"
-  landing_short_id="$(jq -r '.inbounds[]? | select(.streamSettings.security=="reality") | .streamSettings.realitySettings.shortIds[0] // empty' "$XRAY_CONFIG" | head -n 1)"
-  landing_server_name="$(jq -r '.inbounds[]? | select(.streamSettings.security=="reality") | .streamSettings.realitySettings.serverNames[0] // empty' "$XRAY_CONFIG" | head -n 1)"
-  private_key="$(jq -r '.inbounds[]? | select(.streamSettings.security=="reality") | .streamSettings.realitySettings.privateKey // empty' "$XRAY_CONFIG" | head -n 1)"
-  landing_public_key="$(saved_param LANDING_PUBLIC_KEY "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_public_key" && -n "$private_key" ]] && landing_public_key="$(xray_public_from_private "$private_key" 2>/dev/null || true)"
-  [[ -z "$landing_public_key" ]] && landing_public_key="$(prompt_non_empty "无法从配置反推 LANDING_PUBLIC_KEY，请输入 LANDING_PUBLIC_KEY")"
-  landing_flow="${landing_flow:-$LANDING_FLOW_DEFAULT}"
-  landing_direct_link="$(build_landing_direct_link "$landing_uuid" "$landing_address" "${landing_port:-$LANDING_PORT_DEFAULT}" "$landing_public_key" "$landing_short_id" "${landing_server_name:-$LANDING_SERVER_NAME_DEFAULT}" "$landing_flow")"
-  content="$(cat <<EOF
-LANDING_ADDRESS=${landing_address}
-LANDING_PORT=${landing_port:-$LANDING_PORT_DEFAULT}
-LANDING_UUID=${landing_uuid}
-LANDING_PUBLIC_KEY=${landing_public_key}
-LANDING_SHORT_ID=${landing_short_id}
-LANDING_SERVER_NAME=${landing_server_name:-$LANDING_SERVER_NAME_DEFAULT}
-LANDING_FLOW=${landing_flow}
-LANDING_DIRECT_LINK=${landing_direct_link}
-EOF
-)"
-  write_output_file "landing-server" "$content"
-  landing_write_profile "local-landing" "$landing_address" "${landing_port:-$LANDING_PORT_DEFAULT}" "$landing_uuid" "$landing_public_key" "$landing_short_id" "${landing_server_name:-$LANDING_SERVER_NAME_DEFAULT}" "$landing_flow" "rebuilt from landing xray config; not relay active landing" "yes"
-  print_copy_block "复制到利群中转机" "$content"
-  warn "LANDING_DIRECT_LINK 是直连落地 Reality 测试链接，不是三机链式代理最终客户端链接。"
-  warn "local-landing 只是本机落地参数备份，不代表利群中转机 active landing。"
-}
-
-rebuild_relay_output() {
-  local wg_public="" cloud_endpoint="" cloud_port="" client_entry_port="" entry_uuid=""
-  local vless_decryption="" vless_encryption="" landing_address="" landing_port=""
-  local landing_uuid="" landing_public_key="" landing_short_id="" landing_server_name=""
-  local encoded_encryption="" client_link="" relay_content="" link_content="" old_client_link="" missing_link_fields=""
-  local prefer_existing_link=1 active_landing_profile_name=""
-  wg_public="$(wg show wg0 public-key 2>/dev/null || true)"
-  if [[ -z "$wg_public" ]]; then
-    ensure_wg_identity "wg0" || return 1
-    wg_public="$WG_IDENTITY_PUBLIC"
-  fi
-  command -v jq >/dev/null 2>&1 || {
-    fail "需要 jq 解析 Xray 配置。"
-    return 1
-  }
-  [[ -f "$XRAY_CONFIG" ]] || {
-    fail "未找到 ${XRAY_CONFIG}，无法重建利群输出。"
-    return 1
-  }
-  old_client_link="$(saved_param CLIENT_LINK "$CLIENT_LINK_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  if [[ -n "$old_client_link" && ! -s "$CLIENT_LINK_FILE" ]]; then
-    migrate_legacy_client_link_output || true
-  fi
-  if [[ -n "$REBUILD_VLESSENC_ENCRYPTION$REBUILD_CLOUD_ENDPOINT$REBUILD_CLIENT_ENTRY_PORT" ]]; then
-    prefer_existing_link=0
-  fi
-
-  cloud_endpoint="$(saved_param_with_cli CLOUD_ENDPOINT "$CLOUD_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$cloud_endpoint" && -n "$old_client_link" ]] && cloud_endpoint="$(client_link_field "$old_client_link" CLOUD_ENDPOINT 2>/dev/null || true)"
-  [[ -z "$cloud_endpoint" ]] && cloud_endpoint="$(parse_wg_endpoint_host "$LEIKWAN_WG_CONF" 2>/dev/null || true)"
-  [[ -z "$cloud_endpoint" ]] && cloud_endpoint="$(prompt_endpoint_host "请输入 CLOUD_ENDPOINT")"
-  cloud_port="$(saved_param CLOUD_WG_PORT "$CLOUD_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$cloud_port" ]] && cloud_port="$(parse_wg_endpoint_port "$LEIKWAN_WG_CONF" 2>/dev/null || true)"
-  cloud_port="${cloud_port:-$CLOUD_WG_PORT_DEFAULT}"
-  client_entry_port="$(saved_param_with_cli CLIENT_ENTRY_PORT "$CLIENT_LINK_FILE" "$CLOUD_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$client_entry_port" && -n "$old_client_link" ]] && client_entry_port="$(client_link_field "$old_client_link" CLIENT_ENTRY_PORT 2>/dev/null || true)"
-  [[ -z "$client_entry_port" ]] && client_entry_port="$(xray_relay_inbound_field port 2>/dev/null || true)"
-  client_entry_port="${client_entry_port:-$CLIENT_ENTRY_PORT_DEFAULT}"
-  entry_uuid="$(saved_param ENTRY_UUID "$CLIENT_LINK_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$entry_uuid" && -n "$old_client_link" ]] && entry_uuid="$(client_link_field "$old_client_link" ENTRY_UUID 2>/dev/null || true)"
-  [[ -z "$entry_uuid" ]] && entry_uuid="$(xray_relay_inbound_field id 2>/dev/null || true)"
-  vless_decryption="$(saved_param VLESSENC_DECRYPTION "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$vless_decryption" ]] && vless_decryption="$(xray_relay_inbound_field decryption 2>/dev/null || true)"
-  landing_address="$(saved_param_with_cli LANDING_ADDRESS "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_address" ]] && landing_address="$(xray_relay_outbound_field address 2>/dev/null || true)"
-  landing_port="$(saved_param_with_cli LANDING_PORT "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_port" ]] && landing_port="$(xray_relay_outbound_field port 2>/dev/null || true)"
-  landing_uuid="$(saved_param LANDING_UUID "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_uuid" ]] && landing_uuid="$(xray_relay_outbound_field id 2>/dev/null || true)"
-  landing_public_key="$(saved_param LANDING_PUBLIC_KEY "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_public_key" ]] && landing_public_key="$(xray_relay_outbound_field publicKey 2>/dev/null || true)"
-  landing_short_id="$(saved_param LANDING_SHORT_ID "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_short_id" ]] && landing_short_id="$(xray_relay_outbound_field shortId 2>/dev/null || true)"
-  landing_server_name="$(saved_param LANDING_SERVER_NAME "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -z "$landing_server_name" ]] && landing_server_name="$(xray_relay_outbound_field serverName 2>/dev/null || true)"
-  active_landing_profile_name="$(active_landing_name 2>/dev/null || true)"
-  vless_encryption="$(saved_param_with_cli VLESSENC_ENCRYPTION "$CLIENT_LINK_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  if [[ -z "$vless_encryption" && -n "$old_client_link" ]]; then
-    vless_encryption="$(client_link_field "$old_client_link" VLESSENC_ENCRYPTION 2>/dev/null || true)"
-  fi
-
-  if (( prefer_existing_link == 1 )) && [[ -n "$old_client_link" ]]; then
-    client_link="$old_client_link"
-  elif [[ -n "$vless_encryption" ]]; then
-    encoded_encryption="$(urlencode "$vless_encryption")"
-    [[ -z "$entry_uuid" ]] && missing_link_fields="${missing_link_fields} ENTRY_UUID"
-    [[ -z "$cloud_endpoint" ]] && missing_link_fields="${missing_link_fields} CLOUD_ENDPOINT"
-    [[ -z "$client_entry_port" ]] && missing_link_fields="${missing_link_fields} CLIENT_ENTRY_PORT"
-    if [[ -z "$missing_link_fields" ]]; then
-      client_link="vless://${entry_uuid}@${cloud_endpoint}:${client_entry_port}?type=raw&security=none&encryption=${encoded_encryption}#Leikwan-WG-Xray-Reality"
-    fi
-  fi
-
-  relay_content="$(cat <<EOF
-ENTRY_UUID=${entry_uuid}
-VLESSENC_DECRYPTION=${vless_decryption}
-VLESSENC_ENCRYPTION=${vless_encryption}
-CLOUD_ENDPOINT=${cloud_endpoint}
-CLOUD_WG_PORT=${cloud_port}
-CLIENT_ENTRY_PORT=${client_entry_port}
-LANDING_ADDRESS=${landing_address}
-LANDING_PORT=${landing_port}
-LANDING_UUID=${landing_uuid}
-LANDING_PUBLIC_KEY=${landing_public_key}
-LANDING_SHORT_ID=${landing_short_id}
-LANDING_SERVER_NAME=${landing_server_name}
-ACTIVE_LANDING_NAME=${active_landing_profile_name:-current}
-ACTIVE_LANDING_ADDRESS=${landing_address}
-ACTIVE_LANDING_PORT=${landing_port}
-LEIKWAN_PUBLIC_KEY=${wg_public}
-CLIENT_LINK=${client_link}
-EOF
-)"
-  write_output_file "leikwan-relay" "$relay_content"
-
-  if [[ -n "$client_link" ]]; then
-    link_content="$(cat <<EOF
-ENTRY_UUID=${entry_uuid}
-VLESSENC_ENCRYPTION=${vless_encryption}
-CLOUD_ENDPOINT=${cloud_endpoint}
-CLIENT_ENTRY_PORT=${client_entry_port}
-LANDING_ADDRESS=${landing_address}
-LANDING_PORT=${landing_port}
-ACTIVE_LANDING_NAME=${active_landing_profile_name:-current}
-ACTIVE_LANDING_ADDRESS=${landing_address}
-ACTIVE_LANDING_PORT=${landing_port}
-CLIENT_LINK=${client_link}
-EOF
-)"
-    write_output_file "client-link" "$link_content"
-    print_copy_block "客户端导入链接" "CLIENT_LINK=${client_link}"
-  elif [[ -z "$vless_encryption" ]]; then
-    warn "缺少 VLESSENC_ENCRYPTION，无法生成 CLIENT_LINK。"
-    echo "请运行：bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem...'"
-  else
-    warn "缺少生成 CLIENT_LINK 的必要字段：${missing_link_fields}"
-  fi
-}
-
-rebuild_outputs() {
-  need_root_unless_dry_run
-  init_log
-  local role="${1:-${REBUILD_ROLE_OVERRIDE:-$(detect_current_role)}}"
-  case "$role" in
-    cloud-entry) rebuild_cloud_output ;;
-    landing-server) rebuild_landing_output ;;
-    leikwan-relay) rebuild_relay_output ;;
-    multiple:*)
-      role_has "$role" "cloud-entry" && rebuild_cloud_output || true
-      role_has "$role" "landing-server" && rebuild_landing_output || true
-      role_has "$role" "leikwan-relay" && rebuild_relay_output || true
-      ;;
-    *)
-      fail "无法识别当前角色，请先部署或使用高级功能。"
-      return 1
-      ;;
-  esac
-}
-
-parse_rebuild_cli_options() {
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --role)
-        REBUILD_ROLE_OVERRIDE="${2:-}"
-        [[ -n "$REBUILD_ROLE_OVERRIDE" ]] || { fail "--role 需要参数"; return 1; }
-        shift 2
-        ;;
-      --vlessenc-encryption)
-        REBUILD_VLESSENC_ENCRYPTION="${2:-}"
-        [[ -n "$REBUILD_VLESSENC_ENCRYPTION" ]] || { fail "--vlessenc-encryption 需要参数"; return 1; }
-        shift 2
-        ;;
-      --cloud-endpoint)
-        REBUILD_CLOUD_ENDPOINT="${2:-}"
-        [[ -n "$REBUILD_CLOUD_ENDPOINT" ]] || { fail "--cloud-endpoint 需要参数"; return 1; }
-        shift 2
-        ;;
-      --client-entry-port)
-        REBUILD_CLIENT_ENTRY_PORT="${2:-}"
-        [[ -n "$REBUILD_CLIENT_ENTRY_PORT" ]] || { fail "--client-entry-port 需要参数"; return 1; }
-        shift 2
-        ;;
-      --landing-address)
-        REBUILD_LANDING_ADDRESS="${2:-}"
-        [[ -n "$REBUILD_LANDING_ADDRESS" ]] || { fail "--landing-address 需要参数"; return 1; }
-        shift 2
-        ;;
-      --landing-port)
-        REBUILD_LANDING_PORT="${2:-}"
-        [[ -n "$REBUILD_LANDING_PORT" ]] || { fail "--landing-port 需要参数"; return 1; }
-        shift 2
-        ;;
-      *)
-        fail "未知 --rebuild-outputs 参数：$1"
-        return 1
-        ;;
-    esac
-  done
-}
-
-maybe_offer_rebuild_outputs() {
-  local role="$1"
-  local missing=0
-  if (( OUTPUTS_REBUILD_NOTICE_SHOWN == 1 )); then
-    return 0
-  fi
-  case "$role" in
-    cloud-entry) [[ -s "$CLOUD_OUTPUT_FILE" ]] || missing=1 ;;
-    landing-server) [[ -s "$LANDING_OUTPUT_FILE" ]] || missing=1 ;;
-    leikwan-relay) [[ -s "$CLIENT_LINK_FILE" || -s "$RELAY_OUTPUT_FILE" ]] || missing=1 ;;
-    *) return 0 ;;
-  esac
-  if (( missing == 1 )); then
-    OUTPUTS_REBUILD_NOTICE_SHOWN=1
-    warn "检测到已有可用链路或配置，但缺少 outputs。"
-    if prompt_yes_no "是否从当前配置重建输出文件？" "Y"; then
-      rebuild_outputs "$role" || true
-    fi
-  fi
-}
-
-outputs_missing_for_role() {
-  local role="$1"
-  if role_has "$role" "cloud-entry" && [[ ! -s "$CLOUD_OUTPUT_FILE" ]]; then
-    return 0
-  fi
-  if role_has "$role" "landing-server" && [[ ! -s "$LANDING_OUTPUT_FILE" ]]; then
-    return 0
-  fi
-  if role_has "$role" "leikwan-relay" && ! relay_state_has_client_link; then
-    return 0
-  fi
-  return 1
-}
-
-notice_outputs_missing() {
-  local role="$1"
-  if (( OUTPUTS_REBUILD_NOTICE_SHOWN == 1 )); then
-    return 0
-  fi
-  outputs_missing_for_role "$role" || return 0
-  OUTPUTS_REBUILD_NOTICE_SHOWN=1
-  if role_has "$role" "cloud-entry" && (( EUID == 0 )) && rebuild_cloud_output_auto >/dev/null 2>&1; then
-    validate_report ok "outputs 已从 wg/转发配置自动重建：${CLOUD_OUTPUT_FILE}"
-    return 0
-  fi
-  validate_report warn "outputs 缺失，可运行：bash wg-toolkit.sh --rebuild-outputs"
-  if role_has "$role" "leikwan-relay"; then
-    validate_report warn "如需生成 CLIENT_LINK，请补充：bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem...'"
-  fi
-}
-
-show_copy_params() {
-  local role
-  role="$(detect_current_role)"
-  maybe_offer_rebuild_outputs "$role"
-  echo
-  echo "${BOLD}查看复制参数 / 客户端链接${RESET}"
-  echo "当前角色：${role}"
-  case "$role" in
-    landing-server)
-      if [[ -s "$LANDING_OUTPUT_FILE" ]]; then
-        print_copy_block "复制到利群中转机" "$(grep -E '^[A-Z0-9_]+=' "$LANDING_OUTPUT_FILE")"
-      else
-        rebuild_landing_output || true
-      fi
-      ;;
-    cloud-entry)
-      if [[ -s "$CLOUD_OUTPUT_FILE" ]]; then
-        print_copy_block "复制回利群中转机" "$(grep -E '^[A-Z0-9_]+=' "$CLOUD_OUTPUT_FILE")"
-      else
-        rebuild_cloud_output || true
-      fi
-      ;;
-    leikwan-relay)
-      show_wg_identity_for_iface "wg0" "card" || true
-      if [[ -s "$CLOUD_OUTPUT_FILE" ]]; then
-        ok "CLOUD 参数已导入：${CLOUD_OUTPUT_FILE}"
-      else
-        warn "CLOUD 参数未导入。"
-      fi
-      if [[ -s "$LANDING_OUTPUT_FILE" ]]; then
-        ok "LANDING 参数已导入：${LANDING_OUTPUT_FILE}"
-      else
-        warn "LANDING 参数未导入。"
-      fi
-      view_client_link || true
-      ;;
-    *)
-      warn "未知角色。可在高级功能中手动导入参数，或运行 --rebuild-outputs。"
-      ;;
-  esac
-}
-
-confirm_summary() {
-  local title="$1"
-  local summary="$2"
-  echo
-  if (( DRY_RUN == 1 )); then
-    echo "${BOLD}${title}（DRY-RUN，仅生成预览，不写入系统）${RESET}"
-  else
-    echo "${BOLD}${title}${RESET}"
-  fi
-  echo "----------------------------------------"
-  printf '%b\n' "$summary"
-  echo "----------------------------------------"
-  if (( DRY_RUN == 1 )); then
-    prompt_yes_no "确认继续生成配置预览吗？" "Y"
-  else
-    prompt_yes_no "确认继续写入/执行以上配置吗？" "N"
-  fi
-}
-
-install_packages() {
-  local packages=("$@")
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将安装依赖：${packages[*]}"
-    return 0
-  fi
-  export DEBIAN_FRONTEND=noninteractive
-  info "安装依赖：${packages[*]}"
-  run_cmd apt-get update
-  run_cmd apt-get install -y "${packages[@]}"
-}
-
-ensure_wireguard_dir() {
-  install -d -m 700 /etc/wireguard
-}
-
-install_wireguard_deps() {
-  ensure_supported_os
-  install_packages wireguard-tools curl wget jq qrencode iptables iproute2 ca-certificates
-}
-
-install_xray_deps() {
-  ensure_supported_os
-  install_packages curl wget jq unzip ca-certificates openssl
-}
-
-extract_private_key() {
-  local conf="$1"
-  [[ -f "$conf" ]] || return 1
-  grep -Eim1 '^[[:space:]]*PrivateKey[[:space:]]*=' "$conf" \
-    | sed -E 's/^[^=]+=//; s/^[[:space:]]+//; s/[[:space:]]+$//' || true
-}
-
-public_from_private() {
-  if [[ "$1" == DRYRUN_PRIVATE_KEY_PLACEHOLDER_* ]]; then
-    printf '%s\n' "DRYRUN_PUBLIC_KEY_PLACEHOLDER_0000000000000="
-    return 0
-  fi
-  printf '%s' "$1" | wg pubkey
-}
-
-wg_conf_for_iface() {
-  case "$1" in
-    wg0) printf '%s' "$LEIKWAN_WG_CONF" ;;
-    wg1) printf '%s' "$CLOUD_WG_CONF" ;;
-    *) return 1 ;;
-  esac
-}
-
-wg_private_file_for_iface() {
-  case "$1" in
-    wg0) printf '%s' "$LEIKWAN_WG_PRIVATE_FILE" ;;
-    wg1) printf '%s' "$CLOUD_WG_PRIVATE_FILE" ;;
-    *) return 1 ;;
-  esac
-}
-
-wg_public_file_for_iface() {
-  case "$1" in
-    wg0) printf '%s' "$LEIKWAN_WG_PUBLIC_FILE" ;;
-    wg1) printf '%s' "$CLOUD_WG_PUBLIC_FILE" ;;
-    *) return 1 ;;
-  esac
-}
-
-wg_address_for_iface() {
-  case "$1" in
-    wg0) printf '%s' "$LEIKWAN_WG_ADDR" ;;
-    wg1) printf '%s' "$CLOUD_WG_ADDR" ;;
-    *) return 1 ;;
-  esac
-}
-
-wg_role_for_iface() {
-  case "$1" in
-    wg0) printf '%s' "leikwan-relay" ;;
-    wg1) printf '%s' "cloud-entry" ;;
-    *) printf '%s' "unknown" ;;
-  esac
-}
-
-read_key_file() {
-  local file="$1"
-  [[ -f "$file" ]] || return 1
-  sed -n '1p' "$file" | tr -d '[:space:]'
-}
-
-write_wg_key_files() {
-  local private_file="$1"
-  local public_file="$2"
-  local private_key="$3"
-  local public_key="$4"
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将写入 WireGuard key 文件：${private_file} / ${public_file}"
-    return 0
-  fi
-  ensure_wireguard_dir
-  write_text_file "$private_file" "$private_key" 600 || true
-  write_text_file "$public_file" "$public_key" 644 || true
-}
-
-ensure_wg_identity() {
-  local iface="$1"
-  local conf private_file public_file key_private="" conf_private="" selected="" public_key="" choice
-  if (( DRY_RUN == 0 )) && ! command -v wg >/dev/null 2>&1; then
-    install_wireguard_deps
-  fi
-  conf="$(wg_conf_for_iface "$iface")" || return 1
-  private_file="$(wg_private_file_for_iface "$iface")" || return 1
-  public_file="$(wg_public_file_for_iface "$iface")" || return 1
-
-  key_private="$(read_key_file "$private_file" 2>/dev/null || true)"
-  conf_private="$(extract_private_key "$conf" 2>/dev/null || true)"
-
-  if [[ -n "$key_private" ]] && ! validate_wg_key "$key_private"; then
-    fail "${private_file} 存在但格式不正确。为避免静默重置，请手动检查或使用重置菜单。"
-    return 1
-  fi
-  if [[ -n "$conf_private" ]] && ! validate_wg_key "$conf_private"; then
-    fail "${conf} 中 PrivateKey 格式不正确。"
-    return 1
-  fi
-
-  if [[ -n "$key_private" && -n "$conf_private" && "$key_private" != "$conf_private" ]]; then
-    warn "检测到 WireGuard key 冲突：${private_file} 与 ${conf} 中 PrivateKey 不一致。"
-    echo "1. 使用 key 文件：${private_file}" >&2
-    echo "2. 使用 conf 文件：${conf}" >&2
-    echo "3. 取消（默认）" >&2
-    choice="$(prompt_menu_choice "请选择 [3]: ")"
-    choice="${choice:-3}"
-    case "$choice" in
-      1) selected="$key_private" ;;
-      2) selected="$conf_private" ;;
-      3) fail "已取消，未修改 WireGuard key。"; return 1 ;;
-      *) fail "选择无效，已取消。"; return 1 ;;
-    esac
-  elif [[ -n "$key_private" ]]; then
-    selected="$key_private"
-    log "复用 WireGuard key 文件：${private_file}"
-  elif [[ -n "$conf_private" ]]; then
-    selected="$conf_private"
-    echo "从 ${conf} 提取 PrivateKey，并补写 key 文件。" >&2
-    log "从 ${conf} 提取 PrivateKey，并补写 key 文件。"
-  else
-    if (( DRY_RUN == 1 )) && ! command -v wg >/dev/null 2>&1; then
-      selected="DRYRUN_PRIVATE_KEY_PLACEHOLDER_000000000000="
-    else
-      selected="$(wg genkey)"
-    fi
-    echo "已生成新的 WireGuard key：${iface}" >&2
-    log "已生成新的 WireGuard key：${iface}"
-  fi
-
-  public_key="$(public_from_private "$selected")"
-  if [[ -z "$(read_key_file "$private_file" 2>/dev/null || true)" || "$(read_key_file "$private_file" 2>/dev/null || true)" != "$selected" ]]; then
-    write_wg_key_files "$private_file" "$public_file" "$selected" "$public_key"
-  elif [[ "$(read_key_file "$public_file" 2>/dev/null || true)" != "$public_key" ]]; then
-    write_wg_key_files "$private_file" "$public_file" "$selected" "$public_key"
-  fi
-
-  WG_IDENTITY_PRIVATE="$selected"
-  WG_IDENTITY_PUBLIC="$public_key"
-}
-
-get_or_generate_private_key() {
-  local iface="$1"
-  ensure_wg_identity "$iface" || return 1
-  printf '%s' "$WG_IDENTITY_PRIVATE"
-}
-
-show_wg_identity_for_iface() {
-  local iface="$1"
-  local card_mode="${2:-card}"
-  local conf private_file public_file address role public_key started="no" exists="no"
-  conf="$(wg_conf_for_iface "$iface")" || return 1
-  private_file="$(wg_private_file_for_iface "$iface")" || return 1
-  public_file="$(wg_public_file_for_iface "$iface")" || return 1
-  address="$(wg_address_for_iface "$iface")" || return 1
-  role="$(wg_role_for_iface "$iface")"
-  ensure_wg_identity "$iface" || return 1
-  public_key="$WG_IDENTITY_PUBLIC"
-  [[ -f "$conf" ]] && exists="yes"
-  ip addr show "$iface" >/dev/null 2>&1 && started="yes"
-
-  cat <<EOF
-ROLE_HINT=${role}
-WG_INTERFACE=${iface}
-WG_ADDRESS=${address}
-WG_PUBLIC_KEY=${public_key}
-$(if [[ "$iface" == "wg0" ]]; then printf 'LEIKWAN_PUBLIC_KEY=%s\n' "$public_key"; elif [[ "$iface" == "wg1" ]]; then printf 'CLOUD_PUBLIC_KEY=%s\n' "$public_key"; fi)
-PRIVATE_KEY_FILE=${private_file}
-PUBLIC_KEY_FILE=${public_file}
-CONFIG_FILE=${conf}
-CONFIG_EXISTS=${exists}
-INTERFACE_STARTED=${started}
-EOF
-
-  if [[ "$card_mode" == "card" ]]; then
-    if [[ "$iface" == "wg0" ]]; then
-      print_copy_block "复制到公网入口机" "LEIKWAN_PUBLIC_KEY=${public_key}" $'去公网入口机运行：\nbash wg-toolkit.sh\n选择：极速部署向导\n并粘贴上面的 LEIKWAN_PUBLIC_KEY'
-    elif [[ "$iface" == "wg1" ]]; then
-      print_copy_block "复制回利群中转机" "CLOUD_PUBLIC_KEY=${public_key}" $'去利群中转机运行：\nbash wg-toolkit.sh\n选择：极速部署向导\n并导入 CLOUD 参数'
-    fi
-  fi
-}
-
-show_wg_identity_cli() {
-  local role_filter="${1:-auto}"
-  local shown=0
-  case "$role_filter" in
-    leikwan|leikwan-relay)
-      show_wg_identity_for_iface "wg0" "plain"
-      return
-      ;;
-    cloud|cloud-entry)
-      show_wg_identity_for_iface "wg1" "plain"
-      return
-      ;;
-    auto|"")
-      ;;
-    *)
-      fail "未知 --role：${role_filter}，可用值：leikwan / cloud"
-      return 1
-      ;;
-  esac
-
-  if ip addr show wg0 >/dev/null 2>&1 || [[ -f "$LEIKWAN_WG_CONF" ]]; then
-    show_wg_identity_for_iface "wg0" "plain"
-    shown=1
-  fi
-  if ip addr show wg1 >/dev/null 2>&1 || [[ -f "$CLOUD_WG_CONF" ]]; then
-    (( shown == 1 )) && echo
-    show_wg_identity_for_iface "wg1" "plain"
-    shown=1
-  fi
-  if (( shown == 0 )); then
-    cat <<EOF
-未检测到 wg0/wg1 或 WireGuard 配置。
-可用参数：
-  bash wg-toolkit.sh --show-wg-identity --role leikwan
-  bash wg-toolkit.sh --show-wg-identity --role cloud
-EOF
-  fi
-}
-
-reset_wg_identity() {
-  need_root
-  init_log
-  local iface="$1"
-  local private_file public_file conf summary private_key public_key
-  private_file="$(wg_private_file_for_iface "$iface")" || return 1
-  public_file="$(wg_public_file_for_iface "$iface")" || return 1
-  conf="$(wg_conf_for_iface "$iface")" || return 1
-  summary="接口：${iface}\nPrivateKey 文件：${private_file}\nPublicKey 文件：${public_file}\n配置文件：${conf}\n警告：重置 WireGuard Key 会导致对端 Peer 失效，必须把新的 PublicKey 复制到对端重新配置。"
-  if ! confirm_summary "重置本机 WireGuard Key 摘要" "$summary"; then
-    return 0
-  fi
-  if ! prompt_yes_no "二次确认：确定重置 ${iface} Key，并接受对端 Peer 失效风险？" "N"; then
-    warn "已取消重置。"
-    return 0
-  fi
-  private_key="$(wg genkey)"
-  public_key="$(public_from_private "$private_key")"
-  write_wg_key_files "$private_file" "$public_file" "$private_key" "$public_key"
-  warn "已重置 ${iface} Key。请立刻更新对端 Peer。"
-  show_wg_identity_for_iface "$iface"
-}
-
-show_wg_identity_menu() {
-  need_root_unless_dry_run
-  init_log
-  while true; do
-    echo
-    echo "${BOLD}查看 / 生成本机 WireGuard 身份${RESET}"
-    echo "1. 利群中转机 wg0（输出 LEIKWAN_PUBLIC_KEY）"
-    echo "2. 公网入口机 wg1（输出 CLOUD_PUBLIC_KEY）"
-    echo "3. 重置本机 WireGuard Key"
-    echo "0. 返回"
-    local choice reset_choice
-    choice="$(prompt_menu_choice "请选择：")"
-    case "$choice" in
-      1) show_wg_identity_for_iface "wg0" || true ;;
-      2) show_wg_identity_for_iface "wg1" || true ;;
-      3)
-        echo "1. 重置 wg0（利群中转机）"
-        echo "2. 重置 wg1（公网入口机）"
-        echo "0. 取消"
-        reset_choice="$(prompt_menu_choice "请选择：")"
-        case "$reset_choice" in
-          1) reset_wg_identity "wg0" || true ;;
-          2) reset_wg_identity "wg1" || true ;;
-          0) ;;
-          "") echo "请输入选项编号。" ;;
-          *) echo "无效选择。" ;;
-        esac
-        ;;
-      0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
-    esac
-  done
-}
-
-enable_wg_quick() {
-  local iface="$1"
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过启动 wg-quick@${iface}.service"
-    return 0
-  fi
-  info "启动并启用 wg-quick@${iface}"
-  run_cmd systemctl daemon-reload
-  run_cmd systemctl enable "wg-quick@${iface}.service"
-  if run_cmd systemctl restart "wg-quick@${iface}.service"; then
-    ok "wg-quick@${iface} 已启动。"
-  else
-    fail "wg-quick@${iface} 启动失败，请查看：journalctl -u wg-quick@${iface} -e --no-pager"
-    return 1
-  fi
-}
-
-detect_public_ipv4() {
-  local ip=""
-  ip="$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
-  if [[ -z "$ip" ]]; then
-    ip="$(curl -4 -fsS --max-time 8 https://ifconfig.me 2>/dev/null || true)"
-  fi
-  if [[ -z "$ip" ]]; then
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-  fi
-  printf '%s' "$ip"
-}
-
-choose_cloud_endpoint() {
-  local detected choice endpoint endpoint_type
-  detected="$(detect_public_ipv4)"
-  echo >&2
-  echo "请选择 CLOUD_ENDPOINT 获取方式：" >&2
-  echo "1. 自动检测公网 IPv4（默认）" >&2
-  echo "2. 手动输入公网 IP" >&2
-  echo "3. 输入 DDNS 域名" >&2
-  choice="$(prompt_menu_choice "请选择 [1]: ")"
-  choice="${choice:-1}"
-  case "$choice" in
-    1)
-      endpoint="${detected}"
-      endpoint_type="auto-ip"
-      if [[ -z "$endpoint" ]]; then
-        warn "自动检测公网 IPv4 失败，请手动输入。" >&2
-        endpoint="$(prompt_endpoint_host "请输入公网入口机公网 IPv4 或域名")"
-        endpoint_type="manual"
-      fi
-      ;;
-    2)
-      endpoint="$(prompt_endpoint_host "请输入公网入口机公网 IPv4" "$detected")"
-      endpoint_type="manual"
-      ;;
-    3)
-      endpoint="$(prompt_endpoint_host "请输入公网入口机 DDNS 域名")"
-      endpoint_type="ddns"
-      warn "家宽 DDNS 入口模式已启用：家宽上行带宽和运营商 QoS 可能成为瓶颈。" >&2
-      ;;
-    *)
-      warn "无效选择，使用自动检测公网 IPv4。" >&2
-      endpoint="${detected}"
-      endpoint_type="auto-ip"
-      ;;
-  esac
-  printf 'CLOUD_ENDPOINT=%s\nCLOUD_ENDPOINT_TYPE=%s\n' "$endpoint" "$endpoint_type"
-}
-
-download_github_asset() {
-  local url="$1"
-  local dest="$2"
-  local local_path=""
-  local candidates=(
-    "$url"
-    "https://ghfast.top/${url}"
-    "https://ghproxy.net/${url}"
-  )
-  local candidate
-
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将尝试下载：直连 -> ghfast -> ghproxy -> 本地文件路径"
-    return 0
-  fi
-
-  if [[ "$url" == file://* ]]; then
-    local_path="${url#file://}"
-    if [[ -f "$local_path" ]]; then
-      cp -a "$local_path" "$dest"
-      ok "已使用本地文件：${local_path}"
-      return 0
-    fi
-    fail "本地文件不存在：${local_path}"
-    return 1
-  fi
-
-  for candidate in "${candidates[@]}"; do
-    info "尝试下载：${candidate}"
-    if curl -fL --retry 2 --connect-timeout 15 "$candidate" -o "$dest"; then
-      ok "下载成功：${candidate}"
-      return 0
-    fi
-    warn "下载失败：${candidate}"
-  done
-
-  warn "直连、ghfast、ghproxy 均失败。"
-  local_path="$(prompt_value "请输入本地安装包路径，留空取消")"
-  if [[ -n "$local_path" && -f "$local_path" ]]; then
-    cp -a "$local_path" "$dest"
-    ok "已使用本地文件：${local_path}"
-    return 0
-  fi
-
-  fail "未提供可用本地文件，下载失败。"
-  return 1
-}
-
-render_cloud_wg_config() {
-  local private_key="$1"
-  local listen_port="$2"
-  local leikwan_public_key="$3"
-  cat <<EOF
-# Managed by leikwan-wg-toolkit
-# Role: cloud-entry 公网入口机
-[Interface]
-PrivateKey = ${private_key}
-Address = ${CLOUD_WG_ADDR}
-ListenPort = ${listen_port}
-MTU = ${WG_MTU_DEFAULT}
-SaveConfig = false
-
-[Peer]
-# 利群中转机
-PublicKey = ${leikwan_public_key}
-AllowedIPs = ${LEIKWAN_WG_IP}/32
-EOF
-}
-
-render_leikwan_wg_config() {
-  local private_key="$1"
-  local cloud_public_key="$2"
-  local cloud_endpoint="$3"
-  local cloud_port="$4"
-  cat <<EOF
-# Managed by leikwan-wg-toolkit
-# Role: leikwan-relay 利群中转机
-[Interface]
-PrivateKey = ${private_key}
-Address = ${LEIKWAN_WG_ADDR}
-MTU = ${WG_MTU_DEFAULT}
-SaveConfig = false
-
-[Peer]
-# 公网入口机
-PublicKey = ${cloud_public_key}
-Endpoint = ${cloud_endpoint}:${cloud_port}
-AllowedIPs = ${CLOUD_WG_IP}/32
-PersistentKeepalive = ${WG_KEEPALIVE_DEFAULT}
-EOF
-}
-
-extract_extra_wg_peers() {
-  local conf="$1"
-  local primary_public_key="$2"
-  [[ -f "$conf" ]] || return 0
-  awk -v primary="$primary_public_key" '
-    /^\[Peer\]/ {
-      if (in_peer && block !~ primary) {
-        printf "%s", block
-      }
-      in_peer=1
-      block=$0 ORS
-      next
-    }
-    {
-      if (in_peer) {
-        block=block $0 ORS
-      }
-    }
-    END {
-      if (in_peer && block !~ primary) {
-        printf "%s", block
-      }
-    }
-  ' "$conf"
-}
-
-realm_is_forwarder() {
-  command -v realm >/dev/null 2>&1 || return 1
-  realm --help 2>&1 | grep -Eiq 'listen|remote|endpoint|proxy|config' || return 1
-}
-
-install_realm() {
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将检查/安装 realm，实际运行时按直连、ghfast、ghproxy、本地文件路径 fallback。"
-    return 0
-  fi
-
-  if realm_is_forwarder; then
-    ok "已检测到 realm：$(command -v realm)"
-    return 0
-  fi
-
-  warn "未检测到可用的 realm 转发程序。"
-  if ! prompt_yes_no "是否从 zhboner/realm GitHub Release 安装 realm？" "Y"; then
-    return 1
-  fi
-
-  install_packages curl jq ca-certificates tar
-
-  local arch asset_re api url tmpdir archive binary summary find_list
-  arch="$(uname -m)"
+easytier_asset_names() {
+  local version="$1" no_v="${1#v}" arch="$2"
   case "$arch" in
-    x86_64|amd64) asset_re='x86_64.*linux.*gnu.*tar.*gz$' ;;
-    aarch64|arm64) asset_re='aarch64.*linux.*gnu.*tar.*gz$' ;;
-    armv7l|armv7*) asset_re='armv7.*linux.*gnueabihf.*tar.*gz$' ;;
-    *)
-      fail "暂不支持自动安装此架构：${arch}"
-      return 1
+    x86_64)
+      printf '%s\n' \
+        "easytier-linux-x86_64-${version}.zip" \
+        "easytier-linux-amd64-${version}.zip" \
+        "easytier_${no_v}_linux_amd64.tar.gz" \
+        "easytier-${version}-linux-amd64.tar.gz"
+      ;;
+    aarch64)
+      printf '%s\n' \
+        "easytier-linux-aarch64-${version}.zip" \
+        "easytier-linux-arm64-${version}.zip" \
+        "easytier_${no_v}_linux_arm64.tar.gz" \
+        "easytier-${version}-linux-arm64.tar.gz"
       ;;
   esac
+}
 
-  api="https://api.github.com/repos/zhboner/realm/releases/latest"
-  url="$(curl -fsSL "$api" | jq -r --arg re "$asset_re" '.assets[] | select(.name | test($re)) | .browser_download_url' | head -n 1)"
-  if [[ -z "$url" || "$url" == "null" ]]; then
-    warn "无法从 GitHub Release 匹配 realm 安装包。"
-    local local_asset
-    local_asset="$(prompt_value "请输入本地 realm tar.gz 安装包路径，留空取消")"
-    if [[ -z "$local_asset" || ! -f "$local_asset" ]]; then
-      fail "未提供可用本地文件。可手动安装 /usr/local/bin/realm 后重试。"
-      return 1
+easytier_api_url() {
+  local version="$1" arch="$2" api re
+  api="https://api.github.com/repos/EasyTier/EasyTier/releases/tags/${version}"
+  case "$arch" in
+    x86_64) re='linux.*(x86_64|amd64).*\.(zip|tar\.gz|tgz)$' ;;
+    aarch64) re='linux.*(aarch64|arm64).*\.(zip|tar\.gz|tgz)$' ;;
+    *) return 1 ;;
+  esac
+  curl -fsSL "$api" 2>/dev/null |
+    jq -r --arg re "$re" '.assets[]? | select(.name | test($re; "i")) | .browser_download_url' |
+    head -n 1
+}
+
+url_variants() {
+  local url="$1"
+  printf '%s\n' "$url"
+  printf 'https://ghfast.top/%s\n' "$url"
+  printf 'https://ghproxy.net/%s\n' "$url"
+}
+
+choose_local_easytier_archive() {
+  local dest="$1" choice path i=0
+  local files=()
+  while IFS= read -r path; do
+    [[ -f "$path" ]] && files+=("$path")
+  done < <(find /root . -maxdepth 1 -type f \( -name 'easytier*.tar.gz' -o -name 'easytier*.zip' \) 2>/dev/null | sort -u)
+  if ((${#files[@]} > 0)); then
+    echo "发现本地 EasyTier 包："
+    for path in "${files[@]}"; do
+      i=$((i + 1))
+      echo "${i}. ${path}"
+    done
+    echo "0. 手动输入其它路径 / 取消"
+    choice="$(prompt_menu_choice "请选择：")"
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#files[@]} )); then
+      cp -a "${files[$((choice - 1))]}" "$dest"
+      return 0
     fi
-    url="file://${local_asset}"
   fi
+  path="$(prompt_value "请输入本地 EasyTier zip/tar.gz 路径，留空取消" "")"
+  [[ -n "$path" && -f "$path" ]] || return 1
+  cp -a "$path" "$dest"
+}
 
-  summary="来源：${url}\n目标：/usr/local/bin/realm\n动作：下载并安装 realm 转发程序。"
-  if ! confirm_summary "realm 安装摘要" "$summary"; then
-    warn "已取消 realm 安装。"
-    return 1
+download_easytier_archive() {
+  local dest="$1" version="$EASYTIER_VERSION" arch api_url release_base name url candidate
+  local urls=() attempted=()
+  arch="$(easytier_arch_family)" || return 1
+  release_base="https://github.com/EasyTier/EasyTier/releases/download/${version}"
+  api_url="$(easytier_api_url "$version" "$arch" || true)"
+  [[ -n "$api_url" && "$api_url" != "null" ]] && urls+=("$api_url")
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && urls+=("${release_base}/${name}")
+  done < <(easytier_asset_names "$version" "$arch")
+  for url in "${urls[@]}"; do
+    while IFS= read -r candidate; do
+      attempted+=("$candidate")
+      info "尝试下载：${candidate}"
+      if curl -fL --retry 2 --connect-timeout 15 "$candidate" -o "$dest"; then
+        ok "EasyTier 下载成功。"
+        return 0
+      fi
+    done < <(url_variants "$url")
+  done
+  warn "EasyTier 自动下载失败，已尝试以下 URL："
+  printf '  %s\n' "${attempted[@]}" >&2
+  choose_local_easytier_archive "$dest" || { fail "未提供可用 EasyTier 安装包。"; return 1; }
+}
+
+extract_archive() {
+  local archive="$1" dest="$2"
+  case "$archive" in
+    *.zip) unzip -q "$archive" -d "$dest" ;;
+    *.tar.gz|*.tgz) tar -xzf "$archive" -C "$dest" ;;
+    *) tar -xzf "$archive" -C "$dest" 2>/dev/null || unzip -q "$archive" -d "$dest" ;;
+  esac
+}
+
+archive_listing() {
+  local archive="$1"
+  case "$archive" in
+    *.zip) unzip -l "$archive" 2>/dev/null | sed -n '1,50p' ;;
+    *) tar -tzf "$archive" 2>/dev/null | sed -n '1,50p' ;;
+  esac
+}
+
+install_easytier_binary() {
+  if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]] && easytier_validate_help; then
+    if prompt_yes_no "检测到可用 EasyTier 二进制，是否复用？" "Y"; then
+      ok "复用已安装 EasyTier。"
+      return 0
+    fi
   fi
-
+  install_packages curl jq ca-certificates tar unzip
+  local tmpdir archive core cli list
+  confirm_summary "EasyTier 安装摘要" "版本：${EASYTIER_VERSION}\n目标：${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}\n下载：GitHub API + 确定性 Release URL + ghfast/ghproxy + 本地包 fallback" || return 0
+  (( DRY_RUN == 1 )) && return 0
   tmpdir="$(mktemp -d)"
-  archive="${tmpdir}/realm.tar.gz"
-  download_github_asset "$url" "$archive"
-  tar -xzf "$archive" -C "$tmpdir"
-  binary="$(find "$tmpdir" -type f -name realm | head -n 1)"
-  if [[ -z "$binary" ]]; then
-    binary="$(find "$tmpdir" -type f -name realm-slim | head -n 1)"
-  fi
-  if [[ -z "$binary" ]]; then
-    binary="$(find "$tmpdir" -type f -name 'realm*' | head -n 1)"
-  fi
-  if [[ -z "$binary" ]]; then
-    fail "下载包中未找到 realm / realm-slim / realm* 可执行文件。"
-    find_list="$(find "$tmpdir" -maxdepth 4 -type f -printf '%m %p\n' 2>/dev/null || find "$tmpdir" -maxdepth 4 -type f)"
-    printf '%s\n' "$find_list" >&2
+  archive="${tmpdir}/easytier.pkg"
+  download_easytier_archive "$archive" || { rm -rf "$tmpdir"; return 1; }
+  if ! extract_archive "$archive" "$tmpdir"; then
+    fail "EasyTier 安装包解压失败。"
+    archive_listing "$archive" >&2 || true
     rm -rf "$tmpdir"
     return 1
   fi
-  install -d -m 755 /usr/local/bin
-  backup_file /usr/local/bin/realm
-  install -m 755 "$binary" /usr/local/bin/realm
+  core="$(find "$tmpdir" -type f -name easytier-core -perm -111 | head -n 1)"
+  cli="$(find "$tmpdir" -type f -name easytier-cli -perm -111 | head -n 1)"
+  if [[ -z "$core" || -z "$cli" ]]; then
+    fail "安装包中未找到 easytier-core / easytier-cli。"
+    list="$(archive_listing "$archive" || find "$tmpdir" -maxdepth 4 -type f)"
+    printf '%s\n' "$list" >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  backup_file "$EASYTIER_CORE_BIN"; backup_file "$EASYTIER_CLI_BIN"
+  install -m 755 "$core" "$EASYTIER_CORE_BIN"
+  install -m 755 "$cli" "$EASYTIER_CLI_BIN"
   rm -rf "$tmpdir"
-  if /usr/local/bin/realm -v >/dev/null 2>&1; then
-    /usr/local/bin/realm -v | head -n 1 || true
-  elif /usr/local/bin/realm --version >/dev/null 2>&1; then
-    /usr/local/bin/realm --version | head -n 1 || true
-  else
-    fail "realm 已安装但版本验证失败：/usr/local/bin/realm -v / --version"
-    return 1
+  easytier_validate_help || { fail "easytier --help 校验失败。"; return 1; }
+  ok "EasyTier 安装完成。"
+}
+
+core_common_args() {
+  local ip="$1" peers="${2:-}" args=()
+  local network_name network_secret
+  network_name="$(env_file_get "$NETWORK_ENV" EASYTIER_NETWORK_NAME)"
+  network_secret="$(env_file_get "$NETWORK_ENV" EASYTIER_NETWORK_SECRET)"
+  [[ -n "$network_name" && -n "$network_secret" ]] || { fail "缺少 EasyTier network.env，请先生成网络码。"; return 1; }
+  easytier_help_has '--network-name' || { fail "当前 easytier-core 不支持 --network-name"; return 1; }
+  easytier_help_has '--network-secret' || { fail "当前 easytier-core 不支持 --network-secret"; return 1; }
+  easytier_help_has '--ipv4' || { fail "当前 easytier-core 不支持 --ipv4"; return 1; }
+  args+=("--network-name" "$network_name" "--network-secret" "$network_secret" "--ipv4" "$ip")
+  if [[ -n "$peers" ]]; then
+    while read -r peer; do
+      [[ -n "$peer" ]] && args+=("-p" "$peer")
+    done <<<"$peers"
   fi
-  ok "realm 已安装到 /usr/local/bin/realm"
+  printf '%q ' "${args[@]}"
 }
 
-realm_network_flags() {
-  local proto="$1"
-  case "$proto" in
-    tcp) printf 'no_tcp = false\nuse_udp = false\n' ;;
-    udp) printf 'no_tcp = true\nuse_udp = true\n' ;;
-    both) printf 'no_tcp = false\nuse_udp = true\n' ;;
-  esac
+entry_service_name() {
+  printf 'easytier-entry-%s' "$(safe_name "$1")"
 }
 
-render_realm_entry_config() {
-  local proto="$1"
-  local remote_address="${2:-$FORWARD_TARGET_ADDRESS}"
-  local remote_port="${3:-$FORWARD_TARGET_PORT}"
+entry_service_path() {
+  printf '/etc/systemd/system/%s.service' "$(entry_service_name "$1")"
+}
+
+render_entry_service() {
+  local name="$1" et_ip="$2" proto="$3" port="$4" args listener
+  args="$(core_common_args "$et_ip")" || return 1
+  confirm_easytier_port "$port" || return 1
+  easytier_help_has '--listeners' || { fail "当前 easytier-core 不支持 --listeners"; return 1; }
+  listener="${proto}://0.0.0.0:${port}"
   cat <<EOF
-# Managed by leikwan-wg-toolkit
-[log]
-level = "info"
-output = "/var/log/${REALM_ENTRY_STEM}.log"
-
-[network]
-$(realm_network_flags "$proto")
-[[endpoints]]
-listen = "0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT}"
-remote = "${remote_address}:${remote_port}"
-EOF
-}
-
-render_realm_service() {
-  local stem="$1"
-  local conf="$2"
-  local realm_bin="$3"
-  cat <<EOF
-# Managed by leikwan-wg-toolkit
+# Managed by leikwan-wg-toolkit ${TOOL_VERSION}
 [Unit]
-Description=Leikwan chain realm forward ${stem}
-Wants=network-online.target
-After=network-online.target wg-quick@wg1.service
-
-[Service]
-Type=simple
-ExecStart=${realm_bin} -c ${conf}
-Restart=on-failure
-RestartSec=3
-LimitNOFILE=1048576
-
-[Install]
-WantedBy=multi-user.target
-EOF
-}
-
-configure_realm_entry_forward() {
-  local proto="$1"
-  local realm_bin config_content service_content summary
-  realm_bin="$(command -v realm)"
-  if [[ -z "$realm_bin" && $DRY_RUN -eq 1 ]]; then
-    realm_bin="/usr/local/bin/realm"
-  fi
-  config_content="$(render_realm_entry_config "$proto" "$FORWARD_TARGET_ADDRESS" "$FORWARD_TARGET_PORT")"
-  service_content="$(render_realm_service "$REALM_ENTRY_STEM" "$REALM_ENTRY_CONF" "$realm_bin")"
-
-  summary="服务：${REALM_ENTRY_STEM}.service\n规则：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET_ADDRESS}:${FORWARD_TARGET_PORT}\n协议：${proto}\n配置：${REALM_ENTRY_CONF}\n动作：创建/更新 realm systemd 服务并启动。"
-  if ! confirm_summary "公网入口机 realm 转发摘要" "$summary"; then
-    warn "已取消 realm 转发配置。"
-    return 0
-  fi
-
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$REALM_DIR"
-  fi
-  write_text_file "$REALM_ENTRY_CONF" "$config_content" 644 || true
-  write_text_file "$REALM_ENTRY_SERVICE" "$service_content" 644 || true
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过启动 ${REALM_ENTRY_STEM}.service"
-    return 0
-  fi
-  run_cmd systemctl daemon-reload
-  run_cmd systemctl enable "${REALM_ENTRY_STEM}.service"
-  if run_cmd systemctl restart "${REALM_ENTRY_STEM}.service"; then
-    ok "realm 转发服务已启动：${REALM_ENTRY_STEM}.service"
-  else
-    fail "realm 服务启动失败，请查看：journalctl -u ${REALM_ENTRY_STEM}.service -e --no-pager"
-    return 1
-  fi
-}
-
-render_forward_sysctl() {
-  cat <<EOF
-# Managed by leikwan-wg-toolkit
-net.ipv4.ip_forward=1
-EOF
-}
-
-configure_forward_sysctl() {
-  local content
-  content="$(render_forward_sysctl)"
-  write_text_file "$FORWARD_SYSCTL_CONF" "$content" 644 || true
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过 sysctl --system"
-    return 0
-  fi
-  run_cmd sysctl --system
-}
-
-render_nft_forward_config() {
-  local target_address="${1:-$(forward_target_effective_address)}"
-  local target_port="${2:-$FORWARD_TARGET_PORT}"
-  cat <<EOF
-# Managed by leikwan-wg-toolkit
-table ip leikwan_nat {
-  chain prerouting {
-    type nat hook prerouting priority dstnat; policy accept;
-    tcp dport ${CLIENT_ENTRY_PORT_DEFAULT} dnat to ${target_address}:${target_port}
-  }
-
-  chain postrouting {
-    type nat hook postrouting priority srcnat; policy accept;
-    ip daddr ${target_address} tcp dport ${target_port} masquerade
-  }
-}
-
-table inet leikwan_filter {
-  chain forward {
-    type filter hook forward priority -100; policy accept;
-    ct state established,related accept
-    ip daddr ${target_address} tcp dport ${target_port} accept
-    ip saddr ${target_address} tcp sport ${target_port} accept
-  }
-}
-EOF
-}
-
-render_nft_forward_script() {
-  cat <<EOF
-#!/usr/bin/env bash
-set -Eeuo pipefail
-CONF="${FORWARD_NFT_CONF}"
-case "\${1:-apply}" in
-  apply)
-    nft delete table ip leikwan_nat 2>/dev/null || true
-    nft delete table inet leikwan_filter 2>/dev/null || true
-    nft -f "\$CONF"
-    ;;
-  delete)
-    nft delete table ip leikwan_nat 2>/dev/null || true
-    nft delete table inet leikwan_filter 2>/dev/null || true
-    ;;
-  *)
-    echo "Usage: \$0 {apply|delete}" >&2
-    exit 2
-    ;;
-esac
-EOF
-}
-
-render_nft_forward_service() {
-  cat <<EOF
-# Managed by leikwan-wg-toolkit
-[Unit]
-Description=Leikwan nftables TCP forward
-Wants=network-online.target
-After=network-online.target wg-quick@wg1.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=${FORWARD_NFT_SCRIPT} apply
-ExecStop=${FORWARD_NFT_SCRIPT} delete
-
-[Install]
-WantedBy=multi-user.target
-EOF
-}
-
-configure_nft_forward() {
-  local summary config_content script_content service_content
-  install_packages nftables
-  if (( DRY_RUN == 0 )) && ! command -v nft >/dev/null 2>&1; then
-    warn "未检测到 nft 命令，建议改用 iptables 内核转发。"
-    if prompt_yes_no "是否改用 iptables 转发？" "Y"; then
-      configure_iptables_forward
-      return
-    fi
-    return 1
-  fi
-  refresh_forward_target_resolution "nftables" || return 1
-  config_content="$(render_nft_forward_config "$(forward_target_effective_address)" "$FORWARD_TARGET_PORT")"
-  script_content="$(render_nft_forward_script)"
-  service_content="$(render_nft_forward_service)"
-  summary="方式：nftables 内核转发\n规则：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT}/tcp -> ${FORWARD_TARGET}\n目标 profile：${FORWARD_TARGET_MODE}\nSNAT：masquerade\n配置：${FORWARD_NFT_CONF}\n服务：${FORWARD_NFT_SERVICE_NAME}.service\nsysctl：${FORWARD_SYSCTL_CONF} 设置 net.ipv4.ip_forward=1\n动作：只管理 table ip leikwan_nat 和 table inet leikwan_filter，不 flush ruleset。"
-  if ! confirm_summary "公网入口机 nftables 转发摘要" "$summary"; then
-    warn "已取消 nftables 转发配置。"
-    return 0
-  fi
-  configure_forward_sysctl
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$FORWARD_NFT_DIR"
-  fi
-  write_text_file "$FORWARD_NFT_CONF" "$config_content" 644 || true
-  write_text_file "$FORWARD_NFT_SCRIPT" "$script_content" 755 || true
-  write_text_file "$FORWARD_NFT_SERVICE" "$service_content" 644 || true
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过启动 ${FORWARD_NFT_SERVICE_NAME}.service"
-    return 0
-  fi
-  run_cmd systemctl daemon-reload
-  run_cmd systemctl enable "${FORWARD_NFT_SERVICE_NAME}.service"
-  run_cmd systemctl restart "${FORWARD_NFT_SERVICE_NAME}.service"
-  ok "nftables 转发服务已启动：${FORWARD_NFT_SERVICE_NAME}.service"
-}
-
-render_iptables_forward_script() {
-  local target_address="${1:-$(forward_target_effective_address)}"
-  local target_port="${2:-$FORWARD_TARGET_PORT}"
-  cat <<EOF
-#!/usr/bin/env bash
-set -Eeuo pipefail
-ACTION="\${1:-apply}"
-case "\$ACTION" in
-  apply)
-    iptables -t nat -C PREROUTING -p tcp --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j DNAT --to-destination ${target_address}:${target_port} 2>/dev/null || iptables -t nat -A PREROUTING -p tcp --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j DNAT --to-destination ${target_address}:${target_port}
-    iptables -t nat -C POSTROUTING -p tcp -d ${target_address} --dport ${target_port} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -p tcp -d ${target_address} --dport ${target_port} -j MASQUERADE
-    iptables -C FORWARD -p tcp -d ${target_address} --dport ${target_port} -j ACCEPT 2>/dev/null || iptables -A FORWARD -p tcp -d ${target_address} --dport ${target_port} -j ACCEPT
-    iptables -C FORWARD -p tcp -s ${target_address} --sport ${target_port} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A FORWARD -p tcp -s ${target_address} --sport ${target_port} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    ;;
-  delete)
-    while iptables -t nat -C PREROUTING -p tcp --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j DNAT --to-destination ${target_address}:${target_port} 2>/dev/null; do iptables -t nat -D PREROUTING -p tcp --dport ${CLIENT_ENTRY_PORT_DEFAULT} -j DNAT --to-destination ${target_address}:${target_port}; done
-    while iptables -t nat -C POSTROUTING -p tcp -d ${target_address} --dport ${target_port} -j MASQUERADE 2>/dev/null; do iptables -t nat -D POSTROUTING -p tcp -d ${target_address} --dport ${target_port} -j MASQUERADE; done
-    while iptables -C FORWARD -p tcp -d ${target_address} --dport ${target_port} -j ACCEPT 2>/dev/null; do iptables -D FORWARD -p tcp -d ${target_address} --dport ${target_port} -j ACCEPT; done
-    while iptables -C FORWARD -p tcp -s ${target_address} --sport ${target_port} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do iptables -D FORWARD -p tcp -s ${target_address} --sport ${target_port} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; done
-    ;;
-  *)
-    echo "Usage: \$0 {apply|delete}" >&2
-    exit 2
-    ;;
-esac
-EOF
-}
-
-render_iptables_forward_service() {
-  cat <<EOF
-# Managed by leikwan-wg-toolkit
-[Unit]
-Description=Leikwan iptables TCP forward
-Wants=network-online.target
-After=network-online.target wg-quick@wg1.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=${FORWARD_IPTABLES_SCRIPT} apply
-ExecStop=${FORWARD_IPTABLES_SCRIPT} delete
-
-[Install]
-WantedBy=multi-user.target
-EOF
-}
-
-configure_iptables_forward() {
-  local summary script_content service_content
-  install_packages iptables
-  refresh_forward_target_resolution "iptables" || return 1
-  script_content="$(render_iptables_forward_script "$(forward_target_effective_address)" "$FORWARD_TARGET_PORT")"
-  service_content="$(render_iptables_forward_service)"
-  summary="方式：iptables 内核转发\n规则：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT}/tcp -> ${FORWARD_TARGET}\n目标 profile：${FORWARD_TARGET_MODE}\nSNAT：MASQUERADE\n脚本：${FORWARD_IPTABLES_SCRIPT}\n服务：${FORWARD_IPTABLES_SERVICE_NAME}.service\nsysctl：${FORWARD_SYSCTL_CONF} 设置 net.ipv4.ip_forward=1\n动作：只添加/删除本项目精确规则，不 flush 任何链。"
-  if ! confirm_summary "公网入口机 iptables 转发摘要" "$summary"; then
-    warn "已取消 iptables 转发配置。"
-    return 0
-  fi
-  configure_forward_sysctl
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$FORWARD_IPTABLES_DIR"
-  fi
-  write_text_file "$FORWARD_IPTABLES_SCRIPT" "$script_content" 755 || true
-  write_text_file "$FORWARD_IPTABLES_SERVICE" "$service_content" 644 || true
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过启动 ${FORWARD_IPTABLES_SERVICE_NAME}.service"
-    return 0
-  fi
-  run_cmd systemctl daemon-reload
-  run_cmd systemctl enable "${FORWARD_IPTABLES_SERVICE_NAME}.service"
-  run_cmd systemctl restart "${FORWARD_IPTABLES_SERVICE_NAME}.service"
-  ok "iptables 转发服务已启动：${FORWARD_IPTABLES_SERVICE_NAME}.service"
-}
-
-choose_cloud_forward_mode() {
-  local choice
-  echo
-  echo "请选择公网入口转发方式："
-  echo "1. nftables 内核转发（推荐）"
-  echo "2. iptables 内核转发"
-  echo "3. realm 用户态转发"
-  echo "4. 不配置转发，只部署 WireGuard"
-  while true; do
-    choice="$(prompt_menu_choice "请选择 [1]: ")"
-    choice="${choice:-1}"
-    case "$choice" in
-      1) printf '%s' "nftables"; return 0 ;;
-      2) printf '%s' "iptables"; return 0 ;;
-      3) printf '%s' "realm"; return 0 ;;
-      4) printf '%s' "none"; return 0 ;;
-      *) echo "无效选择。" ;;
-    esac
-  done
-}
-
-forward_target_file_for_name() {
-  local name
-  name="$(profile_safe_name "$1")"
-  printf '%s/%s.env' "$FORWARD_TARGETS_DIR" "$name"
-}
-
-current_forward_target_field() {
-  local key="$1"
-  env_file_get "$FORWARD_TARGET_CURRENT" "$key" 2>/dev/null \
-    || env_file_get "$CLOUD_OUTPUT_FILE" "$key" 2>/dev/null \
-    || return 1
-}
-
-forward_target_effective_address() {
-  local address resolved
-  address="${FORWARD_TARGET_ADDRESS}"
-  resolved="${FORWARD_TARGET_RESOLVED_IP}"
-  if [[ -n "$resolved" ]]; then
-    printf '%s' "$resolved"
-  else
-    printf '%s' "$address"
-  fi
-}
-
-forward_target_endpoint() {
-  printf '%s:%s' "$(forward_target_effective_address)" "$FORWARD_TARGET_PORT"
-}
-
-set_forward_target_runtime() {
-  local name="$1"
-  local type="$2"
-  local address="$3"
-  local port="$4"
-  local protocol="${5:-tcp}"
-  local remark="${6:-}"
-  local resolved="${7:-}"
-  FORWARD_TARGET_MODE="$name"
-  FORWARD_TARGET_TYPE="$type"
-  FORWARD_TARGET_ADDRESS="$address"
-  FORWARD_TARGET_PORT="$port"
-  FORWARD_TARGET_PROTOCOL="$protocol"
-  FORWARD_TARGET_REMARK="$remark"
-  FORWARD_TARGET_RESOLVED_IP="$resolved"
-  if [[ -n "$resolved" ]]; then
-    FORWARD_TARGET="${resolved}:${port}"
-  else
-    FORWARD_TARGET="${address}:${port}"
-  fi
-}
-
-load_current_forward_target() {
-  local name type address port protocol remark resolved
-  name="$(current_forward_target_field TARGET_NAME 2>/dev/null || printf '%s' "direct-leikwan-xray")"
-  type="$(current_forward_target_field TARGET_TYPE 2>/dev/null || printf '%s' "xray")"
-  address="$(current_forward_target_field TARGET_ADDRESS 2>/dev/null || printf '%s' "$LEIKWAN_WG_IP")"
-  port="$(current_forward_target_field TARGET_PORT 2>/dev/null || printf '%s' "$CLIENT_ENTRY_PORT_DEFAULT")"
-  protocol="$(current_forward_target_field TARGET_PROTOCOL 2>/dev/null || printf '%s' "tcp")"
-  remark="$(current_forward_target_field TARGET_REMARK 2>/dev/null || true)"
-  resolved="$(current_forward_target_field TARGET_RESOLVED_IP 2>/dev/null || true)"
-  if [[ -z "$resolved" && "$address" == "$LEIKWAN_WG_IP" ]]; then
-    resolved="$address"
-  fi
-  set_forward_target_runtime "$name" "$type" "$address" "$port" "$protocol" "$remark" "$resolved"
-}
-
-write_forward_target_profile() {
-  local name="$1"
-  local type="$2"
-  local address="$3"
-  local port="$4"
-  local protocol="$5"
-  local remark="$6"
-  local resolved="$7"
-  local content file
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$FORWARD_TARGETS_DIR"
-  fi
-  content="$(cat <<EOF
-TARGET_NAME=${name}
-TARGET_TYPE=${type}
-TARGET_ADDRESS=${address}
-TARGET_PORT=${port}
-TARGET_PROTOCOL=${protocol}
-TARGET_REMARK=${remark}
-TARGET_RESOLVED_IP=${resolved}
-EOF
-)"
-  file="$(forward_target_file_for_name "$name")"
-  write_text_file "$file" "$content" 600 || true
-  write_text_file "$FORWARD_TARGET_CURRENT" "$content" 600 || true
-}
-
-refresh_forward_target_resolution() {
-  local mode="${1:-$(cloud_forward_mode)}"
-  local address="$FORWARD_TARGET_ADDRESS"
-  local resolved=""
-  if is_ipv4 "$address"; then
-    resolved="$address"
-  elif [[ "$mode" == "realm" ]]; then
-    resolved=""
-  else
-    resolved="$(resolve_ipv4_first "$address" 2>/dev/null || true)"
-    if [[ -z "$resolved" ]]; then
-      fail "转发目标域名解析失败：${address}"
-      return 1
-    fi
-  fi
-  set_forward_target_runtime "$FORWARD_TARGET_MODE" "$FORWARD_TARGET_TYPE" "$FORWARD_TARGET_ADDRESS" "$FORWARD_TARGET_PORT" "$FORWARD_TARGET_PROTOCOL" "$FORWARD_TARGET_REMARK" "$resolved"
-}
-
-choose_forward_target_profile() {
-  local forward_mode="$1"
-  local choice name type address port protocol remark resolved summary
-  echo
-  echo "请选择公网入口转发目标："
-  echo "1. 利群中转机 Xray：${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}（默认）"
-  echo "2. 前海 IX 目标：输入 IP 或域名 + 端口"
-  echo "3. 上海 IX 目标：输入 IP 或域名 + 端口"
-  echo "4. 自定义目标：输入 IP 或域名 + 端口"
-  choice="$(prompt_menu_choice "请选择 [1]: ")"
-  choice="${choice:-1}"
-  case "$choice" in
-    1)
-      name="direct-leikwan-xray"
-      type="xray"
-      address="$LEIKWAN_WG_IP"
-      port="$CLIENT_ENTRY_PORT_DEFAULT"
-      protocol="tcp"
-      remark="default direct to leikwan relay xray"
-      resolved="$LEIKWAN_WG_IP"
-      ;;
-    2)
-      warn "选择 IX 转发目标后，公网入口机将不再转发到 ${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}，而是直接转发到你输入的前海 IX 目标。请确认该 IX 目标已经提供兼容的服务入口。"
-      prompt_yes_no "是否继续？" "N" || return 1
-      name="ix-qianhai"
-      type="ix"
-      address="$(prompt_endpoint_host "请输入前海 IX IP 或域名，例如 <IX_QIANHAI_ENDPOINT>")"
-      port="$(prompt_port "请输入前海 IX 目标端口" "$CLIENT_ENTRY_PORT_DEFAULT")"
-      protocol="tcp"
-      remark="qianhai ix target"
-      ;;
-    3)
-      warn "选择 IX 转发目标后，公网入口机将不再转发到 ${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}，而是直接转发到你输入的上海 IX 目标。请确认该 IX 目标已经提供兼容的服务入口。"
-      prompt_yes_no "是否继续？" "N" || return 1
-      name="ix-shanghai"
-      type="ix"
-      address="$(prompt_endpoint_host "请输入上海 IX IP 或域名，例如 <IX_SHANGHAI_ENDPOINT>")"
-      port="$(prompt_port "请输入上海 IX 目标端口" "$CLIENT_ENTRY_PORT_DEFAULT")"
-      protocol="tcp"
-      remark="shanghai ix target"
-      ;;
-    4)
-      name="$(profile_safe_name "$(prompt_non_empty "请输入自定义 target 名称")")"
-      type="custom"
-      address="$(prompt_endpoint_host "请输入自定义目标 IP 或域名")"
-      port="$(prompt_port "请输入自定义目标端口" "$CLIENT_ENTRY_PORT_DEFAULT")"
-      protocol="tcp"
-      remark="$(prompt_value "请输入备注，留空也可以" "")"
-      ;;
-    *)
-      warn "无效选择，使用默认利群中转机 Xray。"
-      name="direct-leikwan-xray"
-      type="xray"
-      address="$LEIKWAN_WG_IP"
-      port="$CLIENT_ENTRY_PORT_DEFAULT"
-      protocol="tcp"
-      remark="default direct to leikwan relay xray"
-      resolved="$LEIKWAN_WG_IP"
-      ;;
-  esac
-  set_forward_target_runtime "$name" "$type" "$address" "$port" "$protocol" "$remark" "${resolved:-}"
-  refresh_forward_target_resolution "$forward_mode" || return 1
-  summary="TARGET_NAME=${FORWARD_TARGET_MODE}\nTARGET_TYPE=${FORWARD_TARGET_TYPE}\nTARGET_ADDRESS=${FORWARD_TARGET_ADDRESS}\nTARGET_PORT=${FORWARD_TARGET_PORT}\nTARGET_RESOLVED_IP=${FORWARD_TARGET_RESOLVED_IP}\nFORWARD_MODE=${forward_mode}\n实际转发目标=${FORWARD_TARGET}"
-  if ! confirm_summary "公网入口转发目标摘要" "$summary"; then
-    return 1
-  fi
-  write_forward_target_profile "$FORWARD_TARGET_MODE" "$FORWARD_TARGET_TYPE" "$FORWARD_TARGET_ADDRESS" "$FORWARD_TARGET_PORT" "$FORWARD_TARGET_PROTOCOL" "$FORWARD_TARGET_REMARK" "$FORWARD_TARGET_RESOLVED_IP"
-}
-
-update_cloud_output_forward_target_fields() {
-  local forward_mode="${1:-$(saved_param FORWARD_MODE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || printf '%s' unknown)}"
-  local public_key endpoint endpoint_type wg_port entry_port content
-  public_key="$(saved_param CLOUD_PUBLIC_KEY "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  endpoint="$(saved_param CLOUD_ENDPOINT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  endpoint_type="$(saved_param CLOUD_ENDPOINT_TYPE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  wg_port="$(saved_param CLOUD_WG_PORT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || printf '%s' "$CLOUD_WG_PORT_DEFAULT")"
-  entry_port="$(saved_param CLIENT_ENTRY_PORT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || printf '%s' "$CLIENT_ENTRY_PORT_DEFAULT")"
-  content="$(cat <<EOF
-CLOUD_PUBLIC_KEY=${public_key}
-CLOUD_ENDPOINT=${endpoint}
-CLOUD_ENDPOINT_TYPE=${endpoint_type:-auto-ip}
-CLOUD_WG_PORT=${wg_port}
-CLIENT_ENTRY_PORT=${entry_port}
-FORWARD_MODE=${forward_mode}
-FORWARD_TARGET=${FORWARD_TARGET}
-FORWARD_TARGET_MODE=${FORWARD_TARGET_MODE}
-FORWARD_TARGET_ADDRESS=${FORWARD_TARGET_ADDRESS}
-FORWARD_TARGET_PORT=${FORWARD_TARGET_PORT}
-FORWARD_TARGET_RESOLVED_IP=${FORWARD_TARGET_RESOLVED_IP}
-EOF
-)"
-  write_output_file "cloud-entry" "$content"
-}
-
-refresh_forward_target() {
-  need_root_unless_dry_run
-  init_log
-  local mode
-  load_current_forward_target
-  mode="$(saved_param FORWARD_MODE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || cloud_forward_mode)"
-  refresh_forward_target_resolution "$mode" || return 1
-  write_forward_target_profile "$FORWARD_TARGET_MODE" "$FORWARD_TARGET_TYPE" "$FORWARD_TARGET_ADDRESS" "$FORWARD_TARGET_PORT" "$FORWARD_TARGET_PROTOCOL" "$FORWARD_TARGET_REMARK" "$FORWARD_TARGET_RESOLVED_IP"
-  update_cloud_output_forward_target_fields "$mode"
-  case "$mode" in
-    nftables)
-      write_text_file "$FORWARD_NFT_CONF" "$(render_nft_forward_config "$(forward_target_effective_address)" "$FORWARD_TARGET_PORT")" 644 || true
-      if (( DRY_RUN == 0 )); then
-        systemctl restart "${FORWARD_NFT_SERVICE_NAME}.service" || true
-      else
-        echo "[DRY-RUN] 跳过重启 ${FORWARD_NFT_SERVICE_NAME}.service"
-      fi
-      ;;
-    iptables)
-      write_text_file "$FORWARD_IPTABLES_SCRIPT" "$(render_iptables_forward_script "$(forward_target_effective_address)" "$FORWARD_TARGET_PORT")" 755 || true
-      if (( DRY_RUN == 0 )); then
-        systemctl restart "${FORWARD_IPTABLES_SERVICE_NAME}.service" || true
-      else
-        echo "[DRY-RUN] 跳过重启 ${FORWARD_IPTABLES_SERVICE_NAME}.service"
-      fi
-      ;;
-    realm)
-      write_text_file "$REALM_ENTRY_CONF" "$(render_realm_entry_config tcp "$FORWARD_TARGET_ADDRESS" "$FORWARD_TARGET_PORT")" 644 || true
-      if (( DRY_RUN == 0 )); then
-        systemctl restart "${REALM_ENTRY_STEM}.service" || true
-      else
-        echo "[DRY-RUN] 跳过重启 ${REALM_ENTRY_STEM}.service"
-      fi
-      ;;
-    *)
-      validate_report info "当前 FORWARD_MODE=${mode}，只更新 target profile，不重载转发服务"
-      ;;
-  esac
-  print_copy_block "公网入口转发目标" "FORWARD_MODE=${mode}
-FORWARD_TARGET_MODE=${FORWARD_TARGET_MODE}
-FORWARD_TARGET_ADDRESS=${FORWARD_TARGET_ADDRESS}
-FORWARD_TARGET_PORT=${FORWARD_TARGET_PORT}
-FORWARD_TARGET_RESOLVED_IP=${FORWARD_TARGET_RESOLVED_IP}
-FORWARD_TARGET=${FORWARD_TARGET}"
-}
-
-forward_target_show() {
-  load_current_forward_target
-  echo
-  echo "${BOLD}公网入口转发目标${RESET}"
-  echo "FORWARD_TARGET_MODE=${FORWARD_TARGET_MODE}"
-  echo "TARGET_TYPE=${FORWARD_TARGET_TYPE}"
-  echo "TARGET_ADDRESS=${FORWARD_TARGET_ADDRESS}"
-  echo "TARGET_PORT=${FORWARD_TARGET_PORT}"
-  echo "TARGET_RESOLVED_IP=${FORWARD_TARGET_RESOLVED_IP}"
-  echo "FORWARD_TARGET=${FORWARD_TARGET}"
-}
-
-forward_target_menu() {
-  while true; do
-    echo
-    echo "${BOLD}公网入口转发目标管理${RESET}"
-    echo "1. 查看当前转发目标"
-    echo "2. 选择 / 更新转发目标"
-    echo "3. 刷新域名转发目标"
-    echo "0. 返回"
-    local choice mode
-    choice="$(prompt_menu_choice "请选择：")"
-    case "$choice" in
-      1) forward_target_show || true ;;
-      2)
-        mode="$(saved_param FORWARD_MODE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || cloud_forward_mode)"
-        choose_forward_target_profile "$mode" && refresh_forward_target || true
-        ;;
-      3) refresh_forward_target || true ;;
-      0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
-    esac
-  done
-}
-
-deploy_cloud_entry() {
-  need_root_unless_dry_run
-  init_log
-  if (( DRY_RUN == 0 )); then
-    install_wireguard_deps
-    ensure_wireguard_dir
-  fi
-
-  echo
-  warn "公网入口机部署需要利群中转机的 PublicKey。若还没有，请先在利群中转机执行菜单 2，复制 LEIKWAN_PUBLIC_KEY。"
-
-  local leikwan_public_key wg_port private_key public_key wg_content endpoint endpoint_type endpoint_info summary proto forward_mode
-  local saved_leikwan_public_key
-  saved_leikwan_public_key="$(saved_param LEIKWAN_PUBLIC_KEY "$LEIKWAN_PEER_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -n "$saved_leikwan_public_key" ]] && ok "已读取 LEIKWAN_PUBLIC_KEY。"
-  leikwan_public_key="$(prompt_wg_key_default "请输入利群中转机 PublicKey" "$saved_leikwan_public_key")"
-  wg_port="$(prompt_port "请输入公网入口机 WireGuard UDP 监听端口" "$CLOUD_WG_PORT_DEFAULT")"
-  ensure_wg_identity "wg1" || return 1
-  private_key="$WG_IDENTITY_PRIVATE"
-  public_key="$WG_IDENTITY_PUBLIC"
-  endpoint_info="$(choose_cloud_endpoint)"
-  endpoint="$(awk -F= '$1=="CLOUD_ENDPOINT" {sub(/^[^=]*=/, ""); print; exit}' <<<"$endpoint_info")"
-  endpoint_type="$(awk -F= '$1=="CLOUD_ENDPOINT_TYPE" {sub(/^[^=]*=/, ""); print; exit}' <<<"$endpoint_info")"
-  wg_content="$(render_cloud_wg_config "$private_key" "$wg_port" "$leikwan_public_key")"
-
-  summary="角色：公网入口机\n文件：${CLOUD_WG_CONF}\n接口：wg1\n地址：${CLOUD_WG_ADDR}\n监听：${wg_port}/udp\nPeer 利群：${leikwan_public_key}\nAllowedIPs：${LEIKWAN_WG_IP}/32\n动作：写入 WireGuard 配置并启用 wg-quick@wg1。"
-  if confirm_summary "公网入口机 WireGuard 部署摘要" "$summary"; then
-    write_text_file "$CLOUD_WG_CONF" "$wg_content" 600 || true
-    if (( DRY_RUN == 0 )); then
-      chmod 600 "$CLOUD_WG_CONF"
-    fi
-    enable_wg_quick "wg1"
-  else
-    warn "已取消公网入口机 WireGuard 部署。"
-    return 0
-  fi
-
-  forward_mode="$(choose_cloud_forward_mode)"
-  choose_forward_target_profile "$forward_mode" || {
-    warn "已取消公网入口转发目标配置。"
-    forward_mode="none"
-    set_forward_target_runtime "direct-leikwan-xray" "xray" "$LEIKWAN_WG_IP" "$CLIENT_ENTRY_PORT_DEFAULT" "tcp" "default direct to leikwan relay xray" "$LEIKWAN_WG_IP"
-  }
-  case "$forward_mode" in
-    nftables)
-      configure_nft_forward
-      ;;
-    iptables)
-      configure_iptables_forward
-      ;;
-    realm)
-      install_realm || return 1
-      while true; do
-        proto="$(prompt_value "请选择公网入口 30000 转发协议：tcp / udp / both" "tcp")"
-        case "$proto" in
-          tcp|udp|both) break ;;
-          *) echo "协议只能是 tcp、udp 或 both。" ;;
-        esac
-      done
-      configure_realm_entry_forward "$proto"
-      ;;
-    none)
-      warn "已选择不配置公网入口转发。请自行确保 ${CLIENT_ENTRY_PORT_DEFAULT}/tcp 能到达 ${FORWARD_TARGET}。"
-      ;;
-  esac
-
-  local cloud_output
-  cloud_output="$(cat <<EOF
-CLOUD_PUBLIC_KEY=${public_key}
-CLOUD_ENDPOINT=${endpoint:-请填写公网入口机 IPv4 或域名}
-CLOUD_ENDPOINT_TYPE=${endpoint_type:-auto-ip}
-CLOUD_WG_PORT=${wg_port}
-CLIENT_ENTRY_PORT=${CLIENT_ENTRY_PORT_DEFAULT}
-FORWARD_MODE=${forward_mode}
-FORWARD_TARGET=${FORWARD_TARGET}
-FORWARD_TARGET_MODE=${FORWARD_TARGET_MODE}
-FORWARD_TARGET_ADDRESS=${FORWARD_TARGET_ADDRESS}
-FORWARD_TARGET_PORT=${FORWARD_TARGET_PORT}
-FORWARD_TARGET_RESOLVED_IP=${FORWARD_TARGET_RESOLVED_IP}
-EOF
-)"
-  print_copy_block "请复制回利群中转机" "$cloud_output" $'去利群中转机运行：\nbash wg-toolkit.sh\n选择：推荐部署向导 -> 利群中转机：导入 CLOUD + LANDING 参数并完成链式部署'
-  print_copy_block "公网入口机转发" "FORWARD_MODE=${forward_mode}
-CLIENT_ENTRY_PORT=${CLIENT_ENTRY_PORT_DEFAULT}
-FORWARD_TARGET=${FORWARD_TARGET}
-FORWARD_TARGET_MODE=${FORWARD_TARGET_MODE}
-FORWARD_TARGET_ADDRESS=${FORWARD_TARGET_ADDRESS}
-FORWARD_TARGET_PORT=${FORWARD_TARGET_PORT}
-FORWARD_TARGET_RESOLVED_IP=${FORWARD_TARGET_RESOLVED_IP}"
-  write_output_file "cloud-entry" "$cloud_output"
-  if (( DRY_RUN == 0 )); then
-    print_shortcut_hint
-  fi
-  print_cloud_acceptance_commands
-}
-
-render_xray_service() {
-  local description="$1"
-  local service_content
-  service_content="$(cat <<EOF
-# Managed by leikwan-wg-toolkit
-[Unit]
-Description=${description}
+Description=Leikwan EasyTier Entry ${name}
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${XRAY_BIN} run -config ${XRAY_CONFIG}
+ExecStart=${EASYTIER_CORE_BIN} ${args}--listeners ${listener}
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
@@ -3092,1752 +631,1521 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-)"
-  printf '%s' "$service_content"
 }
 
-select_xray_service_target() {
-  ACTIVE_XRAY_SERVICE_NAME="${XRAY_LEIKWAN_SERVICE_NAME}"
-  ACTIVE_XRAY_SERVICE="${XRAY_LEIKWAN_SERVICE}"
+enabled_entry_peers() {
+  local name public_host et_ip proto port weight enabled
+  while IFS=$'\t' read -r name public_host et_ip proto port weight enabled; do
+    [[ "$enabled" == "true" ]] || continue
+    printf '%s://%s:%s\n' "$proto" "$public_host" "$port"
+  done < <(entries_rows)
+}
 
+render_relay_service() {
+  local args peers listener_args
+  peers="$(enabled_entry_peers)"
+  args="$(core_common_args "$RELAY_ET_IP" "$peers")" || return 1
+  if listener_args="$(easytier_disable_listener_arg)"; then
+    :
+  else
+    easytier_help_has '--listeners' || { fail "当前 easytier-core 不支持禁用 listener，也不支持 --listeners，无法避免默认 11010/11011/11012。"; return 1; }
+    listener_args="$(printf '%q ' --listeners "${EASYTIER_PROTOCOL_DEFAULT}://0.0.0.0:${DEFAULT_EASYTIER_PORT}")"
+  fi
+  cat <<EOF
+# Managed by leikwan-wg-toolkit ${TOOL_VERSION}
+[Unit]
+Description=Leikwan EasyTier Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${EASYTIER_CORE_BIN} ${args}${listener_args}
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+start_service_file() {
+  local service_name="$1"
   if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将使用独立服务：${XRAY_LEIKWAN_SERVICE_NAME}.service，配置：${XRAY_CONFIG}"
+    echo "[DRY-RUN] systemctl enable --now ${service_name}.service"
     return 0
   fi
+  systemctl daemon-reload
+  systemctl enable "${service_name}.service"
+  systemctl restart "${service_name}.service"
+}
 
-  if [[ -f "$XRAY_SYSTEM_SERVICE" ]] || systemctl list-unit-files --type=service --no-legend xray.service 2>/dev/null | grep -q '^xray\.service'; then
-    warn "检测到已有 xray.service。为避免污染用户已有服务，推荐创建独立 ${XRAY_LEIKWAN_SERVICE_NAME}.service。"
-    echo "1. 备份并覆盖 xray.service"
-    echo "2. 创建独立 xray-leikwan.service（推荐）"
-    echo "3. 取消"
-    local choice
-    choice="$(prompt_menu_choice "请选择 [2]: ")"
-    choice="${choice:-2}"
-    case "$choice" in
-      1)
-        ACTIVE_XRAY_SERVICE_NAME="${XRAY_SYSTEM_SERVICE_NAME}"
-        ACTIVE_XRAY_SERVICE="${XRAY_SYSTEM_SERVICE}"
-        ;;
-      2)
-        ACTIVE_XRAY_SERVICE_NAME="${XRAY_LEIKWAN_SERVICE_NAME}"
-        ACTIVE_XRAY_SERVICE="${XRAY_LEIKWAN_SERVICE}"
-        ;;
-      3)
-        fail "已取消 Xray 服务配置。"
-        return 1
-        ;;
-      *)
-        fail "选择无效。"
-        return 1
-        ;;
+et_iface_by_ip() {
+  local ip="$1"
+  ip -o -4 addr show 2>/dev/null | awk -v ip="$ip" '$4 ~ "^"ip"/" {print $2; exit}'
+}
+
+et_ip_present() {
+  local ip="$1"
+  [[ -n "$(et_iface_by_ip "$ip")" ]]
+}
+
+wait_et_ip() {
+  local ip="$1" timeout="${2:-15}" i
+  for i in $(seq 1 "$timeout"); do
+    if et_ip_present "$ip"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+easytier_cli_peer_text() {
+  "$EASYTIER_CLI_BIN" peer 2>/dev/null || "$EASYTIER_CLI_BIN" node 2>/dev/null || true
+}
+
+pairing_base64() {
+  base64 "$1" | tr -d '\n'
+}
+
+decode_pairing_base64() {
+  local payload="$1" dest="$2" decoded
+  decoded="$(mktemp)"
+  if printf '%s' "$payload" | base64 -d >"$decoded" 2>/dev/null &&
+    grep -qx 'PAIRING_VERSION=0.4' "$decoded" &&
+    grep -q '^ROLE=' "$decoded"; then
+    cp -a "$decoded" "$dest"
+    rm -f "$decoded"
+    return 0
+  fi
+  rm -f "$decoded"
+  return 1
+}
+
+decode_env_base64() {
+  local payload="$1" dest="$2" required_key="$3" decoded
+  decoded="$(mktemp)"
+  if printf '%s' "$payload" | base64 -d >"$decoded" 2>/dev/null &&
+    grep -q "^${required_key}=" "$decoded"; then
+    cp -a "$decoded" "$dest"
+    rm -f "$decoded"
+    return 0
+  fi
+  rm -f "$decoded"
+  return 1
+}
+
+print_pairing_code() {
+  local title="$1" begin="$2" end="$3" file="$4" one_line_key="$5"
+  echo
+  echo "=================================================="
+  echo "【${title}】"
+  echo "$begin"
+  cat "$file"
+  echo "$end"
+  echo "=================================================="
+  echo
+  echo "【一行配对码，复制这一行也可以】"
+  printf '%s=%s\n' "$one_line_key" "$(pairing_base64 "$file")"
+}
+
+parse_pairing_raw() {
+  local raw="$1" dest="$2" base64_key="$3" line payload
+  : >"$dest"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(normalize_menu_choice "$line")"
+    [[ -n "$line" ]] || continue
+    case "$line" in
+      "-----BEGIN LEIKWAN "*|"-----END LEIKWAN "*) continue ;;
     esac
-  fi
-}
-
-install_xray_service_if_needed() {
-  select_xray_service_target
-
-  local service_content description
-  description="Leikwan Xray Chain Service"
-  service_content="$(render_xray_service "$description")"
-
-  if [[ "$ACTIVE_XRAY_SERVICE" == "$XRAY_SYSTEM_SERVICE" ]]; then
-    backup_file "$XRAY_SYSTEM_SERVICE"
-  fi
-
-  write_text_file "$ACTIVE_XRAY_SERVICE" "$service_content" 644 || true
-  run_cmd systemctl daemon-reload
-}
-
-install_xray() {
-  if (( DRY_RUN == 1 )); then
-    if command -v xray >/dev/null 2>&1; then
-      XRAY_BIN="$(command -v xray)"
-      ok "DRY-RUN：检测到 Xray：${XRAY_BIN}"
-    else
-      warn "DRY-RUN：未检测到 xray，将使用占位密钥/UUID 生成配置预览。"
-    fi
-    install_xray_service_if_needed
-    return 0
-  fi
-
-  if command -v xray >/dev/null 2>&1; then
-    XRAY_BIN="$(command -v xray)"
-    ok "已检测到 Xray：${XRAY_BIN}"
-    install_xray_service_if_needed
-    return 0
-  fi
-
-  install_xray_deps
-
-  local arch asset_re api url tmpdir archive summary binary
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) asset_re='Xray-linux-64\.zip$' ;;
-    aarch64|arm64) asset_re='Xray-linux-arm64-v8a\.zip$' ;;
-    armv7l|armv7*) asset_re='Xray-linux-arm32-v7a\.zip$' ;;
-    *)
-      fail "暂不支持自动安装此架构：${arch}"
-      return 1
-      ;;
-  esac
-
-  api="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
-  url="$(curl -fsSL "$api" | jq -r --arg re "$asset_re" '.assets[] | select(.name | test($re)) | .browser_download_url' | head -n 1)"
-  if [[ -z "$url" || "$url" == "null" ]]; then
-    warn "无法从 Xray-core Release 匹配安装包。"
-    local local_asset
-    local_asset="$(prompt_value "请输入本地 Xray zip 安装包路径，留空取消")"
-    if [[ -z "$local_asset" || ! -f "$local_asset" ]]; then
-      fail "未提供可用本地文件。可手动安装 xray 后重试。"
-      return 1
-    fi
-    url="file://${local_asset}"
-  fi
-
-  summary="来源：${url}\n目标：${XRAY_BIN}\n动作：下载并安装 Xray-core，并创建/更新带 leikwan 标识的 systemd 服务。\nFallback：直连、ghfast、ghproxy、本地文件路径。"
-  if ! confirm_summary "Xray 安装摘要" "$summary"; then
-    warn "已取消 Xray 安装。"
-    return 1
-  fi
-
-  tmpdir="$(mktemp -d)"
-  archive="${tmpdir}/xray.zip"
-  download_github_asset "$url" "$archive"
-  unzip -q "$archive" -d "$tmpdir"
-  binary="${tmpdir}/xray"
-  if [[ ! -f "$binary" ]]; then
-    fail "下载包中未找到 xray 可执行文件。"
-    rm -rf "$tmpdir"
-    return 1
-  fi
-
-  install -d -m 755 /usr/local/bin
-  backup_file "$XRAY_BIN"
-  install -m 755 "$binary" "$XRAY_BIN"
-
-  if [[ -f "${tmpdir}/geoip.dat" || -f "${tmpdir}/geosite.dat" ]]; then
-    install -d -m 755 /usr/local/share/xray
-    [[ -f "${tmpdir}/geoip.dat" ]] && install -m 644 "${tmpdir}/geoip.dat" /usr/local/share/xray/geoip.dat
-    [[ -f "${tmpdir}/geosite.dat" ]] && install -m 644 "${tmpdir}/geosite.dat" /usr/local/share/xray/geosite.dat
-  fi
-
-  rm -rf "$tmpdir"
-  install_xray_service_if_needed
-  ok "Xray 已安装。"
-}
-
-xray_uuid() {
-  if (( DRY_RUN == 1 )) && [[ ! -x "$XRAY_BIN" ]] && ! command -v xray >/dev/null 2>&1; then
-    printf '%s\n' "00000000-0000-4000-8000-000000000000"
-    return 0
-  fi
-  if "$XRAY_BIN" uuid >/dev/null 2>&1; then
-    "$XRAY_BIN" uuid
-  else
-    cat /proc/sys/kernel/random/uuid
-  fi
-}
-
-xray_x25519_pair() {
-  local output private_key public_key
-  if (( DRY_RUN == 1 )) && [[ ! -x "$XRAY_BIN" ]] && ! command -v xray >/dev/null 2>&1; then
-    printf '%s\n%s\n' "DRYRUN_REALITY_PRIVATE_KEY" "DRYRUN_REALITY_PUBLIC_KEY"
-    return 0
-  fi
-  output="$("$XRAY_BIN" x25519 2>&1)"
-  private_key="$(printf '%s\n' "$output" | awk -F': *' 'tolower($1) ~ /private/ {print $2; exit}')"
-  public_key="$(printf '%s\n' "$output" | awk -F': *' 'tolower($1) ~ /public/ {print $2; exit}')"
-  if [[ -z "$private_key" || -z "$public_key" ]]; then
-    fail "无法解析 xray x25519 输出："
-    printf '%s\n' "$output" >&2
-    return 1
-  fi
-  printf '%s\n%s\n' "$private_key" "$public_key"
-}
-
-random_hex() {
-  local bytes="$1"
-  openssl rand -hex "$bytes"
-}
-
-render_landing_xray_config() {
-  local port="$1"
-  local uuid="$2"
-  local private_key="$3"
-  local short_id="$4"
-  local server_name="$5"
-  local target="$6"
-
-  cat <<EOF
-{
-  "log": {
-    "loglevel": "warning",
-    "access": "/var/log/xray-leikwan-access.log",
-    "error": "/var/log/xray-leikwan-error.log"
-  },
-  "inbounds": [
-    {
-      "tag": "leikwan-landing-reality-in",
-      "listen": "0.0.0.0",
-      "port": ${port},
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "${uuid}",
-            "flow": "xtls-rprx-vision"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "raw",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "target": "${target}",
-          "serverNames": [ "${server_name}" ],
-          "privateKey": "${private_key}",
-          "shortIds": [ "${short_id}" ]
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    { "protocol": "freedom", "tag": "direct" },
-    { "protocol": "blackhole", "tag": "blocked" }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "type": "field",
-        "protocol": [ "bittorrent" ],
-        "outboundTag": "blocked"
-      }
-    ]
-  }
-}
-EOF
-}
-
-json_escape() {
-  local value="$1"
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$value" | jq -Rsa .
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import json, sys; print(json.dumps(sys.stdin.read()))' <<<"$value"
-  else
-    value="${value//\\/\\\\}"
-    value="${value//\"/\\\"}"
-    value="${value//$'\n'/\\n}"
-    printf '"%s"' "$value"
-  fi
-}
-
-xray_test_config() {
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过 Xray 配置测试：${XRAY_CONFIG}"
-    return 0
-  fi
-  "$XRAY_BIN" run -test -config "$XRAY_CONFIG"
-}
-
-show_xray_config_context() {
-  local file="${1:-$XRAY_CONFIG}"
-  [[ -f "$file" ]] || return 0
-  echo
-  echo "${BOLD}Xray 配置排错片段：${file}${RESET}"
-  if grep -nE 'decryption|encryption|realitySettings|vnext|inbounds|outbounds' "$file" >/dev/null 2>&1; then
-    grep -nE -C 3 'decryption|encryption|realitySettings|vnext|inbounds|outbounds' "$file" | head -n 160
-  else
-    nl -ba "$file" | sed -n '1,160p'
-  fi
-}
-
-restart_xray() {
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过启动 ${ACTIVE_XRAY_SERVICE_NAME}.service"
-    return 0
-  fi
-  run_cmd systemctl daemon-reload
-  run_cmd systemctl enable "${ACTIVE_XRAY_SERVICE_NAME}.service"
-  if run_cmd systemctl restart "${ACTIVE_XRAY_SERVICE_NAME}.service"; then
-    ok "${ACTIVE_XRAY_SERVICE_NAME}.service 已启动。"
-  else
-    fail "${ACTIVE_XRAY_SERVICE_NAME}.service 启动失败，请查看：journalctl -u ${ACTIVE_XRAY_SERVICE_NAME} -e --no-pager"
-    return 1
-  fi
-}
-
-print_cloud_acceptance_commands() {
-  cat <<EOF
-
-${BOLD}公网入口机验收命令：${RESET}
-wg show
-ping -c 3 ${LEIKWAN_WG_IP}
-nc -vz ${LEIKWAN_WG_IP} ${CLIENT_ENTRY_PORT_DEFAULT}
-bash wg-toolkit.sh --doctor
-nft list ruleset | grep -A20 leikwan
-iptables -t nat -S | grep ${LEIKWAN_WG_IP} || true
-# nftables/iptables 内核转发不会有 ${CLIENT_ENTRY_PORT_DEFAULT} 用户态监听；realm 模式才检查：
-systemctl status ${REALM_ENTRY_STEM} --no-pager 2>/dev/null || true
-EOF
-}
-
-print_landing_acceptance_commands() {
-  local landing_port="$1"
-  cat <<EOF
-
-${BOLD}海外落地机验收命令：${RESET}
-systemctl status ${ACTIVE_XRAY_SERVICE_NAME} --no-pager
-ss -lntup | grep ${landing_port}
-${XRAY_BIN} run -test -config ${XRAY_CONFIG}
-EOF
-}
-
-print_relay_acceptance_commands() {
-  local landing_address="$1"
-  local landing_port="$2"
-  cat <<EOF
-
-${BOLD}利群中转机验收命令：${RESET}
-wg show
-ss -lntup | grep ${CLIENT_ENTRY_PORT_DEFAULT}
-ip route get ${landing_address}
-nc -vz ${landing_address} ${landing_port}
-systemctl status ${ACTIVE_XRAY_SERVICE_NAME} --no-pager
-EOF
-}
-
-deploy_landing_server() {
-  need_root_unless_dry_run
-  init_log
-  install_xray
-
-  local landing_port landing_address uuid pair private_key public_key short_id server_name target config summary
-  landing_port="$(prompt_port "请输入海外落地机 Reality 入站端口" "$LANDING_PORT_DEFAULT")"
-  landing_address="$(prompt_endpoint_host "请输入海外落地机公网地址，用于输出给利群中转机" "$(detect_public_ipv4)")"
-  server_name="$(prompt_non_empty "请输入 Reality serverName" "$LANDING_SERVER_NAME_DEFAULT")"
-  target="$(prompt_non_empty "请输入 Reality target" "$LANDING_TARGET_DEFAULT")"
-  uuid="$(xray_uuid)"
-  pair="$(xray_x25519_pair)"
-  private_key="$(printf '%s\n' "$pair" | sed -n '1p')"
-  public_key="$(printf '%s\n' "$pair" | sed -n '2p')"
-  short_id="$(random_hex 8)"
-  config="$(render_landing_xray_config "$landing_port" "$uuid" "$private_key" "$short_id" "$server_name" "$target")"
-
-  summary="角色：海外落地机\n文件：${XRAY_CONFIG}\nReality inbound：0.0.0.0:${landing_port}\nprotocol：vless\nnetwork：raw\nsecurity：reality\ntarget：${target}\nserverNames：[${server_name}]\nflow：${LANDING_FLOW_DEFAULT}\n动作：写入 Xray Reality 配置，执行 xray run -test，通过后启动 ${ACTIVE_XRAY_SERVICE_NAME}.service。\n注意：Reality PrivateKey 只写入落地机配置，不会作为复制参数输出。"
-  if ! confirm_summary "海外落地机部署摘要" "$summary"; then
-    warn "已取消海外落地机部署。"
-    return 0
-  fi
-
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$(dirname "$XRAY_CONFIG")"
-    install -d -m 755 "$XRAY_MARKER_DIR"
-  fi
-  write_text_file "$XRAY_CONFIG" "$config" 644 || true
-  if (( DRY_RUN == 0 )); then
-    printf 'landing\n' >"${XRAY_MARKER_DIR}/role"
-  fi
-
-  if xray_test_config; then
-    ok "Xray 配置测试通过。"
-    restart_xray
-  else
-    fail "Xray 配置测试失败，未启动服务。请检查 ${XRAY_CONFIG}。"
-    show_xray_config_context "$XRAY_CONFIG"
-    return 1
-  fi
-
-  local landing_output landing_direct_link copy_title
-  landing_direct_link="$(build_landing_direct_link "$uuid" "$landing_address" "$landing_port" "$public_key" "$short_id" "$server_name" "$LANDING_FLOW_DEFAULT")"
-  landing_output="$(cat <<EOF
-LANDING_ADDRESS=${landing_address}
-LANDING_PORT=${landing_port}
-LANDING_UUID=${uuid}
-LANDING_PUBLIC_KEY=${public_key}
-LANDING_SHORT_ID=${short_id}
-LANDING_SERVER_NAME=${server_name}
-LANDING_FLOW=${LANDING_FLOW_DEFAULT}
-LANDING_DIRECT_LINK=${landing_direct_link}
-EOF
-)"
-  copy_title="请复制到利群中转机"
-  if (( DRY_RUN == 1 )); then
-    copy_title="DRY-RUN 预览参数，不能用于真实部署"
-  fi
-  print_copy_block "$copy_title" "$landing_output" $'LANDING_DIRECT_LINK 是直连落地 Reality 测试链接，不是三机链式代理最终客户端链接。\n最终 CLIENT_LINK 由利群中转机生成，入口是公网入口机地址。\n\n下一步去利群中转机：\nbash wg-toolkit.sh\n选择：查看 / 生成本机 WireGuard 身份\n拿到 LEIKWAN_PUBLIC_KEY 后去公网入口机部署'
-  write_output_file "landing-server" "$landing_output"
-  landing_write_profile "local-landing" "$landing_address" "$landing_port" "$uuid" "$public_key" "$short_id" "$server_name" "$LANDING_FLOW_DEFAULT" "generated on landing server; not relay active landing" "yes"
-  ok "已保存本机落地参数备份：$(landing_file_for_name "local-landing")"
-  warn "这是本机落地参数备份，不代表利群中转机 active landing。"
-  if (( DRY_RUN == 0 )); then
-    print_shortcut_hint
-  fi
-  print_landing_acceptance_commands "$landing_port"
-}
-
-parse_vlessenc_value() {
-  local output="$1"
-  local key="$2"
-  printf '%s\n' "$output" \
-    | awk -v key="$key" '
-        {
-          line=$0
-          lower=tolower(line)
-          if (lower ~ "\"" key "\"" || lower ~ key "[[:space:]]*:") {
-            sub(/^[^:]*:[[:space:]]*/, "", line)
-            print line
-            exit
-          }
-        }' \
-    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/,$//; s/^"//; s/"$//'
-}
-
-clean_vlessenc_value() {
-  printf '%s' "$1" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/,$//; s/^"//; s/"$//'
-}
-
-get_vlessenc_pair() {
-  local output decryption encryption
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$XRAY_MARKER_DIR"
-  fi
-
-  if (( DRY_RUN == 1 )) && [[ ! -x "$XRAY_BIN" ]] && ! command -v xray >/dev/null 2>&1; then
-    output=$'DRY-RUN VLESS Encryption preview\nDecryption: DRYRUN_VLESSENC_DECRYPTION\nEncryption: DRYRUN_VLESSENC_ENCRYPTION'
-  else
-    output="$("$XRAY_BIN" vlessenc 2>&1 || true)"
-  fi
-
-  if (( DRY_RUN == 0 )); then
-    printf '%s\n' "$output" >"$XRAY_VLESSENC_LAST"
-  fi
-
-  echo
-  echo "${BOLD}xray vlessenc 输出如下，请优先选择 X25519 那组参数：${RESET}"
-  printf '%s\n' "$output"
-  echo
-
-  decryption="$(parse_vlessenc_value "$output" "decryption")"
-  encryption="$(parse_vlessenc_value "$output" "encryption")"
-
-  if [[ -n "$decryption" && -n "$encryption" ]]; then
-    echo "自动解析到："
-    echo "VLESSENC_DECRYPTION=${decryption}"
-    echo "VLESSENC_ENCRYPTION=${encryption}"
-    if prompt_yes_no "是否使用这组 VLESS Encryption 参数？" "Y"; then
-      VLESSENC_DECRYPTION_RESULT="$decryption"
-      VLESSENC_ENCRYPTION_RESULT="$encryption"
+    if [[ "$line" == "${base64_key}="* || "$line" == LEIKWAN_EASYTIER_*_BASE64=* ]]; then
+      payload="${line#*=}"
+      if ! decode_pairing_base64 "$payload" "$dest"; then
+        fail "一行配对码解码失败，请重新复制完整内容。"
+        return 1
+      fi
       return 0
     fi
-  fi
-
-  warn "请从上方输出中选择 X25519 组，分别复制服务端 decryption 与客户端 encryption。"
-  decryption="$(clean_vlessenc_value "$(prompt_non_empty "请输入 VLESSENC_DECRYPTION")")"
-  encryption="$(clean_vlessenc_value "$(prompt_non_empty "请输入 VLESSENC_ENCRYPTION")")"
-  VLESSENC_DECRYPTION_RESULT="$decryption"
-  VLESSENC_ENCRYPTION_RESULT="$encryption"
-}
-
-render_leikwan_xray_config() {
-  local entry_uuid="$1"
-  local vlessenc_decryption="$2"
-  local landing_address="$3"
-  local landing_port="$4"
-  local landing_uuid="$5"
-  local landing_public_key="$6"
-  local landing_short_id="$7"
-  local landing_server_name="$8"
-  local landing_flow="${9:-$LANDING_FLOW_DEFAULT}"
-  local entry_uuid_json vlessenc_decryption_json landing_address_json landing_uuid_json landing_public_key_json landing_short_id_json landing_server_name_json landing_flow_json
-  entry_uuid_json="$(json_escape "$entry_uuid")"
-  vlessenc_decryption_json="$(json_escape "$vlessenc_decryption")"
-  landing_address_json="$(json_escape "$landing_address")"
-  landing_uuid_json="$(json_escape "$landing_uuid")"
-  landing_public_key_json="$(json_escape "$landing_public_key")"
-  landing_short_id_json="$(json_escape "$landing_short_id")"
-  landing_server_name_json="$(json_escape "$landing_server_name")"
-  landing_flow_json="$(json_escape "$landing_flow")"
-
-  cat <<EOF
-{
-  "log": {
-    "loglevel": "warning",
-    "access": "/var/log/xray-leikwan-access.log",
-    "error": "/var/log/xray-leikwan-error.log"
-  },
-  "inbounds": [
-    {
-      "tag": "leikwan-entry-vless-in",
-      "listen": "10.198.1.1",
-      "port": 30000,
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          { "id": ${entry_uuid_json} }
-        ],
-        "decryption": ${vlessenc_decryption_json}
-      },
-      "streamSettings": {
-        "network": "raw",
-        "security": "none"
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "landing-reality-out",
-      "protocol": "vless",
-      "settings": {
-        "vnext": [
-          {
-            "address": ${landing_address_json},
-            "port": ${landing_port},
-            "users": [
-              {
-                "id": ${landing_uuid_json},
-                "encryption": "none",
-                "flow": ${landing_flow_json}
-              }
-            ]
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "raw",
-        "security": "reality",
-        "realitySettings": {
-          "serverName": ${landing_server_name_json},
-          "publicKey": ${landing_public_key_json},
-          "shortId": ${landing_short_id_json},
-          "fingerprint": "chrome",
-          "spiderX": "/"
-        }
-      }
-    },
-    { "protocol": "blackhole", "tag": "blocked" }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "type": "field",
-        "protocol": [ "bittorrent" ],
-        "outboundTag": "blocked"
-      }
-    ]
-  }
-}
-EOF
-}
-
-urlencode() {
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$1" | jq -sRr @uri
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))' <<<"$1"
-  else
-    warn "未检测到 jq 或 python3，客户端链接中的 encryption 参数将不做 URL 编码。"
-    printf '%s' "$1"
-  fi
-}
-
-build_landing_direct_link() {
-  local uuid="$1"
-  local address="$2"
-  local port="$3"
-  local public_key="$4"
-  local short_id="$5"
-  local server_name="$6"
-  local flow="${7:-}"
-  local link
-  link="vless://${uuid}@${address}:${port}?type=raw&security=reality&pbk=$(urlencode "$public_key")&fp=chrome&sni=$(urlencode "$server_name")&sid=$(urlencode "$short_id")"
-  if [[ -n "$flow" ]]; then
-    link="${link}&flow=$(urlencode "$flow")"
-  fi
-  link="${link}#Landing-Direct-Test"
-  printf '%s' "$link"
-}
-
-landing_file_for_name() {
-  local name
-  name="$(profile_safe_name "$1")"
-  printf '%s/landing-%s.env' "$LANDINGS_DIR" "$name"
-}
-
-landing_files() {
-  if [[ -d "$LANDINGS_DIR" ]]; then
-    find "$LANDINGS_DIR" -maxdepth 1 -type f -name 'landing-*.env' | sort
-  fi
-}
-
-active_landing_name() {
-  if [[ -f "$ACTIVE_LANDING_FILE" ]]; then
-    trim_spaces "$(cat "$ACTIVE_LANDING_FILE")"
-  elif [[ -f "$ACTIVE_LANDING_ENV" ]]; then
-    env_file_get "$ACTIVE_LANDING_ENV" LANDING_NAME 2>/dev/null || true
-  elif [[ -f "$RELAY_OUTPUT_FILE" ]]; then
-    env_file_get "$RELAY_OUTPUT_FILE" ACTIVE_LANDING_NAME 2>/dev/null || true
-  fi
-}
-
-active_landing_file() {
-  local name
-  name="$(active_landing_name)"
-  [[ -n "$name" ]] || return 1
-  landing_file_for_name "$name"
-}
-
-landing_env_get() {
-  local file="$1"
-  local key="$2"
-  env_file_get "$file" "$key" 2>/dev/null || true
-}
-
-landing_write_profile() {
-  local name="$1"
-  local address="$2"
-  local port="$3"
-  local uuid="$4"
-  local public_key="$5"
-  local short_id="$6"
-  local server_name="$7"
-  local flow="$8"
-  local remark="${9:-}"
-  local enabled="${10:-yes}"
-  local status="${11:-}"
-  local rtt="${12:-}"
-  local check_time="${13:-}"
-  local file content safe_name
-  safe_name="$(profile_safe_name "$name")"
-  file="$(landing_file_for_name "$safe_name")"
-  if (( DRY_RUN == 0 )); then
-    install -d -m 700 "$LANDINGS_DIR"
-  fi
-  content="$(cat <<EOF
-LANDING_NAME=${safe_name}
-LANDING_ADDRESS=${address}
-LANDING_PORT=${port}
-LANDING_UUID=${uuid}
-LANDING_PUBLIC_KEY=${public_key}
-LANDING_SHORT_ID=${short_id}
-LANDING_SERVER_NAME=${server_name}
-LANDING_FLOW=${flow}
-LANDING_REMARK=${remark}
-ENABLED=${enabled}
-LAST_CHECK_STATUS=${status}
-LAST_CHECK_RTT=${rtt}
-LAST_CHECK_TIME=${check_time}
-EOF
-)"
-  write_text_file "$file" "$content" 600 || true
-}
-
-landing_set_active() {
-  local name="$1"
-  local file
-  name="$(profile_safe_name "$name")"
-  file="$(landing_file_for_name "$name")"
-  [[ -f "$file" || "$DRY_RUN" -eq 1 ]] || {
-    fail "未找到落地机 profile：${file}"
-    return 1
-  }
-  write_text_file "$ACTIVE_LANDING_FILE" "$name" 600 || true
-  if [[ -f "$file" ]]; then
-    write_text_file "$ACTIVE_LANDING_ENV" "$(grep -E '^[A-Z0-9_]+=' "$file" || true)" 600 || true
-  fi
-}
-
-landing_content_from_sources() {
-  local input="${1:-}" content="" line
-  if [[ -n "$input" && -f "$input" ]]; then
-    content="$(grep -E '^[A-Z0-9_]+=' "$input" || true)"
-  elif [[ -n "$input" ]]; then
-    content="$input"
-    while IFS= read -r line; do
-      [[ -z "$line" ]] && break
-      content="${content}"$'\n'"${line}"
-    done
-    content="$(printf '%s\n' "$content" | grep -E '^[A-Z0-9_]+=' || true)"
-  elif [[ -f "$LANDING_OUTPUT_FILE" ]]; then
-    content="$(grep -E '^[A-Z0-9_]+=' "$LANDING_OUTPUT_FILE" || true)"
-  elif [[ -f "$OUTPUT_FILE" ]]; then
-    content="$(grep -E '^(LANDING_|ACTIVE_LANDING_)' "$OUTPUT_FILE" || true)"
-  fi
-  printf '%s' "$content"
-}
-
-landing_add() {
-  need_root_unless_dry_run
-  init_log
-  local mode name content address port uuid public_key short_id server_name flow remark enabled
-  echo
-  echo "1. 手动输入 LANDING_* 参数"
-  echo "2. 粘贴 env 或输入 env 文件路径"
-  echo "3. 从现有 /root 或 outputs 导入"
-  mode="$(prompt_menu_choice "请选择 [2]: ")"
-  mode="${mode:-2}"
-  name="$(prompt_non_empty "请输入落地机名称，例如 us01 / hk01 / ix-qianhai")"
-  case "$mode" in
-    1)
-      address="$(prompt_endpoint_host "请输入 LANDING_ADDRESS")"
-      port="$(prompt_port "请输入 LANDING_PORT" "$LANDING_PORT_DEFAULT")"
-      uuid="$(prompt_non_empty "请输入 LANDING_UUID")"
-      public_key="$(prompt_non_empty "请输入 LANDING_PUBLIC_KEY")"
-      short_id="$(prompt_non_empty "请输入 LANDING_SHORT_ID")"
-      server_name="$(prompt_non_empty "请输入 LANDING_SERVER_NAME" "$LANDING_SERVER_NAME_DEFAULT")"
-      flow="$(prompt_non_empty "请输入 LANDING_FLOW" "$LANDING_FLOW_DEFAULT")"
-      ;;
-    2)
-      content="$(landing_content_from_sources "$(prompt_non_empty "请输入 env 文件路径或第一行 KEY=value")")"
-      address="$(awk -F= '$1=="LANDING_ADDRESS" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      port="$(awk -F= '$1=="LANDING_PORT" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      uuid="$(awk -F= '$1=="LANDING_UUID" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      public_key="$(awk -F= '$1=="LANDING_PUBLIC_KEY" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      short_id="$(awk -F= '$1=="LANDING_SHORT_ID" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      server_name="$(awk -F= '$1=="LANDING_SERVER_NAME" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      flow="$(awk -F= '$1=="LANDING_FLOW" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      ;;
-    *)
-      content="$(landing_content_from_sources)"
-      address="$(awk -F= '$1=="LANDING_ADDRESS" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      port="$(awk -F= '$1=="LANDING_PORT" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      uuid="$(awk -F= '$1=="LANDING_UUID" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      public_key="$(awk -F= '$1=="LANDING_PUBLIC_KEY" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      short_id="$(awk -F= '$1=="LANDING_SHORT_ID" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      server_name="$(awk -F= '$1=="LANDING_SERVER_NAME" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      flow="$(awk -F= '$1=="LANDING_FLOW" {sub(/^[^=]*=/, ""); print; exit}' <<<"$content")"
-      ;;
-  esac
-  port="${port:-$LANDING_PORT_DEFAULT}"
-  server_name="${server_name:-$LANDING_SERVER_NAME_DEFAULT}"
-  flow="${flow:-$LANDING_FLOW_DEFAULT}"
-  for value_name in address port uuid public_key short_id server_name flow; do
-    if [[ -z "${!value_name}" ]]; then
-      fail "落地机参数缺少：${value_name}"
-      return 1
+    if [[ "$line" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#line} >= 40)); then
+      if decode_pairing_base64 "$line" "$dest"; then
+        return 0
+      fi
     fi
-  done
-  remark="$(prompt_value "备注，留空也可以" "")"
-  enabled="$(prompt_value "是否启用 yes/no" "yes")"
-  if ! confirm_summary "添加落地机摘要" "LANDING_NAME=${name}\nLANDING_ADDRESS=${address}\nLANDING_PORT=${port}\nLANDING_SERVER_NAME=${server_name}\nENABLED=${enabled}"; then
-    return 0
-  fi
-  landing_write_profile "$name" "$address" "$port" "$uuid" "$public_key" "$short_id" "$server_name" "$flow" "$remark" "$enabled"
-  ok "已添加落地机 profile，但尚未切换 Xray 出站。"
-  echo "如需切换，请进入：多落地机管理 -> 切换当前落地机"
-  if prompt_yes_no "是否立即切换利群 Xray 出站到该落地机？" "N"; then
-    switch_landing_by_name "$name"
-  fi
-}
-
-landing_profiles_sorted() {
-  local file name
-  while read -r file; do
-    [[ -n "$file" ]] || continue
-    name="$(landing_env_get "$file" LANDING_NAME)"
-    printf '%s|%s\n' "${name:-$(basename "$file" .env)}" "$file"
-  done < <(landing_files) | sort -t'|' -k1,1
-}
-
-list_landing_profiles_table() {
-  local file name address port server_name status active active_name enabled index=1 rendered=0
-  active_name="$(active_landing_name)"
-  if [[ -z "$(landing_profiles_sorted)" ]]; then
-    warn "当前没有落地机 profile。"
-    echo "请先选择：多落地机管理 -> 添加落地机"
-    return 1
-  fi
-  printf '%-4s %-14s %-28s %-7s %-20s %-12s %s\n' "No." "Name" "Address" "Port" "SNI" "Status" "Active"
-  while IFS='|' read -r name file; do
-    [[ -n "$file" ]] || continue
-    address="$(landing_env_get "$file" LANDING_ADDRESS)"
-    port="$(landing_env_get "$file" LANDING_PORT)"
-    server_name="$(landing_env_get "$file" LANDING_SERVER_NAME)"
-    status="$(landing_env_get "$file" LAST_CHECK_STATUS)"
-    enabled="$(landing_env_get "$file" ENABLED)"
-    if [[ "${enabled:-yes}" == "no" ]]; then
-      status="${status:-disabled}"
+    if [[ "$line" == *=* ]]; then
+      printf '%s\n' "$line" >>"$dest"
     fi
-    active=""
-    [[ "$name" == "$active_name" ]] && active="*"
-    printf '%-4d %-14s %-28s %-7s %-20s %-12s %s\n' "$index" "$name" "$address" "$port" "${server_name:--}" "${status:--}" "$active"
-    rendered=$((rendered + 1))
-    index=$((index + 1))
-  done < <(landing_profiles_sorted)
-  if (( rendered == 0 )); then
-    warn "检测到 landing profile，但列表渲染为空，请检查配置文件格式。"
-    return 1
-  fi
+  done <"$raw"
+  [[ -s "$dest" ]] || { fail "没有读到有效 KEY=VALUE 配对内容。"; return 1; }
 }
 
-landing_show_list() {
-  list_landing_profiles_table || true
-}
-
-landing_test_one() {
-  local file="$1"
-  local name address port ping_output avg status="FAIL" now entry_uuid decryption tmp_config tmp_log test_config
-  name="$(landing_env_get "$file" LANDING_NAME)"
-  address="$(landing_env_get "$file" LANDING_ADDRESS)"
-  port="$(landing_env_get "$file" LANDING_PORT)"
-  echo
-  echo "${BOLD}测试落地机：${name} ${address}:${port}${RESET}"
-  if command -v ping >/dev/null 2>&1; then
-    ping_output="$(ping -c 3 -W 2 "$address" 2>&1 || true)"
-    printf '%s\n' "$ping_output"
-    avg="$(printf '%s\n' "$ping_output" | parse_ping_avg)"
-  fi
-  if command -v nc >/dev/null 2>&1 && nc -vz -w 3 "$address" "$port" >/dev/null 2>&1; then
-    status="OK"
-    ok "TCP 可达：${address}:${port}"
-  else
-    warn "TCP 不可达或未安装 nc：${address}:${port}"
-  fi
-  entry_uuid="$(xray_relay_inbound_field id 2>/dev/null || true)"
-  decryption="$(xray_relay_inbound_field decryption 2>/dev/null || true)"
-  if [[ -x "$XRAY_BIN" && -n "$entry_uuid" && -n "$decryption" ]]; then
-    tmp_config="$(mktemp)"
-    tmp_log="$(mktemp)"
-    test_config="$(render_leikwan_xray_config "$entry_uuid" "$decryption" "$address" "$port" "$(landing_env_get "$file" LANDING_UUID)" "$(landing_env_get "$file" LANDING_PUBLIC_KEY)" "$(landing_env_get "$file" LANDING_SHORT_ID)" "$(landing_env_get "$file" LANDING_SERVER_NAME)" "$(landing_env_get "$file" LANDING_FLOW)")"
-    printf '%s\n' "$test_config" >"$tmp_config"
-    if "$XRAY_BIN" run -test -config "$tmp_config" >"$tmp_log" 2>&1; then
-      ok "Xray outbound 临时配置测试通过。"
+read_pairing_code() {
+  local dest="$1" label="$2" end_marker="$3" base64_key="$4" source="${5:-}"
+  local raw line has_content=0
+  raw="$(mktemp)"
+  if [[ -n "$source" ]]; then
+    if [[ "$source" == "-" ]]; then
+      cat >"$raw"
+    elif [[ -f "$source" ]]; then
+      cp -a "$source" "$raw"
     else
-      warn "Xray outbound 临时配置测试失败：$(tr '\n' ' ' <"$tmp_log")"
-      status="FAIL"
+      printf '%s\n' "$source" >"$raw"
     fi
-    rm -f "$tmp_config" "$tmp_log"
-  fi
-  now="$(date '+%F %T %z')"
-  landing_write_profile "$name" "$address" "$port" "$(landing_env_get "$file" LANDING_UUID)" "$(landing_env_get "$file" LANDING_PUBLIC_KEY)" "$(landing_env_get "$file" LANDING_SHORT_ID)" "$(landing_env_get "$file" LANDING_SERVER_NAME)" "$(landing_env_get "$file" LANDING_FLOW)" "$(landing_env_get "$file" LANDING_REMARK)" "$(landing_env_get "$file" ENABLED)" "$status" "${avg:-}" "$now"
-}
-
-landing_test_all() {
-  local file
-  if [[ -z "$(landing_files)" ]]; then
-    warn "暂无落地机配置。"
-    return 0
-  fi
-  while read -r file; do
-    [[ -n "$file" ]] || continue
-    landing_test_one "$file" || true
-  done < <(landing_files)
-}
-
-select_landing_profile() {
-  local choice file name enabled active_name enabled_count
-  local -a files names
-  SELECTED_LANDING_FILE=""
-  SELECTED_LANDING_NAME=""
-  while true; do
-    files=()
-    names=()
-    enabled_count=0
-    while IFS='|' read -r name file; do
-      [[ -n "$file" ]] || continue
-      files+=("$file")
-      names+=("$name")
-      enabled="$(landing_env_get "$file" ENABLED)"
-      if [[ "${enabled:-yes}" != "no" ]]; then
-        enabled_count=$((enabled_count + 1))
-      fi
-    done < <(landing_profiles_sorted)
-    if (( ${#files[@]} == 0 )); then
-      warn "当前没有落地机 profile。"
-      echo "请先选择：多落地机管理 -> 添加落地机"
-      return 1
-    fi
-    echo
-    list_landing_profiles_table || return 1
-    if (( enabled_count == 0 )); then
-      warn "当前没有已启用的落地机 profile。"
-      echo "请先启用 profile 或添加新的落地机。"
-      return 1
-    fi
-    choice="$(prompt_menu_choice "请选择落地机编号，留空取消：")"
-    if [[ -z "$choice" ]]; then
-      return 255
-    fi
-    if [[ ! "$choice" =~ ^[0-9]+$ ]]; then
-      warn "请输入列表中的编号。"
-      continue
-    fi
-    if (( choice < 1 || choice > ${#files[@]} )); then
-      warn "编号不存在。"
-      continue
-    fi
-    file="${files[$((choice - 1))]}"
-    name="${names[$((choice - 1))]}"
-    enabled="$(landing_env_get "$file" ENABLED)"
-    if [[ "${enabled:-yes}" == "no" ]]; then
-      warn "该落地机 ENABLED=no，不能选择。"
-      continue
-    fi
-    active_name="$(active_landing_name 2>/dev/null || true)"
-    if [[ -n "$active_name" && "$name" == "$active_name" ]]; then
-      warn "该落地机已经是 current.env 记录的 active landing。"
-      if ! prompt_yes_no "是否重新应用并测试 Xray 配置？" "N"; then
-        return 255
-      fi
-    fi
-    SELECTED_LANDING_FILE="$file"
-    SELECTED_LANDING_NAME="$name"
-    return 0
-  done
-}
-
-landing_select_file() {
-  select_landing_profile
-}
-
-write_relay_outputs_from_current() {
-  local landing_file="$1"
-  local entry_uuid vless_encryption cloud_endpoint cloud_port client_entry_port client_link content link_content encoded
-  local landing_name landing_address landing_port landing_uuid landing_public_key landing_short_id landing_server_name landing_flow
-  landing_name="$(landing_env_get "$landing_file" LANDING_NAME)"
-  landing_address="$(landing_env_get "$landing_file" LANDING_ADDRESS)"
-  landing_port="$(landing_env_get "$landing_file" LANDING_PORT)"
-  landing_uuid="$(landing_env_get "$landing_file" LANDING_UUID)"
-  landing_public_key="$(landing_env_get "$landing_file" LANDING_PUBLIC_KEY)"
-  landing_short_id="$(landing_env_get "$landing_file" LANDING_SHORT_ID)"
-  landing_server_name="$(landing_env_get "$landing_file" LANDING_SERVER_NAME)"
-  landing_flow="$(landing_env_get "$landing_file" LANDING_FLOW)"
-  entry_uuid="$(xray_relay_inbound_field id 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" ENTRY_UUID 2>/dev/null || true)"
-  vless_encryption="$(env_file_get "$CLIENT_LINK_FILE" VLESSENC_ENCRYPTION 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" VLESSENC_ENCRYPTION 2>/dev/null || true)"
-  cloud_endpoint="$(env_file_get "$CLIENT_LINK_FILE" CLOUD_ENDPOINT 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" CLOUD_ENDPOINT 2>/dev/null || env_file_get "$CLOUD_OUTPUT_FILE" CLOUD_ENDPOINT 2>/dev/null || true)"
-  cloud_port="$(env_file_get "$CLOUD_OUTPUT_FILE" CLOUD_WG_PORT 2>/dev/null || printf '%s' "$CLOUD_WG_PORT_DEFAULT")"
-  client_entry_port="$(env_file_get "$CLIENT_LINK_FILE" CLIENT_ENTRY_PORT 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" CLIENT_ENTRY_PORT 2>/dev/null || env_file_get "$CLOUD_OUTPUT_FILE" CLIENT_ENTRY_PORT 2>/dev/null || printf '%s' "$CLIENT_ENTRY_PORT_DEFAULT")"
-  if [[ -n "$entry_uuid" && -n "$vless_encryption" && -n "$cloud_endpoint" && -n "$client_entry_port" ]]; then
-    encoded="$(urlencode "$vless_encryption")"
-    client_link="vless://${entry_uuid}@${cloud_endpoint}:${client_entry_port}?type=raw&security=none&encryption=${encoded}#Leikwan-WG-Xray-Reality"
   else
-    client_link="$(env_file_get "$CLIENT_LINK_FILE" CLIENT_LINK 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" CLIENT_LINK 2>/dev/null || true)"
+    echo "请粘贴从 ${label} 复制的整段配对码，包含 BEGIN/END 行。"
+    echo "粘贴完成后按回车，遇到 END 行会自动继续。"
+    echo "如果只粘贴 KEY=VALUE 内容，请用空行结束。"
+    while IFS= read -r line; do
+      line="$(normalize_menu_choice "$line")"
+      if [[ -z "$line" ]]; then
+        (( has_content == 1 )) && break
+        continue
+      fi
+      has_content=1
+      printf '%s\n' "$line" >>"$raw"
+      [[ "$line" == "$end_marker" ]] && break
+      [[ "$line" == "${base64_key}="* || "$line" == LEIKWAN_EASYTIER_*_BASE64=* ]] && break
+      [[ "$line" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#line} >= 40)) && break
+    done
   fi
-  content="$(cat <<EOF
-ENTRY_UUID=${entry_uuid}
-VLESSENC_ENCRYPTION=${vless_encryption}
-CLOUD_ENDPOINT=${cloud_endpoint}
-CLOUD_WG_PORT=${cloud_port}
-CLIENT_ENTRY_PORT=${client_entry_port}
-LANDING_ADDRESS=${landing_address}
-LANDING_PORT=${landing_port}
-LANDING_UUID=${landing_uuid}
-LANDING_PUBLIC_KEY=${landing_public_key}
-LANDING_SHORT_ID=${landing_short_id}
-LANDING_SERVER_NAME=${landing_server_name}
-LANDING_FLOW=${landing_flow}
-ACTIVE_LANDING_NAME=${landing_name}
-ACTIVE_LANDING_ADDRESS=${landing_address}
-ACTIVE_LANDING_PORT=${landing_port}
-CLIENT_LINK=${client_link}
-EOF
-)"
-  write_output_file "leikwan-relay" "$content"
-  link_content="$(cat <<EOF
-ENTRY_UUID=${entry_uuid}
-VLESSENC_ENCRYPTION=${vless_encryption}
-CLOUD_ENDPOINT=${cloud_endpoint}
-CLIENT_ENTRY_PORT=${client_entry_port}
-LANDING_ADDRESS=${landing_address}
-LANDING_PORT=${landing_port}
-ACTIVE_LANDING_NAME=${landing_name}
-ACTIVE_LANDING_ADDRESS=${landing_address}
-ACTIVE_LANDING_PORT=${landing_port}
-CLIENT_LINK=${client_link}
-EOF
-)"
-  write_output_file "client-link" "$link_content"
+  parse_pairing_raw "$raw" "$dest" "$base64_key"
+  rm -f "$raw"
 }
 
-landing_profile_required_value() {
-  local file="$1"
-  local key="$2"
-  local value
-  value="$(landing_env_get "$file" "$key")"
-  [[ -n "$value" ]] || {
-    fail "落地机 profile 缺少必填字段：${key}"
+require_pairing_fields() {
+  local file="$1" missing=() key value
+  shift
+  for key in "$@"; do
+    value="$(env_file_get "$file" "$key")"
+    [[ -n "$value" ]] || missing+=("$key")
+  done
+  if ((${#missing[@]} > 0)); then
+    fail "配对码缺少 ${missing[*]}，请重新复制完整内容。"
     return 1
-  }
-  printf '%s' "$value"
+  fi
 }
 
-landing_profile_validate_required() {
-  local file="$1"
-  local key
-  for key in LANDING_ADDRESS LANDING_PORT LANDING_UUID LANDING_PUBLIC_KEY LANDING_SHORT_ID LANDING_SERVER_NAME; do
-    landing_profile_required_value "$file" "$key" >/dev/null || return 1
+require_env_fields() {
+  local file="$1" missing=() key value
+  shift
+  for key in "$@"; do
+    value="$(env_file_get "$file" "$key")"
+    [[ -n "$value" ]] || missing+=("$key")
+  done
+  if ((${#missing[@]} > 0)); then
+    fail "配置码缺少 ${missing[*]}，请重新复制完整内容。"
+    return 1
+  fi
+}
+
+machine_has_relay_network() {
+  local role
+  role="$(env_file_get "$NETWORK_ENV" ROLE)"
+  [[ "$role" == "leikwan-relay" ]] && return 0
+  role="$(env_file_get "$NETWORK_PAIRING_FILE" ROLE)"
+  [[ "$role" == "leikwan-relay" ]]
+}
+
+machine_has_entry_service() {
+  if compgen -G "/etc/systemd/system/easytier-entry-*.service" >/dev/null; then
+    return 0
+  fi
+  systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | grep -q .
+}
+
+guard_entry_join_role() {
+  if machine_has_relay_network; then
+    warn "当前机器看起来是 B 中转机，不应该执行 A 公网入口部署。"
+    warn "正确操作是选择：3. B 中转机：粘贴入口码并完成接入。"
+    prompt_yes_no "是否仍然继续？" "N" || return 1
+  fi
+}
+
+guard_relay_join_role() {
+  if machine_has_entry_service; then
+    warn "当前机器看起来是 A 公网入口，不应该执行 B 接入。"
+    warn "正确操作是在 B 中转机执行该步骤。"
+    prompt_yes_no "是否仍然继续？" "N" || return 1
+  fi
+}
+
+entries_rows() {
+  [[ -f "$ENTRIES_TSV" ]] || return 0
+  awk -F'\t' 'NF && $1 !~ /^#/ {print}' "$ENTRIES_TSV"
+}
+
+forwards_rows() {
+  [[ -f "$FORWARDS_TSV" ]] || return 0
+  awk -F'\t' 'NF && $1 !~ /^#/ {print}' "$FORWARDS_TSV"
+}
+
+forwards_rows_usv() {
+  forwards_rows | awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} NF>=8 {print $1,$2,$3,$4,$5,$6,$7,$8}'
+}
+
+validate_forwards_tsv() {
+  local file="${1:-$FORWARDS_TSV}"
+  [[ "$file" == "$FORWARDS_TSV" ]] && ensure_tsv_files
+  [[ -f "$file" ]] || { fail "forwards.tsv 不存在：${file}"; return 1; }
+  local line_no=0 bad=0 line nf name entry_port target_host target_port _out_iface _route_table enabled _comment
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_no=$((line_no + 1))
+    line="${line%$'\r'}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    nf="$(awk -F'\t' '{print NF}' <<<"$line")"
+    if [[ "$nf" != "8" ]]; then
+      fail "第 ${line_no} 行字段数错误：期望 8 列，实际 ${nf} 列。"
+      echo "当前行内容：${line}" >&2
+      echo "请使用 TAB 分隔字段；建议通过菜单 添加转发目标 生成，不要用空格对齐。" >&2
+      bad=1
+      continue
+    fi
+    name="$(awk -F'\t' '{print $1}' <<<"$line")"
+    entry_port="$(awk -F'\t' '{print $2}' <<<"$line")"
+    target_host="$(awk -F'\t' '{print $3}' <<<"$line")"
+    target_port="$(awk -F'\t' '{print $4}' <<<"$line")"
+    enabled="$(awk -F'\t' '{print $7}' <<<"$line")"
+    if [[ -z "$name" || -z "$entry_port" || -z "$target_host" || -z "$target_port" || -z "$enabled" ]]; then
+      fail "第 ${line_no} 行存在必填字段为空。"
+      echo "当前行内容：${line}" >&2
+      bad=1
+      continue
+    fi
+    if ! is_port "$entry_port"; then
+      fail "第 ${line_no} 行 entry_port 非法：${entry_port}"
+      bad=1
+    fi
+    if ! is_port "$target_port"; then
+      fail "第 ${line_no} 行 target_port 非法：${target_port}"
+      bad=1
+    fi
+    case "$enabled" in
+      true|false) ;;
+      *) fail "第 ${line_no} 行 enabled 必须是 true 或 false：${enabled}"; bad=1 ;;
+    esac
+  done <"$file"
+  (( bad == 0 ))
+}
+
+enabled_forwards_count() {
+  validate_forwards_tsv >/dev/null || return 1
+  forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}'
+}
+
+nft_has_dnat_rules() {
+  nft list table inet leikwan_forward 2>/dev/null | grep -q ' dnat '
+}
+
+nft_has_cloud_dnat() {
+  local relay_ip="$1" entry_port="$2"
+  nft list table inet leikwan_forward 2>/dev/null |
+    grep -Fq "tcp dport ${entry_port} dnat ip to ${relay_ip}:${entry_port}"
+}
+
+nft_has_relay_dnat() {
+  local entry_port="$1" target_ip="$2" target_port="$3"
+  nft list table inet leikwan_forward 2>/dev/null |
+    grep -Fq "tcp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
+}
+
+entry_exists() {
+  local name="$1"
+  entries_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}'
+}
+
+forward_exists() {
+  local name="$1"
+  forwards_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}'
+}
+
+replace_entry_row() {
+  local row="$1" name tmp
+  name="${row%%$'\t'*}"
+  ensure_tsv_files
+  tmp="$(mktemp)"
+  awk -F'\t' -v n="$name" '$1==n {next} {print}' "$ENTRIES_TSV" >"$tmp"
+  printf '%s\n' "$row" >>"$tmp"
+  write_file "$ENTRIES_TSV" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+}
+
+replace_forward_row() {
+  local row="$1" name entry_port _rest tmp
+  IFS=$'\t' read -r name entry_port _rest <<<"$row"
+  ensure_tsv_files
+  tmp="$(mktemp)"
+  awk -F'\t' -v n="$name" -v p="$entry_port" '$1==n || $2==p {next} {print}' "$FORWARDS_TSV" >"$tmp"
+  printf '%s\n' "$row" >>"$tmp"
+  write_file "$FORWARDS_TSV" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+}
+
+quick_generate_network_pairing() {
+  need_root_unless_dry_run
+  ensure_base_dirs
+  install_packages openssl coreutils
+  local network_name network_secret suggested_name suggested_ip suggested_proto suggested_port
+  network_name="leikwan-$(random_hex 4)"
+  network_secret="$(random_hex 32)"
+  suggested_name="aliyun"
+  suggested_ip="$ENTRY_ET_IP_DEFAULT"
+  suggested_proto="$EASYTIER_PROTOCOL_DEFAULT"
+  suggested_port="$EASYTIER_PORT_DEFAULT"
+  write_file "$NETWORK_ENV" "ROLE=leikwan-relay
+EASYTIER_NETWORK_NAME=${network_name}
+EASYTIER_NETWORK_SECRET=${network_secret}
+EASYTIER_LISTEN_PORT=${suggested_port}
+EASYTIER_PROTOCOL=${suggested_proto}
+EASYTIER_RELAY_ET_IP=${RELAY_ET_IP}" 600
+  write_file "$NETWORK_PAIRING_FILE" "PAIRING_VERSION=0.4
+ROLE=leikwan-relay
+EASYTIER_NETWORK_NAME=${network_name}
+EASYTIER_NETWORK_SECRET=${network_secret}
+RELAY_ET_IP=${RELAY_ET_IP}
+SUGGESTED_ENTRY_NAME=${suggested_name}
+SUGGESTED_ENTRY_ET_IP=${suggested_ip}
+SUGGESTED_EASYTIER_PROTOCOL=${suggested_proto}
+SUGGESTED_EASYTIER_PORT=${suggested_port}" 600
+  print_pairing_code "复制下面整段到 A 公网入口机" \
+    "-----BEGIN LEIKWAN EASYTIER NETWORK-----" \
+    "-----END LEIKWAN EASYTIER NETWORK-----" \
+    "$NETWORK_PAIRING_FILE" \
+    "LEIKWAN_EASYTIER_NETWORK_BASE64"
+  info "下一步：去 A 公网入口机，执行第 2 项，粘贴上面的网络码。"
+}
+
+quick_deploy_entry_from_network_pairing() {
+  need_root_unless_dry_run
+  ensure_base_dirs
+  guard_entry_join_role || return 0
+  local source="${1:-}" tmp role network_name network_secret relay_ip name et_ip proto port public_host detected service service_name
+  tmp="$(mktemp)"
+  read_pairing_code "$tmp" "B 中转机" "-----END LEIKWAN EASYTIER NETWORK-----" "LEIKWAN_EASYTIER_NETWORK_BASE64" "$source" || { rm -f "$tmp"; return 1; }
+  role="$(env_file_get "$tmp" ROLE)"
+  case "$role" in
+    leikwan-relay) ;;
+    cloud-entry) fail "你粘贴的是入口码，需要在 B 机器选择第 3 项。"; rm -f "$tmp"; return 1 ;;
+    *) fail "这不是 EasyTier 网络码，请确认粘贴的是 B 生成的那段。"; rm -f "$tmp"; return 1 ;;
+  esac
+  require_pairing_fields "$tmp" PAIRING_VERSION ROLE EASYTIER_NETWORK_NAME EASYTIER_NETWORK_SECRET RELAY_ET_IP SUGGESTED_ENTRY_NAME SUGGESTED_ENTRY_ET_IP SUGGESTED_EASYTIER_PROTOCOL SUGGESTED_EASYTIER_PORT || { rm -f "$tmp"; return 1; }
+  network_name="$(env_file_get "$tmp" EASYTIER_NETWORK_NAME)"
+  network_secret="$(env_file_get "$tmp" EASYTIER_NETWORK_SECRET)"
+  relay_ip="$(env_file_get "$tmp" RELAY_ET_IP)"
+  name="$(safe_name "$(env_file_get "$tmp" SUGGESTED_ENTRY_NAME)")"
+  et_ip="$(env_file_get "$tmp" SUGGESTED_ENTRY_ET_IP)"
+  proto="$(env_file_get "$tmp" SUGGESTED_EASYTIER_PROTOCOL)"
+  port="$(env_file_get "$tmp" SUGGESTED_EASYTIER_PORT)"
+  port="$(normalize_easytier_port "$port")" || { rm -f "$tmp"; return 1; }
+  detected="$(detect_public_ipv4 || true)"
+  public_host="$(prompt_value "请输入本机公网 IP / 域名，用于 B 连接 EasyTier" "$detected")"
+  [[ -n "$public_host" ]] || public_host="$(prompt_host "请输入本机公网 IP / 域名")"
+  confirm_summary "entry 快速部署摘要" "入口名称：${name}\n公网地址：${public_host}\nEasyTier IP：${et_ip}\nEasyTier 监听：${proto}/${port}\nRelay EasyTier IP：${relay_ip}" || { rm -f "$tmp"; return 0; }
+  write_file "$NETWORK_ENV" "ROLE=cloud-entry
+ENTRY_NAME=${name}
+ENTRY_ET_IP=${et_ip}
+EASYTIER_NETWORK_NAME=${network_name}
+EASYTIER_NETWORK_SECRET=${network_secret}
+EASYTIER_LISTEN_PORT=${port}
+EASYTIER_PROTOCOL=${proto}
+EASYTIER_RELAY_ET_IP=${relay_ip}" 600
+  install_easytier_binary || { rm -f "$tmp"; return 1; }
+  service="$(render_entry_service "$name" "$et_ip" "$proto" "$port")" || { rm -f "$tmp"; return 1; }
+  service_name="$(entry_service_name "$name")"
+  write_file "$(entry_service_path "$name")" "$service" 644
+  start_service_file "$service_name"
+  wait_et_ip "$et_ip" 15 || warn "15 秒内未检测到 EasyTier IP：${et_ip}"
+  if ss -lntH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then ok "EasyTier TCP ${port} 已监听"; else warn "EasyTier TCP ${port} 未监听"; fi
+  replace_entry_row "${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"100"$'\t'"true"
+  write_file "$ENTRY_PAIRING_FILE" "PAIRING_VERSION=0.4
+ROLE=cloud-entry
+ENTRY_NAME=${name}
+ENTRY_PUBLIC_HOST=${public_host}
+ENTRY_ET_IP=${et_ip}
+EASYTIER_PROTOCOL=${proto}
+EASYTIER_PORT=${port}
+WEIGHT=100
+ENABLED=true" 600
+  rm -f "$tmp"
+  print_pairing_code "复制下面整段回 B 中转机" \
+    "-----BEGIN LEIKWAN EASYTIER ENTRY-----" \
+    "-----END LEIKWAN EASYTIER ENTRY-----" \
+    "$ENTRY_PAIRING_FILE" \
+    "LEIKWAN_EASYTIER_ENTRY_BASE64"
+  info "下一步：回到 B 中转机，执行第 3 项，粘贴上面的入口码。"
+}
+
+quick_deploy_relay_from_entry_pairing() {
+  need_root_unless_dry_run
+  ensure_base_dirs
+  guard_relay_join_role || return 0
+  [[ -f "$NETWORK_ENV" ]] || { fail "缺少 ${NETWORK_ENV}，请先在 B 执行 pair relay-init。"; return 1; }
+  local source="${1:-}" tmp role name public_host et_ip proto port weight enabled row service
+  tmp="$(mktemp)"
+  read_pairing_code "$tmp" "A 公网入口机" "-----END LEIKWAN EASYTIER ENTRY-----" "LEIKWAN_EASYTIER_ENTRY_BASE64" "$source" || { rm -f "$tmp"; return 1; }
+  role="$(env_file_get "$tmp" ROLE)"
+  case "$role" in
+    cloud-entry) ;;
+    leikwan-relay) fail "你粘贴的是网络码，需要在 A 机器选择第 2 项。"; rm -f "$tmp"; return 1 ;;
+    *) fail "这不是 EasyTier 入口码，请确认粘贴的是 A 生成的那段。"; rm -f "$tmp"; return 1 ;;
+  esac
+  require_pairing_fields "$tmp" PAIRING_VERSION ROLE ENTRY_NAME ENTRY_PUBLIC_HOST ENTRY_ET_IP EASYTIER_PROTOCOL EASYTIER_PORT || { rm -f "$tmp"; return 1; }
+  name="$(safe_name "$(env_file_get "$tmp" ENTRY_NAME)")"
+  public_host="$(env_file_get "$tmp" ENTRY_PUBLIC_HOST)"
+  et_ip="$(env_file_get "$tmp" ENTRY_ET_IP)"
+  proto="$(env_file_get "$tmp" EASYTIER_PROTOCOL)"
+  port="$(env_file_get "$tmp" EASYTIER_PORT)"
+  port="$(normalize_easytier_port "$port")" || { rm -f "$tmp"; return 1; }
+  weight="$(env_file_get "$tmp" WEIGHT)"; weight="${weight:-100}"
+  enabled="$(env_file_get "$tmp" ENABLED)"; enabled="${enabled:-true}"
+  confirm_summary "relay 接入入口摘要" "入口名称：${name}\n入口公网：${public_host}:${port}\n入口 EasyTier IP：${et_ip}\nRelay EasyTier IP：${RELAY_ET_IP}" || { rm -f "$tmp"; return 0; }
+  row="${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
+  replace_entry_row "$row"
+  install_easytier_binary || { rm -f "$tmp"; return 1; }
+  service="$(render_relay_service)" || { rm -f "$tmp"; return 1; }
+  write_file "$EASYTIER_RELAY_SERVICE" "$service" 644
+  start_service_file "$EASYTIER_RELAY_SERVICE_NAME"
+  wait_et_ip "$RELAY_ET_IP" 15 || warn "15 秒内未检测到 Relay EasyTier IP：${RELAY_ET_IP}"
+  if tcp_reachable "$public_host" "$port"; then ok "入口 EasyTier TCP 可达：${public_host}:${port}"; else warn "入口 EasyTier TCP 不可达：${public_host}:${port}"; fi
+  if ping -c 2 "$et_ip" >/dev/null 2>&1; then ok "EasyTier ping ${et_ip} 成功"; else warn "EasyTier peer 可能已连接，但 ping ${et_ip} 暂不通。"; fi
+  ok "已接入入口 ${name}。"
+  info "下一步：添加转发目标并应用 nftables。"
+  rm -f "$tmp"
+}
+
+pairing_status() {
+  echo "network.env：$([[ -f "$NETWORK_ENV" ]] && echo 存在 || echo 不存在) ${NETWORK_ENV}"
+  echo "network code：$([[ -f "$NETWORK_PAIRING_FILE" ]] && echo 存在 || echo 不存在) ${NETWORK_PAIRING_FILE}"
+  echo "entry code：$([[ -f "$ENTRY_PAIRING_FILE" ]] && echo 存在 || echo 不存在) ${ENTRY_PAIRING_FILE}"
+  echo "entries："
+  list_entries
+}
+
+pairing_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}快速配对${RESET}"
+    echo "1. 在 B 运行：生成给 A 的网络码"
+    echo "2. 在 A 运行：粘贴 B 的网络码，部署 A"
+    echo "3. 在 B 运行：粘贴 A 的入口码，完成接入"
+    echo "4. 查看 EasyTier 配对状态"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) quick_generate_network_pairing ;;
+      2) quick_deploy_entry_from_network_pairing ;;
+      3) quick_deploy_relay_from_entry_pairing ;;
+      4) pairing_status ;;
+      0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
+      *) echo "无效选择。" ;;
+    esac
   done
 }
 
-xray_actual_landing_value() {
-  local key="$1"
-  case "$key" in
-    LANDING_ADDRESS) xray_relay_outbound_field address ;;
-    LANDING_PORT) xray_relay_outbound_field port ;;
-    LANDING_UUID) xray_relay_outbound_field id ;;
-    LANDING_PUBLIC_KEY) xray_relay_outbound_field publicKey ;;
-    LANDING_SHORT_ID) xray_relay_outbound_field shortId ;;
-    LANDING_SERVER_NAME) xray_relay_outbound_field serverName ;;
-    LANDING_FLOW) xray_relay_outbound_field flow ;;
+add_entry() {
+  need_root_unless_dry_run
+  ensure_tsv_files
+  local name public_host et_ip proto port weight enabled row
+  name="$(safe_name "$(prompt_value "入口名称，例如 aliyun / tencent / home")")"
+  entry_exists "$name" && warn "入口已存在，将覆盖。"
+  public_host="$(prompt_host "入口公网 IP 或域名")"
+  et_ip="$(prompt_value "入口 EasyTier IP" "$ENTRY_ET_IP_DEFAULT")"
+  proto="$(prompt_value "EasyTier 协议" "$EASYTIER_PROTOCOL_DEFAULT")"
+  port="$(prompt_port "EasyTier 监听端口" "$EASYTIER_PORT_DEFAULT")"
+  confirm_easytier_port "$port" || return 0
+  weight="$(prompt_value "权重" "100")"
+  enabled="$(prompt_value "是否启用 true/false" "true")"
+  row="${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
+  confirm_summary "添加入口摘要" "name=${name}\npublic_host=${public_host}\net_ip=${et_ip}\nprotocol=${proto}\nport=${port}\nweight=${weight}\nenabled=${enabled}" || return 0
+  replace_entry_row "$row"
+}
+
+list_entries() {
+  ensure_tsv_files
+  printf '%-14s %-24s %-14s %-8s %-8s %-8s %s\n' "name" "public_host" "et_ip" "proto" "port" "weight" "enabled"
+  entries_rows | sort -t$'\t' -k6,6nr | awk -F'\t' '{printf "%-14s %-24s %-14s %-8s %-8s %-8s %s\n",$1,$2,$3,$4,$5,$6,$7}'
+}
+
+delete_entry() {
+  need_root_unless_dry_run
+  local name tmp
+  name="$(safe_name "$(prompt_value "要删除的入口名称")")"
+  entry_exists "$name" || { warn "入口不存在。"; return 0; }
+  prompt_yes_no "确认删除入口 ${name}？" "N" || return 0
+  tmp="$(mktemp)"
+  awk -F'\t' -v n="$name" '$1==n {next} {print}' "$ENTRIES_TSV" >"$tmp"
+  write_file "$ENTRIES_TSV" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+}
+
+set_entry_enabled() {
+  need_root_unless_dry_run
+  local name enabled row
+  name="$(safe_name "$(prompt_value "入口名称")")"
+  enabled="$(prompt_value "enabled true/false" "true")"
+  row="$(entries_rows | awk -F'\t' -v n="$name" -v e="$enabled" 'BEGIN{OFS="\t"} $1==n {$7=e; print; found=1} END{exit !found}')"
+  [[ -n "$row" ]] || { warn "入口不存在。"; return 0; }
+  replace_entry_row "$row"
+}
+
+set_entry_weight() {
+  need_root_unless_dry_run
+  local name weight row
+  name="$(safe_name "$(prompt_value "入口名称")")"
+  weight="$(prompt_value "新权重" "100")"
+  [[ "$weight" =~ ^[0-9]+$ ]] || { warn "权重必须是非负整数。"; return 0; }
+  row="$(entries_rows | awk -F'\t' -v n="$name" -v w="$weight" 'BEGIN{OFS="\t"} $1==n {$6=w; print; found=1} END{exit !found}')"
+  [[ -n "$row" ]] || { warn "入口不存在。"; return 0; }
+  replace_entry_row "$row"
+}
+
+test_entries() {
+  local name public_host et_ip proto port _weight enabled
+  while IFS=$'\t' read -r name public_host et_ip proto port _weight enabled; do
+    [[ "$enabled" == "true" ]] || continue
+    echo
+    echo "入口：${name}"
+    if tcp_reachable "$public_host" "$port"; then
+      ok "${proto} ${public_host}:${port} 可达"
+    else
+      warn "${proto} ${public_host}:${port} 不可达"
+    fi
+    ping -c 2 "$et_ip" || true
+  done < <(entries_rows)
+}
+
+apply_easytier_entry_services() {
+  need_root_unless_dry_run
+  install_easytier_binary
+  local name public_host et_ip proto port weight enabled service
+  while IFS=$'\t' read -r name public_host et_ip proto port weight enabled; do
+    [[ "$enabled" == "true" ]] || continue
+    service="$(render_entry_service "$name" "$et_ip" "$proto" "$port")" || return 1
+    write_file "$(entry_service_path "$name")" "$service" 644
+    start_service_file "$(entry_service_name "$name")"
+    ok "EasyTier entry 已配置：${name} ${et_ip} ${proto}/${port} weight=${weight}"
+  done < <(entries_rows)
+}
+
+apply_easytier_relay_service() {
+  need_root_unless_dry_run
+  install_easytier_binary
+  local service
+  service="$(render_relay_service)" || return 1
+  write_file "$EASYTIER_RELAY_SERVICE" "$service" 644
+  start_service_file "$EASYTIER_RELAY_SERVICE_NAME"
+  ok "EasyTier relay 已配置。"
+}
+
+reserved_entry_port() {
+  case "$1" in
+    22|80|443|8301|11010) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-landing_active_matches_xray() {
-  local file
-  file="$(active_landing_file 2>/dev/null || true)"
-  [[ -n "$file" && -f "$file" ]] || return 1
-  [[ "$(landing_env_get "$file" LANDING_ADDRESS)" == "$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)" ]] || return 1
-  [[ "$(landing_env_get "$file" LANDING_PORT)" == "$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)" ]] || return 1
-  [[ "$(landing_env_get "$file" LANDING_UUID)" == "$(xray_actual_landing_value LANDING_UUID 2>/dev/null || true)" ]] || return 1
-}
-
-landing_report_active_consistency() {
-  local mode="${1:-concise}"
-  local file current_name current_address current_port current_uuid xray_address xray_port xray_uuid
-  file="$(active_landing_file 2>/dev/null || true)"
-  xray_address="$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)"
-  xray_port="$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)"
-  xray_uuid="$(xray_actual_landing_value LANDING_UUID 2>/dev/null || true)"
-  if [[ -z "$file" || ! -f "$file" ]]; then
-    if [[ -n "$xray_address" && -n "$xray_port" ]]; then
-      validate_report info "未设置 current landing；Xray 实际 outbound：${xray_address}:${xray_port}"
-    fi
-    return 0
-  fi
-  current_name="$(landing_env_get "$file" LANDING_NAME)"
-  current_address="$(landing_env_get "$file" LANDING_ADDRESS)"
-  current_port="$(landing_env_get "$file" LANDING_PORT)"
-  current_uuid="$(landing_env_get "$file" LANDING_UUID)"
-  if [[ -n "$xray_address" && "$current_address" == "$xray_address" && "$current_port" == "$xray_port" && "$current_uuid" == "$xray_uuid" ]]; then
-    validate_report ok "active landing 与 Xray outbound 一致：${current_name} / ${current_address}:${current_port}"
+route_table_name_from_id() {
+  local table="$1"
+  [[ -n "$table" ]] || return 1
+  if [[ "$table" =~ ^[0-9]+$ && -f "$PBR_RT_TABLES" ]]; then
+    awk -v id="$table" '$1==id {print $2; exit}' "$PBR_RT_TABLES"
   else
-    validate_report warn "active landing 与 Xray 实际 outbound 不一致"
-    if [[ "$mode" == "verbose" ]]; then
-      echo "current.env：${current_name:-unknown} / ${current_address:-unknown}:${current_port:-unknown} / ${current_uuid:-unknown}"
-      echo "Xray outbound：${xray_address:-unknown}:${xray_port:-unknown} / ${xray_uuid:-unknown}"
-    else
-      echo "current.env：${current_name:-unknown} / ${current_address:-unknown}:${current_port:-unknown}"
-      echo "Xray outbound：${xray_address:-unknown}:${xray_port:-unknown}"
-    fi
-    echo "修复：多落地机管理 -> 切换当前落地机 -> 选择 ${current_name:-目标} 重新应用"
-    echo "或者：多落地机管理 -> 从当前 Xray 配置导入为落地机"
+    printf '%s' "$table"
   fi
 }
 
-switch_landing_by_name() {
-  need_root_unless_dry_run
-  init_log
+detect_forward_route_defaults() {
+  local host="$1" target_ip route_line dev table
+  target_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+  [[ -n "$target_ip" ]] || target_ip="$host"
+  route_line="$(ip route get "$target_ip" 2>/dev/null | head -n 1 || true)"
+  dev="$(awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}' <<<"$route_line")"
+  table="$(awk '{for (i=1; i<=NF; i++) if ($i=="table") {print $(i+1); exit}}' <<<"$route_line")"
+  table="$(route_table_name_from_id "$table" 2>/dev/null || true)"
+  printf '%s\t%s\n' "$dev" "$table"
+}
+
+forward_code_path() {
   local name="$1"
-  local file address port uuid public_key short_id server_name flow entry_uuid decryption
-  local current_file current_name current_address current_port xray_address xray_port xray_uuid summary tmp_new tmp_log backup_path timestamp xray_config_dir
-  local restart_ok=0 config_check_ok=0
-  name="$(profile_safe_name "$name")"
-  file="$(landing_file_for_name "$name")"
-  [[ -f "$file" ]] || {
-    fail "未找到落地机 profile：${file}"
-    return 1
-  }
-  landing_profile_validate_required "$file" || return 1
-  name="$(landing_env_get "$file" LANDING_NAME)"
-  address="$(landing_profile_required_value "$file" LANDING_ADDRESS)" || return 1
-  port="$(landing_profile_required_value "$file" LANDING_PORT)" || return 1
-  uuid="$(landing_profile_required_value "$file" LANDING_UUID)" || return 1
-  public_key="$(landing_profile_required_value "$file" LANDING_PUBLIC_KEY)" || return 1
-  short_id="$(landing_profile_required_value "$file" LANDING_SHORT_ID)" || return 1
-  server_name="$(landing_profile_required_value "$file" LANDING_SERVER_NAME)" || return 1
-  flow="$(landing_env_get "$file" LANDING_FLOW)"
-  flow="${flow:-$LANDING_FLOW_DEFAULT}"
-  is_port "$port" || {
-    fail "LANDING_PORT 不是有效端口：${port}"
-    return 1
-  }
-  entry_uuid="$(xray_relay_inbound_field id 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" ENTRY_UUID 2>/dev/null || true)"
-  decryption="$(xray_relay_inbound_field decryption 2>/dev/null || true)"
-  [[ -n "$entry_uuid" && -n "$decryption" ]] || {
-    fail "无法从当前 Xray 配置读取 ENTRY_UUID / VLESSENC_DECRYPTION，不能安全切换。"
-    return 1
-  }
-  [[ -f "$XRAY_CONFIG" ]] || {
-    fail "未找到 ${XRAY_CONFIG}，不能切换。"
-    return 1
-  }
-  command -v jq >/dev/null 2>&1 || {
-    fail "需要 jq 事务化修改 Xray 配置。"
-    return 1
-  }
-  current_file="$(active_landing_file 2>/dev/null || true)"
-  current_name=""
-  current_address=""
-  current_port=""
-  if [[ -n "$current_file" && -f "$current_file" ]]; then
-    current_name="$(landing_env_get "$current_file" LANDING_NAME)"
-    current_address="$(landing_env_get "$current_file" LANDING_ADDRESS)"
-    current_port="$(landing_env_get "$current_file" LANDING_PORT)"
-  fi
-  xray_address="$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)"
-  xray_port="$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)"
-  xray_uuid="$(xray_actual_landing_value LANDING_UUID 2>/dev/null || true)"
-  summary="current.env 记录：${current_name:-未设置} / ${current_address:-unknown}:${current_port:-unknown}\nXray 实际 outbound：${xray_address:-unknown}:${xray_port:-unknown}\n目标落地机：${name} / ${address}:${port}\n\n动作：\n- 备份 Xray 配置\n- 修改 Xray outbound 到目标落地\n- xray run -test\n- nc 测试目标 LANDING_ADDRESS:LANDING_PORT\n- 通过后重启 ${XRAY_LEIKWAN_SERVICE_NAME}\n- 更新 current.env / outputs / client-link.txt\n失败：自动回滚旧配置"
-  if [[ -n "$current_file" && -f "$current_file" ]] && ! landing_active_matches_xray; then
-    summary="${summary}\n\n警告：\ncurrent.env 与 Xray 实际 outbound 不一致。\n当前真正生效的是 Xray outbound。\n本次切换成功后会重新同步 current.env。"
-  fi
-  if ! confirm_summary "切换当前落地机摘要" "$summary"; then
-    return 0
-  fi
-
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将生成临时 Xray 配置、测试、nc、重启并在成功后更新 current/outputs。"
-    return 0
-  fi
-
-  timestamp="$(date '+%Y%m%d-%H%M%S')"
-  install -d -m 700 "$BACKUP_DIR"
-  backup_path="${BACKUP_DIR}/xray-config-before-switch-${timestamp}.json"
-  cp -a "$XRAY_CONFIG" "$backup_path"
-  xray_config_dir="$(dirname "$XRAY_CONFIG")"
-  tmp_new="$(mktemp "${xray_config_dir}/config.tmp.XXXXXX.json")"
-  tmp_log="$(mktemp)"
-  if ! jq \
-    --arg address "$address" \
-    --argjson port "$port" \
-    --arg uuid "$uuid" \
-    --arg flow "$flow" \
-    --arg publicKey "$public_key" \
-    --arg shortId "$short_id" \
-    --arg serverName "$server_name" \
-    '(.outbounds[] | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .settings.vnext[0].address) = $address
-     | (.outbounds[] | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .settings.vnext[0].port) = $port
-     | (.outbounds[] | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .settings.vnext[0].users[0].id) = $uuid
-     | (.outbounds[] | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .settings.vnext[0].users[0].flow) = $flow
-     | (.outbounds[] | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .streamSettings.realitySettings.publicKey) = $publicKey
-     | (.outbounds[] | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .streamSettings.realitySettings.shortId) = $shortId
-     | (.outbounds[] | select(.tag=="proxy" or .tag=="landing-reality-out" or .protocol=="vless") | .streamSettings.realitySettings.serverName) = $serverName' \
-    "$XRAY_CONFIG" >"$tmp_new"; then
-    fail "生成新 Xray 配置失败，未修改现有配置。"
-    rm -f "$tmp_new" "$tmp_log"
-    return 1
-  fi
-
-  if ! jq empty "$tmp_new" >"$tmp_log" 2>&1; then
-    fail "临时 Xray 配置不是有效 JSON，未切换。"
-    echo "临时配置：${tmp_new}"
-    echo "提示：已保留原 Xray 配置，未重启 ${XRAY_LEIKWAN_SERVICE_NAME}。"
-    cat "$tmp_log"
-    rm -f "$tmp_new" "$tmp_log"
-    return 1
-  fi
-
-  if "$XRAY_BIN" run -test -config "$tmp_new" >"$tmp_log" 2>&1; then
-    ok "Xray 临时配置测试通过。"
-  else
-    fail "Xray 临时配置测试失败，未切换。"
-    echo "临时配置：${tmp_new}"
-    echo "提示：已保留原 Xray 配置，未重启 ${XRAY_LEIKWAN_SERVICE_NAME}。"
-    cat "$tmp_log"
-    rm -f "$tmp_new" "$tmp_log"
-    return 1
-  fi
-
-  if command -v nc >/dev/null 2>&1; then
-    if nc -vz -w 3 "$address" "$port" >"$tmp_log" 2>&1; then
-      ok "目标落地 TCP 可达：${address}:${port}"
-    else
-      fail "目标落地 TCP 不可达，未切换：$(tr '\n' ' ' <"$tmp_log")"
-      rm -f "$tmp_new" "$tmp_log"
-      return 1
-    fi
-  else
-    fail "未安装 nc，无法执行 LANDING_ADDRESS:LANDING_PORT 连通性验证，未切换。"
-    rm -f "$tmp_new" "$tmp_log"
-    return 1
-  fi
-
-  chmod 644 "$tmp_new"
-  mv -f "$tmp_new" "$XRAY_CONFIG"
-  tmp_new=""
-  if systemctl restart "${XRAY_LEIKWAN_SERVICE_NAME}.service" >"$tmp_log" 2>&1; then
-    restart_ok=1
-  fi
-  if (( restart_ok == 1 )) && systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service"; then
-    ok "${XRAY_LEIKWAN_SERVICE_NAME}.service 已重启。"
-  else
-    fail "重启 ${XRAY_LEIKWAN_SERVICE_NAME}.service 失败，开始回滚。$(tr '\n' ' ' <"$tmp_log")"
-    cp -a "$backup_path" "$XRAY_CONFIG"
-    if systemctl restart "${XRAY_LEIKWAN_SERVICE_NAME}.service" >/dev/null 2>&1 && systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service"; then
-      warn "旧配置已恢复，${XRAY_LEIKWAN_SERVICE_NAME}.service 已回到 active。"
-    else
-      warn "旧配置已复制回去，但服务恢复失败，请立即检查：journalctl -u ${XRAY_LEIKWAN_SERVICE_NAME} -e --no-pager"
-    fi
-    [[ -n "$tmp_new" ]] && rm -f "$tmp_new"
-    rm -f "$tmp_log"
-    return 1
-  fi
-
-  if wait_for_tcp_listen "$CLIENT_ENTRY_PORT_DEFAULT" "" 15; then
-    ok "端口监听已恢复：${CLIENT_ENTRY_PORT_DEFAULT}/tcp"
-  else
-    fail "重启后 15 秒内未检测到 ${CLIENT_ENTRY_PORT_DEFAULT}/tcp 监听，开始回滚。"
-    echo
-    echo "${BOLD}正式配置测试：${XRAY_BIN} run -test -config ${XRAY_CONFIG}${RESET}"
-    if "$XRAY_BIN" run -test -config "$XRAY_CONFIG"; then
-      config_check_ok=1
-    fi
-    echo
-    echo "${BOLD}服务状态：systemctl status ${XRAY_LEIKWAN_SERVICE_NAME} --no-pager -l${RESET}"
-    systemctl status "${XRAY_LEIKWAN_SERVICE_NAME}.service" --no-pager -l || true
-    echo
-    echo "${BOLD}当前监听：${RESET}"
-    ss -lntup || true
-    echo
-    echo "${BOLD}匹配监听：${RESET}"
-    ss -lntup 2>/dev/null | grep -E "(:${CLIENT_ENTRY_PORT_DEFAULT}|xray)" || true
-    echo
-    echo "${BOLD}最近日志：journalctl -u ${XRAY_LEIKWAN_SERVICE_NAME} -n 50 --no-pager${RESET}"
-    journalctl -u "${XRAY_LEIKWAN_SERVICE_NAME}.service" -n 50 --no-pager || true
-    if systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service" && (( config_check_ok == 1 )); then
-      warn "Xray 服务 active 且配置测试通过，但端口监听未出现，可能是监听地址或检测逻辑异常。"
-    fi
-    cp -a "$backup_path" "$XRAY_CONFIG"
-    if systemctl restart "${XRAY_LEIKWAN_SERVICE_NAME}.service" >/dev/null 2>&1 && systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service"; then
-      warn "旧配置已恢复，${XRAY_LEIKWAN_SERVICE_NAME}.service 已回到 active。"
-    else
-      warn "旧配置已复制回去，但服务恢复失败，请立即检查：journalctl -u ${XRAY_LEIKWAN_SERVICE_NAME} -e --no-pager"
-    fi
-    [[ -n "$tmp_new" ]] && rm -f "$tmp_new"
-    rm -f "$tmp_log"
-    return 1
-  fi
-
-  landing_set_active "$name"
-  write_relay_outputs_from_current "$file"
-  ok "已切换 active landing，并同步 current.env / outputs / client-link.txt。"
-  [[ -n "$tmp_new" ]] && rm -f "$tmp_new"
-  rm -f "$tmp_log"
+  printf '%s/forward-%s.env' "$OUTPUT_DIR" "$name"
 }
 
-landing_switch_current() {
-  local file name rc
-  select_landing_profile
-  rc=$?
-  if (( rc == 255 )); then
+write_forward_code_file() {
+  local file="$1" name="$2" entry_port="$3" target_host="$4" target_port="$5" enabled="$6" comment="$7"
+  write_file "$file" "FORWARD_VERSION=0.4
+NAME=${name}
+ENTRY_PORT=${entry_port}
+TARGET_HOST=${target_host}
+TARGET_PORT=${target_port}
+ENABLED=${enabled}
+COMMENT=${comment}" 600
+}
+
+print_forward_code() {
+  local file="$1"
+  echo
+  echo "=================================================="
+  echo "【复制下面整段到 A 公网入口机】"
+  echo "-----BEGIN LEIKWAN FORWARD-----"
+  cat "$file"
+  echo "-----END LEIKWAN FORWARD-----"
+  echo "=================================================="
+  echo
+  echo "【一行转发码，复制这一行也可以】"
+  printf 'LEIKWAN_FORWARD_BASE64=%s\n' "$(pairing_base64 "$file")"
+}
+
+parse_forward_raw() {
+  local raw="$1" dest="$2" line payload
+  : >"$dest"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(normalize_menu_choice "$line")"
+    [[ -n "$line" ]] || continue
+    case "$line" in
+      "-----BEGIN LEIKWAN FORWARD-----"|"-----END LEIKWAN FORWARD-----") continue ;;
+    esac
+    if [[ "$line" == LEIKWAN_FORWARD_BASE64=* ]]; then
+      payload="${line#*=}"
+      decode_env_base64 "$payload" "$dest" "FORWARD_VERSION" || { fail "一行转发码解码失败，请重新复制完整内容。"; return 1; }
+      return 0
+    fi
+    if [[ "$line" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#line} >= 30)); then
+      if decode_env_base64 "$line" "$dest" "FORWARD_VERSION"; then
+        return 0
+      fi
+    fi
+    if [[ "$line" == *=* ]]; then
+      printf '%s\n' "$line" >>"$dest"
+    fi
+  done <"$raw"
+  [[ -s "$dest" ]] || { fail "没有读到有效 FORWARD 转发码。"; return 1; }
+}
+
+read_forward_code() {
+  local dest="$1" source="${2:-}" raw line has_content=0
+  raw="$(mktemp)"
+  if [[ -n "$source" ]]; then
+    if [[ "$source" == "-" ]]; then
+      cat >"$raw"
+    elif [[ -f "$source" ]]; then
+      cp -a "$source" "$raw"
+    else
+      printf '%s\n' "$source" >"$raw"
+    fi
+  else
+    echo "请粘贴从 B 中转机复制的整段 FORWARD 转发码。"
+    echo "看到 END 行会自动继续；如果只粘贴 KEY=VALUE 内容，请用空行结束。"
+    while IFS= read -r line; do
+      line="$(normalize_menu_choice "$line")"
+      if [[ -z "$line" ]]; then
+        (( has_content == 1 )) && break
+        continue
+      fi
+      has_content=1
+      printf '%s\n' "$line" >>"$raw"
+      [[ "$line" == "-----END LEIKWAN FORWARD-----" || "$line" == LEIKWAN_FORWARD_BASE64=* ]] && break
+      [[ "$line" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#line} >= 30)) && break
+    done
+  fi
+  parse_forward_raw "$raw" "$dest"
+  rm -f "$raw"
+}
+
+export_forward_code_by_name() {
+  local name="${1:-}" row entry_port target_host target_port out_iface route_table enabled comment file
+  ensure_tsv_files
+  if [[ -z "$name" ]]; then
+    name="$(forwards_rows | awk -F'\t' 'NR==1{print $1}')"
+  fi
+  [[ -n "$name" ]] || { warn "当前没有转发目标。"; return 0; }
+  row="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print; found=1} END{exit !found}')"
+  [[ -n "$row" ]] || { warn "转发不存在：${name}"; return 0; }
+  IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment <<<"$(awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} {print $1,$2,$3,$4,$5,$6,$7,$8}' <<<"$row")"
+  file="$(forward_code_path "$name")"
+  write_forward_code_file "$file" "$name" "$entry_port" "$target_host" "$target_port" "$enabled" "$comment"
+  print_forward_code "$file"
+}
+
+add_forward() {
+  need_root_unless_dry_run
+  install_packages iproute2 netcat-openbsd
+  ensure_tsv_files
+  local name entry_port target_host target_port out_iface route_table enabled comment row target_ip route_defaults existing_name existing_port
+  name="$(safe_name "$(prompt_value "转发名称" "hk")")"
+  entry_port="$(prompt_port "公网入口端口" "10001")"
+  if reserved_entry_port "$entry_port"; then
+    warn "该端口属于保留/常用端口：${entry_port}"
+    prompt_yes_no "确定强制使用？" "N" || return 0
+  fi
+  warn_if_forward_port_outside_expose "$entry_port"
+  target_host="$(prompt_host "后端目标地址")"
+  target_port="$(prompt_port "后端目标端口" "30004")"
+  route_defaults="$(detect_forward_route_defaults "$target_host")"
+  IFS=$'\t' read -r out_iface route_table <<<"$route_defaults"
+  out_iface="$(prompt_value "出口网卡" "$out_iface")"
+  route_table="$(prompt_value "路由表" "$route_table")"
+  enabled="$(prompt_value "是否启用 true/false" "true")"
+  [[ "$enabled" == "true" || "$enabled" == "false" ]] || { fail "enabled 必须是 true 或 false。"; return 1; }
+  comment="$(prompt_value "备注" "${name}-target")"
+  target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+  if [[ -n "$target_ip" ]]; then
+    if tcp_reachable "$target_ip" "$target_port"; then
+      ok "后端 TCP 可达：${target_ip}:${target_port}"
+    else
+      warn "后端 TCP 暂不可达：${target_ip}:${target_port}。你仍可继续写入规则。"
+    fi
+  else
+    warn "后端地址暂未解析：${target_host}。你仍可继续写入规则。"
+  fi
+  existing_name="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print $1; exit}')"
+  existing_port="$(forwards_rows | awk -F'\t' -v p="$entry_port" '$2==p {print $1; exit}')"
+  if [[ -n "$existing_name" || -n "$existing_port" ]]; then
+    warn "检测到同名或同入口端口的转发目标，将覆盖更新：${existing_name:-$existing_port}"
+    prompt_yes_no "确认覆盖 / 更新？" "N" || return 0
+  fi
+  row="${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
+  confirm_summary "添加转发目标摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=${route_table:-none}\nenabled=${enabled}" || return 0
+  replace_forward_row "$row"
+  apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
+}
+
+list_forwards() {
+  ensure_tsv_files
+  printf '%-12s %-8s %-28s %-8s %-10s %-10s %-8s %s\n' "name" "entry" "target_host" "tport" "out_iface" "route" "enabled" "comment"
+  forwards_rows | awk -F'\t' '{printf "%-12s %-8s %-28s %-8s %-10s %-10s %-8s %s\n",$1,$2,$3,$4,($5?$5:"-"),($6?$6:"-"),$7,$8}'
+}
+
+delete_forward() {
+  need_root_unless_dry_run
+  local name="${1:-}" tmp
+  [[ -n "$name" ]] || name="$(prompt_value "要删除的转发名称")"
+  name="$(safe_name "$name")"
+  forward_exists "$name" || { warn "转发不存在。"; return 0; }
+  prompt_yes_no "确认删除转发 ${name}？" "N" || return 0
+  tmp="$(mktemp)"
+  awk -F'\t' -v n="$name" '$1==n {next} {print}' "$FORWARDS_TSV" >"$tmp"
+  write_file "$FORWARDS_TSV" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+  apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
+}
+
+set_forward_enabled() {
+  need_root_unless_dry_run
+  local name enabled row
+  name="$(safe_name "$(prompt_value "转发名称")")"
+  enabled="$(prompt_value "enabled true/false" "true")"
+  row="$(forwards_rows | awk -F'\t' -v n="$name" -v e="$enabled" 'BEGIN{OFS="\t"} $1==n {$7=e; print; found=1} END{exit !found}')"
+  [[ -n "$row" ]] || { warn "转发不存在。"; return 0; }
+  replace_forward_row "$row"
+}
+
+edit_forward() {
+  need_root_unless_dry_run
+  local name row old_name old_port old_host old_tport old_iface old_route old_enabled old_comment
+  local entry_port target_host target_port out_iface route_table enabled comment new_row
+  name="${1:-}"
+  [[ -n "$name" ]] || name="$(prompt_value "转发名称")"
+  name="$(safe_name "$name")"
+  row="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print; found=1} END{exit !found}')"
+  [[ -n "$row" ]] || { warn "转发不存在。"; return 0; }
+  IFS=$'\034' read -r old_name old_port old_host old_tport old_iface old_route old_enabled old_comment <<<"$(awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} {print $1,$2,$3,$4,$5,$6,$7,$8}' <<<"$row")"
+  entry_port="$(prompt_port "公网入口端口" "$old_port")"
+  warn_if_forward_port_outside_expose "$entry_port"
+  if [[ "$entry_port" != "$old_port" ]] && forwards_rows | awk -F'\t' -v p="$entry_port" '$2==p {found=1} END{exit !found}'; then
+    fail "entry_port 已存在：${entry_port}"
+    return 1
+  fi
+  target_host="$(prompt_host "后端 TARGET_HOST" "$old_host")"
+  target_port="$(prompt_port "后端 TARGET_PORT" "$old_tport")"
+  out_iface="$(prompt_value "出口接口 out_iface，留空自动" "$old_iface")"
+  route_table="$(prompt_value "出口路由表 route_table，留空不指定" "$old_route")"
+  enabled="$(prompt_value "是否启用 true/false" "$old_enabled")"
+  comment="$(prompt_value "备注" "$old_comment")"
+  new_row="${old_name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
+  confirm_summary "修改转发目标摘要" "name=${old_name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=${route_table:-none}\nenabled=${enabled}" || return 0
+  replace_forward_row "$new_row"
+  apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
+}
+
+test_forward() {
+  local name row _entry_port target_host target_ip target_port _out_iface _route_table enabled _comment
+  name="$(safe_name "$(prompt_value "转发名称")")"
+  resolve_forwards || return 1
+  row="$(resolved_rows | awk -F'\t' -v n="$name" '$1==n {print; found=1} END{exit !found}')"
+  [[ -n "$row" ]] || { warn "转发不存在。"; return 0; }
+  IFS=$'\034' read -r name _entry_port target_host target_ip target_port _out_iface _route_table enabled _comment <<<"$(awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} {print $1,$2,$3,$4,$5,$6,$7,$8,$9}' <<<"$row")"
+  [[ "$enabled" == "true" ]] || warn "该转发当前 disabled，仅执行后端可达性测试。"
+  [[ -n "$target_ip" ]] || { warn "目标未解析：${target_host}"; return 0; }
+  if tcp_reachable "$target_ip" "$target_port"; then
+    ok "${target_ip}:${target_port} 可达"
+  else
+    warn "${target_ip}:${target_port} 不可达"
+  fi
+}
+
+import_forwards_tsv() {
+  need_root_unless_dry_run
+  local path
+  path="$(prompt_value "请输入 forwards.tsv 路径")"
+  [[ -f "$path" ]] || { warn "文件不存在：${path}"; return 0; }
+  validate_forwards_tsv "$path" || return 1
+  confirm_summary "导入 forwards.tsv" "来源：${path}\n目标：${FORWARDS_TSV}" || return 0
+  write_file "$FORWARDS_TSV" "$(cat "$path")" 600
+  resolve_forwards || return 1
+}
+
+import_forward_code() {
+  need_root_unless_dry_run
+  local source="${1:-}" tmp name entry_port target_host target_port enabled comment row public_host relay_ip
+  tmp="$(mktemp)"
+  read_forward_code "$tmp" "$source" || { rm -f "$tmp"; return 1; }
+  require_env_fields "$tmp" FORWARD_VERSION NAME ENTRY_PORT TARGET_HOST TARGET_PORT ENABLED || { rm -f "$tmp"; return 1; }
+  [[ "$(env_file_get "$tmp" FORWARD_VERSION)" == "0.4" ]] || { fail "FORWARD_VERSION 不支持。"; rm -f "$tmp"; return 1; }
+  name="$(safe_name "$(env_file_get "$tmp" NAME)")"
+  entry_port="$(env_file_get "$tmp" ENTRY_PORT)"
+  target_host="$(env_file_get "$tmp" TARGET_HOST)"
+  target_port="$(env_file_get "$tmp" TARGET_PORT)"
+  enabled="$(env_file_get "$tmp" ENABLED)"
+  comment="$(env_file_get "$tmp" COMMENT)"
+  is_port "$entry_port" || { fail "ENTRY_PORT 非法：${entry_port}"; rm -f "$tmp"; return 1; }
+  is_port "$target_port" || { fail "TARGET_PORT 非法：${target_port}"; rm -f "$tmp"; return 1; }
+  [[ "$enabled" == "true" || "$enabled" == "false" ]] || { fail "ENABLED 必须是 true 或 false。"; rm -f "$tmp"; return 1; }
+  row="${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t\t\t'"${enabled}"$'\t'"${comment}"
+  confirm_summary "导入公网入口转发摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nenabled=${enabled}\n动作：写入本机 forwards.tsv，并应用 cloud-entry nftables。" || { rm -f "$tmp"; return 0; }
+  replace_forward_row "$row"
+  if [[ ! -f "$ENTRY_EXPOSE_ENV" ]]; then
+    warn "未检测到入口端口池配置，将为 legacy import 临时暴露单端口 ${entry_port}。推荐改用 lq entry expose-range。"
+    write_file "$ENTRY_EXPOSE_ENV" "ENTRY_EXPOSE_START=${entry_port}
+ENTRY_EXPOSE_END=${entry_port}
+RELAY_ET_IP=$(current_relay_et_ip)
+ENABLED=true" 600
+  elif ! port_in_range "$entry_port" "$(entry_expose_start)" "$(entry_expose_end)"; then
+    warn "导入端口 ${entry_port} 不在当前入口端口池 $(entry_expose_start)-$(entry_expose_end) 内；请运行 lq entry expose-range 调整端口池。"
+  fi
+  apply_nft_rules "cloud-entry" || { rm -f "$tmp"; return 1; }
+  generate_forward_outputs || true
+  public_host="$(current_entry_public_host)"
+  relay_ip="$(current_relay_et_ip)"
+  echo
+  echo "公网入口："
+  echo "${public_host}:${entry_port} -> EasyTier relay ${relay_ip}:${entry_port} -> ${target_host}:${target_port}"
+  rm -f "$tmp"
+}
+
+export_forwards_tsv() {
+  ensure_tsv_files
+  echo "forwards.tsv：${FORWARDS_TSV}"
+  sed -n '1,200p' "$FORWARDS_TSV"
+}
+
+resolve_forwards() {
+  ensure_tsv_files
+  validate_forwards_tsv || return 1
+  local content target_ip name entry_port target_host target_port out_iface route_table enabled comment failed=0
+  content=$'# name\tentry_port\ttarget_host\ttarget_ip\ttarget_port\tout_iface\troute_table\tenabled\tcomment'
+  while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
+    target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+    if [[ -z "$target_ip" ]]; then
+      fail "解析失败：${target_host}"
+      failed=1
+      continue
+    fi
+    content="${content}"$'\n'"${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_ip}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
+  done < <(forwards_rows_usv)
+  (( failed == 0 )) || return 1
+  write_file "$RESOLVED_TSV" "$content" 600
+}
+
+resolved_rows() {
+  [[ -f "$RESOLVED_TSV" ]] || return 0
+  awk -F'\t' 'NF && $1 !~ /^#/ {print}' "$RESOLVED_TSV"
+}
+
+resolved_rows_usv() {
+  resolved_rows | awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} NF>=9 {print $1,$2,$3,$4,$5,$6,$7,$8,$9}'
+}
+
+configure_forward_sysctl() {
+  write_file "$FORWARD_SYSCTL" "net.ipv4.ip_forward=1" 644
+  (( DRY_RUN == 1 )) || sysctl --system >/dev/null || true
+}
+
+render_nft_cloud() {
+  local relay_ip start end
+  if [[ ! -f "$ENTRY_EXPOSE_ENV" ]]; then
+    fail "公网入口端口池未配置，请执行 lq entry expose-range。"
+    return 1
+  fi
+  relay_ip="$(entry_expose_relay_ip)"
+  start="$(entry_expose_start)"
+  end="$(entry_expose_end)"
+  if ! is_port "$start" || ! is_port "$end" || (( start > end )); then
+    fail "入口端口池配置非法：${start}-${end}"
+    return 1
+  fi
+  cat <<EOF
+table inet leikwan_forward {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    tcp dport ${start}-${end} dnat ip to ${relay_ip}
+EOF
+  cat <<EOF
+  }
+  chain forward {
+    type filter hook forward priority filter; policy accept;
+    ct state established,related accept
+    ip daddr ${relay_ip} tcp dport ${start}-${end} accept
+EOF
+  cat <<EOF
+  }
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    ip daddr ${relay_ip} tcp dport ${start}-${end} masquerade
+EOF
+  cat <<EOF
+  }
+}
+EOF
+}
+
+render_nft_relay() {
+  local et_iface name entry_port target_host target_ip target_port out_iface route_table enabled comment
+  et_iface="$(et_iface_by_ip "$RELAY_ET_IP")"
+  [[ -n "$et_iface" ]] || et_iface="easytier0"
+  cat <<EOF
+table inet leikwan_forward {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+EOF
+  while IFS=$'\034' read -r name entry_port target_host target_ip target_port out_iface route_table enabled comment; do
+    [[ "$enabled" == "true" && -n "$target_ip" ]] || continue
+    printf '    iifname "%s" tcp dport %s dnat ip to %s:%s\n' "$et_iface" "$entry_port" "$target_ip" "$target_port"
+  done < <(resolved_rows_usv)
+  cat <<EOF
+  }
+  chain forward {
+    type filter hook forward priority filter; policy accept;
+    ct state established,related accept
+EOF
+  while IFS=$'\034' read -r name entry_port target_host target_ip target_port out_iface route_table enabled comment; do
+    [[ "$enabled" == "true" && -n "$target_ip" ]] || continue
+    if [[ -n "$out_iface" ]]; then
+      printf '    iifname "%s" oifname "%s" ip daddr %s tcp dport %s accept\n' "$et_iface" "$out_iface" "$target_ip" "$target_port"
+    else
+      printf '    iifname "%s" ip daddr %s tcp dport %s accept\n' "$et_iface" "$target_ip" "$target_port"
+    fi
+  done < <(resolved_rows_usv)
+  cat <<EOF
+  }
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+EOF
+  while IFS=$'\034' read -r name entry_port target_host target_ip target_port out_iface route_table enabled comment; do
+    [[ "$enabled" == "true" && -n "$target_ip" ]] || continue
+    if [[ -n "$out_iface" ]]; then
+      printf '    oifname "%s" ip daddr %s tcp dport %s masquerade\n' "$out_iface" "$target_ip" "$target_port"
+    else
+      printf '    ip daddr %s tcp dport %s masquerade\n' "$target_ip" "$target_port"
+    fi
+  done < <(resolved_rows_usv)
+  cat <<EOF
+  }
+}
+EOF
+}
+
+render_nft_service() {
+  local nft_bin
+  nft_bin="$(command -v nft || printf '%s' /usr/sbin/nft)"
+  cat <<EOF
+# Managed by leikwan-wg-toolkit ${TOOL_VERSION}
+[Unit]
+Description=Leikwan nftables L4 forwarding
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${nft_bin} -f ${NFT_RULE_FILE}
+ExecStop=${nft_bin} delete table inet leikwan_forward
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+detect_role() {
+  if systemctl list-unit-files --type=service --no-legend "${EASYTIER_RELAY_SERVICE_NAME}.service" 2>/dev/null | grep -q .; then echo "leikwan-relay"; return; fi
+  if et_ip_present "$RELAY_ET_IP"; then echo "leikwan-relay"; return; fi
+  if systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | grep -q .; then echo "cloud-entry"; return; fi
+  if [[ -f "$ENTRY_PAIRING_FILE" ]]; then echo "cloud-entry"; return; fi
+  echo "unknown"
+}
+
+current_entry_et_ip() {
+  local ip
+  ip="$(env_file_get "$ENTRY_PAIRING_FILE" ENTRY_ET_IP)"
+  [[ -n "$ip" ]] || ip="$(entries_rows | awk -F'\t' '$7=="true"{print $3; exit}')"
+  printf '%s' "${ip:-$ENTRY_ET_IP_DEFAULT}"
+}
+
+current_relay_et_ip() {
+  local ip
+  ip="$(env_file_get "$NETWORK_ENV" RELAY_ET_IP)"
+  [[ -n "$ip" ]] || ip="$(env_file_get "$NETWORK_ENV" EASYTIER_RELAY_ET_IP)"
+  printf '%s' "${ip:-$RELAY_ET_IP}"
+}
+
+current_entry_public_host() {
+  local host
+  host="$(env_file_get "$ENTRY_PAIRING_FILE" ENTRY_PUBLIC_HOST)"
+  [[ -n "$host" ]] || host="$(entries_rows | awk -F'\t' '$7=="true"{print $2; exit}')"
+  [[ -n "$host" ]] || host="$(detect_public_ipv4 2>/dev/null || true)"
+  printf '%s' "${host:-<A_PUBLIC_HOST>}"
+}
+
+entry_expose_start() {
+  local value
+  value="$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_EXPOSE_START)"
+  printf '%s' "${value:-$ENTRY_EXPOSE_START_DEFAULT}"
+}
+
+entry_expose_end() {
+  local value
+  value="$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_EXPOSE_END)"
+  printf '%s' "${value:-$ENTRY_EXPOSE_END_DEFAULT}"
+}
+
+entry_expose_relay_ip() {
+  local value
+  value="$(env_file_get "$ENTRY_EXPOSE_ENV" RELAY_ET_IP)"
+  [[ -n "$value" ]] || value="$(current_relay_et_ip)"
+  printf '%s' "${value:-$RELAY_ET_IP}"
+}
+
+parse_port_range() {
+  local range="$1" start end
+  range="$(normalize_menu_choice "$range")"
+  start="${range%-*}"
+  end="${range#*-}"
+  if is_port "$start" && is_port "$end" && (( start <= end )); then
+    printf '%s\t%s\n' "$start" "$end"
     return 0
   fi
+  fail "端口范围非法：${range}，格式示例 10000-19999"
+  return 1
+}
+
+port_in_range() {
+  local port="$1" start="$2" end="$3"
+  is_port "$port" && is_port "$start" && is_port "$end" && (( port >= start && port <= end ))
+}
+
+warn_if_forward_port_outside_expose() {
+  local port="$1" start end
+  if [[ -f "$ENTRY_EXPOSE_ENV" ]]; then
+    start="$(entry_expose_start)"
+    end="$(entry_expose_end)"
+    if port_in_range "$port" "$start" "$end"; then
+      info "entry_port ${port} 位于入口端口池 ${start}-${end}。"
+    else
+      warn "entry_port ${port} 不在入口端口池 ${start}-${end} 内，公网入口可能无法访问。"
+    fi
+  else
+    info "未读取到 A 入口端口池范围；将仅校验常见端口池 ${ENTRY_EXPOSE_START_DEFAULT}-${ENTRY_EXPOSE_END_DEFAULT}。"
+    if port_in_range "$port" "$ENTRY_EXPOSE_START_DEFAULT" "$ENTRY_EXPOSE_END_DEFAULT"; then
+      ok "entry_port ${port} 位于常见入口端口池 ${ENTRY_EXPOSE_START_DEFAULT}-${ENTRY_EXPOSE_END_DEFAULT}。"
+    else
+      warn "entry_port ${port} 不在默认推荐范围 ${ENTRY_EXPOSE_START_DEFAULT}-${ENTRY_EXPOSE_END_DEFAULT} 内。"
+    fi
+  fi
+}
+
+entry_expose_range() {
+  need_root_unless_dry_run
+  ensure_base_dirs
+  local start="$ENTRY_EXPOSE_START_DEFAULT" end="$ENTRY_EXPOSE_END_DEFAULT" relay_ip="" apply="ask" arg range parsed
+  while (($# > 0)); do
+    arg="$1"
+    case "$arg" in
+      --start)
+        start="${2:-}"; shift 2 ;;
+      --end)
+        end="${2:-}"; shift 2 ;;
+      --range)
+        range="${2:-}"; parsed="$(parse_port_range "$range")" || return 1
+        IFS=$'\t' read -r start end <<<"$parsed"
+        shift 2 ;;
+      --relay-ip)
+        relay_ip="${2:-}"; shift 2 ;;
+      --no-apply)
+        apply="no"; shift ;;
+      *)
+        fail "未知 entry expose-range 参数：${arg}"; return 1 ;;
+    esac
+  done
+  if [[ "${start}" == "$ENTRY_EXPOSE_START_DEFAULT" && "${end}" == "$ENTRY_EXPOSE_END_DEFAULT" && -z "${relay_ip}" && "$apply" == "ask" ]]; then
+    range="$(prompt_value "入口端口范围" "${ENTRY_EXPOSE_START_DEFAULT}-${ENTRY_EXPOSE_END_DEFAULT}")"
+    parsed="$(parse_port_range "$range")" || return 1
+    IFS=$'\t' read -r start end <<<"$parsed"
+    relay_ip="$(prompt_value "Relay EasyTier IP" "$(current_relay_et_ip)")"
+    prompt_yes_no "是否应用 nftables？" "Y" && apply="yes" || apply="no"
+  fi
+  if ! is_port "$start" || ! is_port "$end" || (( start > end )); then
+    fail "入口端口范围非法：${start}-${end}"
+    return 1
+  fi
+  is_ipv4 "${relay_ip:-$RELAY_ET_IP}" || { fail "Relay EasyTier IP 非法：${relay_ip:-$RELAY_ET_IP}"; return 1; }
+  relay_ip="${relay_ip:-$RELAY_ET_IP}"
+  confirm_summary "配置公网入口端口池摘要" "ENTRY_EXPOSE_START=${start}\nENTRY_EXPOSE_END=${end}\nRELAY_ET_IP=${relay_ip}\n动作：A 侧把该端口池 DNAT 到 Relay EasyTier IP，保持原端口不变。" || return 0
+  write_file "$ENTRY_EXPOSE_ENV" "ENTRY_EXPOSE_START=${start}
+ENTRY_EXPOSE_END=${end}
+RELAY_ET_IP=${relay_ip}
+ENABLED=true" 600
+  if [[ "$apply" != "no" ]]; then
+    apply_nft_rules "cloud-entry"
+  fi
+}
+
+apply_nft_rules() {
+  local role="$1" content tmp old enabled_count=-1 relay_ip start end
+  need_root_unless_dry_run
+  install_packages nftables iproute2
+  configure_forward_sysctl
+  case "$role" in
+    cloud-entry)
+      [[ -f "$ENTRY_EXPOSE_ENV" ]] || { warn "公网入口端口池未配置，请执行 lq entry expose-range"; return 1; }
+      relay_ip="$(entry_expose_relay_ip)"
+      start="$(entry_expose_start)"
+      end="$(entry_expose_end)"
+      content="$(render_nft_cloud)"
+      if ! grep -q "tcp dport ${start}-${end} dnat ip to ${relay_ip}" <<<"$content"; then
+        fail "入口端口池 ${start}-${end} 未生成 DNAT 规则。"
+        return 1
+      fi
+      ;;
+    leikwan-relay)
+      enabled_count="$(enabled_forwards_count)" || return 1
+      if (( enabled_count == 0 )); then
+        warn "当前没有任何启用的转发目标。"
+        prompt_yes_no "当前没有任何启用的转发目标，是否仍然应用空规则？" "N" || return 0
+      fi
+      resolve_forwards || return 1
+      if (( enabled_count > 0 )) && ! resolved_rows | awk -F'\t' '$8=="true" && $4!="" {found=1} END{exit !found}'; then
+        fail "没有可用的 resolved 转发规则，已停止应用 nftables。"
+        return 1
+      fi
+      content="$(render_nft_relay)"
+      if (( enabled_count > 0 )) && ! grep -q 'dnat ip to ' <<<"$content"; then
+        fail "enabled forwards=${enabled_count}，但 relay nftables 未生成 DNAT 规则。"
+        return 1
+      fi
+      ;;
+    *) fail "无法识别角色：${role}"; return 1 ;;
+  esac
+  write_file "$NFT_RULE_FILE" "$content" 644
+  write_file "$NFT_SERVICE" "$(render_nft_service)" 644
+  (( DRY_RUN == 1 )) && return 0
+  tmp="$(mktemp)"; old="$(mktemp)"
+  printf '%s\n' "$content" >"$tmp"
+  nft -c -f "$tmp"
+  nft list table inet leikwan_forward >"$old" 2>/dev/null || true
+  nft delete table inet leikwan_forward 2>/dev/null || true
+  if nft -f "$tmp"; then
+    systemctl daemon-reload
+    systemctl enable "${NFT_SERVICE_NAME}.service"
+    if (( enabled_count == 0 )); then
+      warn "已应用空 nftables 项目表；当前没有转发 DNAT 规则。"
+    elif [[ "$role" == "cloud-entry" ]]; then
+      ok "公网入口端口池 nftables 规则已应用。"
+    else
+      ok "nftables 转发规则已应用。"
+    fi
+  else
+    fail "nftables 应用失败，尝试回滚。"
+    [[ -s "$old" ]] && nft -f "$old" || true
+    rm -f "$tmp" "$old"
+    return 1
+  fi
+  rm -f "$tmp" "$old"
+}
+
+pbr_init_rt_tables() {
+  if [[ ! -f "$PBR_RT_TABLES" ]]; then
+    write_file "$PBR_RT_TABLES" $'255 local\n254 main\n253 default\n0 unspec' 644
+  fi
+}
+
+pbr_group_gateway() {
+  case "$1" in
+    T_9929|9929) printf '%s' "10.7.0.1" ;;
+    T_CN2|CN2) printf '%s' "10.8.0.1" ;;
+    T_JPSDWAN|JPSDWAN) printf '%s' "10.3.0.1" ;;
+    T_DESDWAN|DESDWAN) printf '%s' "10.3.10.1" ;;
+    T_KRSDWAN|KRSDWAN) printf '%s' "10.4.0.1" ;;
+    T_HKSDWAN|HKSDWAN) printf '%s' "10.3.50.1" ;;
+    T_TWSDWAN|TWSDWAN) printf '%s' "10.3.100.1" ;;
+    *) return 1 ;;
+  esac
+}
+
+pbr_table_id() {
+  local group="$1"
+  group="${group#T_}"
+  case "$group" in
+    9929) echo 101 ;; CN2) echo 102 ;; JPSDWAN) echo 103 ;; DESDWAN) echo 104 ;;
+    KRSDWAN) echo 105 ;; HKSDWAN) echo 106 ;; TWSDWAN) echo 107 ;; *) return 1 ;;
+  esac
+}
+
+pbr_apply() {
+  need_root_unless_dry_run
+  pbr_init_rt_tables
+  [[ -f "$PBR_STATIC_CONF" ]] || { warn "暂无 PBR 静态规则。"; return 0; }
+  local cidr group table_id gw table_name
+  while read -r cidr group; do
+    [[ -n "$cidr" && "$cidr" != \#* ]] || continue
+    group="${group#T_}"
+    table_name="T_${group}"
+    table_id="$(pbr_table_id "$group")" || { warn "未知线路组：${group}"; continue; }
+    gw="$(pbr_group_gateway "$group")" || { warn "未知网关：${group}"; continue; }
+    grep -qE "^[[:space:]]*${table_id}[[:space:]]+${table_name}$" "$PBR_RT_TABLES" || echo "${table_id} ${table_name}" >>"$PBR_RT_TABLES"
+    ip route replace default via "$gw" table "$table_id" || true
+    ip rule del to "$cidr" table "$table_id" priority "$PBR_PRIORITY" 2>/dev/null || true
+    ip rule add to "$cidr" table "$table_id" priority "$PBR_PRIORITY"
+    ok "PBR：${cidr} -> ${table_name}"
+  done <"$PBR_STATIC_CONF"
+}
+
+pbr_add_static() {
+  need_root_unless_dry_run
+  local cidr group
+  cidr="$(prompt_value "目标 IP/CIDR")"
+  [[ "$cidr" == */* ]] || cidr="${cidr}/32"
+  group="$(prompt_value "线路组，例如 9929 / CN2 / HKSDWAN" "9929")"
+  mkdir -p "$PBR_DIR"
+  grep -qxF "${cidr} ${group#T_}" "$PBR_STATIC_CONF" 2>/dev/null || echo "${cidr} ${group#T_}" >>"$PBR_STATIC_CONF"
+  pbr_apply
+}
+
+generate_forward_outputs() {
+  ensure_tsv_files
+  validate_forwards_tsv || return 1
+  mkdir -p "$OUTPUT_DIR"
+  local txt tsv name entry_port target_host target_port out_iface route_table enabled comment
+  local e_name public_host et_ip proto port weight e_enabled health
+  txt="【转发入口清单】"$'\n'
+  tsv=$'target_name\tentry_name\tpublic_host\tentry_port\ttarget_host\ttarget_port\thealth\tweight'
+  while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
+    [[ "$enabled" == "true" ]] || continue
+    txt="${txt}"$'\n'"目标：${name}"$'\n'"后端：${target_host}:${target_port}"$'\n'"入口："$'\n'
+    while IFS=$'\t' read -r e_name public_host et_ip proto port weight e_enabled; do
+      [[ "$e_enabled" == "true" ]] || continue
+      health="UNKNOWN"
+      if command -v nc >/dev/null 2>&1; then
+        if nc -vz -w 2 "$public_host" "$entry_port" >/dev/null 2>&1; then health="UP"; else health="DOWN"; fi
+      fi
+      txt="${txt}- ${e_name}  ${public_host}:${entry_port}  状态：${health}  权重：${weight}"$'\n'
+      tsv="${tsv}"$'\n'"${name}"$'\t'"${e_name}"$'\t'"${public_host}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${health}"$'\t'"${weight}"
+    done < <(entries_rows | sort -t$'\t' -k6,6nr)
+  done < <(forwards_rows_usv)
+  write_file "$FORWARD_TXT" "$txt" 644
+  write_file "$FORWARD_TSV" "$tsv" 644
+  cat "$FORWARD_TXT"
+}
+
+report() {
+  local status="$1" msg="$2"
+  case "$status" in
+    OK) echo "${GREEN}[OK]${RESET} ${msg}" ;;
+    WARN) echo "${YELLOW}[WARN]${RESET} ${msg}" ;;
+    FAIL) echo "${RED}[FAIL]${RESET} ${msg}" ;;
+    INFO|DEBUG) echo "[${status}] ${msg}" ;;
+  esac
+}
+
+ping_avg_ms() {
+  awk -F= '/rtt|round-trip/ {
+    split($2, a, "/")
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", a[2])
+    print a[2]
+    exit
+  }'
+}
+
+ping_loss_text() {
+  awk -F, '/packet loss/ {
+    for (i=1; i<=NF; i++) {
+      if ($i ~ /packet loss/) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+        print $i
+        exit
+      }
+    }
+  }'
+}
+
+report_ping_quality() {
+  local host="$1" label="$2" output rc avg loss
+  rc=0
+  output="$(ping -c 4 "$host" 2>&1)" || rc=$?
+  avg="$(printf '%s\n' "$output" | ping_avg_ms)"
+  loss="$(printf '%s\n' "$output" | ping_loss_text)"
   if (( rc != 0 )); then
-    warn "未选择落地机。"
-    return 0
-  fi
-  file="$SELECTED_LANDING_FILE"
-  name="${SELECTED_LANDING_NAME:-$(landing_env_get "$file" LANDING_NAME)}"
-  switch_landing_by_name "$name"
-}
-
-landing_delete() {
-  need_root
-  init_log
-  local file name
-  landing_select_file || return 0
-  file="$SELECTED_LANDING_FILE"
-  name="$(landing_env_get "$file" LANDING_NAME)"
-  if ! confirm_summary "删除落地机摘要" "将备份并删除：${file}\n不会修改当前 Xray 配置。"; then
-    return 0
-  fi
-  backup_file "$file"
-  rm -f "$file"
-  if [[ "$(active_landing_name)" == "$name" ]]; then
-    rm -f "$ACTIVE_LANDING_FILE" "$ACTIVE_LANDING_ENV"
-  fi
-}
-
-landing_import_current_xray() {
-  need_root_unless_dry_run
-  init_log
-  local name address port uuid public_key short_id server_name flow
-  name="$(prompt_non_empty "请输入导入名称" "old-current")"
-  address="$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)"
-  port="$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)"
-  uuid="$(xray_actual_landing_value LANDING_UUID 2>/dev/null || true)"
-  public_key="$(xray_actual_landing_value LANDING_PUBLIC_KEY 2>/dev/null || true)"
-  short_id="$(xray_actual_landing_value LANDING_SHORT_ID 2>/dev/null || true)"
-  server_name="$(xray_actual_landing_value LANDING_SERVER_NAME 2>/dev/null || true)"
-  flow="$(xray_actual_landing_value LANDING_FLOW 2>/dev/null || true)"
-  flow="${flow:-$LANDING_FLOW_DEFAULT}"
-  for value_name in address port uuid public_key short_id server_name; do
-    if [[ -z "${!value_name}" ]]; then
-      fail "当前 Xray 配置缺少：${value_name}"
-      return 1
-    fi
-  done
-  landing_write_profile "$name" "$address" "$port" "$uuid" "$public_key" "$short_id" "$server_name" "$flow" "imported from current xray" "yes"
-  ok "已将当前 Xray outbound 保存为落地机 profile。"
-  if [[ -z "$(active_landing_name 2>/dev/null || true)" ]]; then
-    if prompt_yes_no "是否将当前 Xray outbound 记录为 current landing？" "Y"; then
-      landing_set_active "$name"
-    fi
-  elif ! landing_active_matches_xray; then
-    warn "current.env 与 Xray outbound 不一致。"
-    if prompt_yes_no "是否用当前 Xray outbound 覆盖 current？" "N"; then
-      landing_set_active "$name"
-    fi
-  fi
-}
-
-landing_repair_current_from_xray() {
-  need_root_unless_dry_run
-  init_log
-  local name="xray-current" address port uuid public_key short_id server_name flow
-  address="$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)"
-  port="$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)"
-  uuid="$(xray_actual_landing_value LANDING_UUID 2>/dev/null || true)"
-  public_key="$(xray_actual_landing_value LANDING_PUBLIC_KEY 2>/dev/null || true)"
-  short_id="$(xray_actual_landing_value LANDING_SHORT_ID 2>/dev/null || true)"
-  server_name="$(xray_actual_landing_value LANDING_SERVER_NAME 2>/dev/null || true)"
-  flow="$(xray_actual_landing_value LANDING_FLOW 2>/dev/null || true)"
-  flow="${flow:-$LANDING_FLOW_DEFAULT}"
-  for value_name in address port uuid public_key short_id server_name; do
-    if [[ -z "${!value_name}" ]]; then
-      fail "当前 Xray outbound 缺少：${value_name}"
-      return 1
-    fi
-  done
-  if ! confirm_summary "从 Xray 实际 outbound 修复 current 状态摘要" "生成 profile：landing-${name}.env\ncurrent：${address}:${port}\n动作：只写 current/current.env，不修改 Xray config，不重启服务。"; then
-    return 0
-  fi
-  landing_write_profile "$name" "$address" "$port" "$uuid" "$public_key" "$short_id" "$server_name" "$flow" "repaired from xray actual outbound" "yes"
-  landing_set_active "$name"
-  ok "已从 Xray 实际 outbound 修复 current 状态。"
-}
-
-landing_show_chain_link() {
-  local file link name address port content
-  file="$(active_landing_file 2>/dev/null || true)"
-  if [[ -n "$file" && -f "$file" ]]; then
-    name="$(landing_env_get "$file" LANDING_NAME)"
-    address="$(landing_env_get "$file" LANDING_ADDRESS)"
-    port="$(landing_env_get "$file" LANDING_PORT)"
-  else
-    name="$(active_landing_name 2>/dev/null || true)"
-    address="$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)"
-    port="$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)"
-  fi
-  link="$(env_file_get "$CLIENT_LINK_FILE" CLIENT_LINK 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" CLIENT_LINK 2>/dev/null || env_file_get "$OUTPUT_FILE" CLIENT_LINK 2>/dev/null || true)"
-  content="$(cat <<EOF
-ACTIVE_LANDING_NAME=${name:-unknown}
-ACTIVE_LANDING_ADDRESS=${address}
-ACTIVE_LANDING_PORT=${port}
-CLIENT_LINK=${link}
-EOF
-)"
-  print_copy_block "当前链式客户端链接" "$content" $'CLIENT_LINK 指向公网入口机，不直接指向落地机。\n切换 landing 通常不会改变 CLIENT_LINK。'
-}
-
-landing_generate_current_link() {
-  landing_show_chain_link
-}
-
-landing_menu() {
-  while true; do
-    echo
-    echo "${BOLD}多落地机管理${RESET}"
-    echo "1. 添加落地机"
-    echo "2. 查看落地机列表"
-    echo "3. 测试所有落地机"
-    echo "4. 切换当前落地机"
-    echo "5. 删除落地机"
-    echo "6. 从当前 Xray 配置导入为落地机"
-    echo "7. 查看当前链式客户端链接"
-    echo "8. 从 Xray 实际 outbound 修复 current 状态"
-    echo "   说明：仅修复状态记录，不切换出站。"
-    echo "0. 返回"
-    local choice
-    choice="$(prompt_menu_choice "请选择：")"
-    case "$choice" in
-      1) landing_add || true ;;
-      2) landing_show_list || true ;;
-      3) landing_test_all || true ;;
-      4) landing_switch_current || true ;;
-      5) landing_delete || true ;;
-      6) landing_import_current_xray || true ;;
-      7) landing_show_chain_link || true ;;
-      8) landing_repair_current_from_xray || true ;;
-      0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
-    esac
-  done
-}
-
-deploy_leikwan_relay() {
-  need_root_unless_dry_run
-  init_log
-  if (( DRY_RUN == 0 )); then
-    install_wireguard_deps
-    ensure_wireguard_dir
-  fi
-
-  local cloud_public_key cloud_endpoint cloud_port wg_private wg_public wg_content wg_summary
-  ensure_wg_identity "wg0" || return 1
-  wg_private="$WG_IDENTITY_PRIVATE"
-  wg_public="$WG_IDENTITY_PUBLIC"
-
-  echo
-  print_copy_block "请复制到公网入口机" "LEIKWAN_PUBLIC_KEY=${wg_public}" $'去公网入口机运行：\nbash wg-toolkit.sh\n选择：公网入口机部署\n并粘贴上面的 LEIKWAN_PUBLIC_KEY'
-  if ! prompt_yes_no "是否继续配置公网入口机 Peer 和 Xray 中转？如果公网入口机还没部署，可先复制 PublicKey 后选择 n。" "Y"; then
-    return 0
-  fi
-
-  local saved_cloud_public_key saved_cloud_endpoint saved_cloud_port saved_client_entry_port
-  saved_cloud_public_key="$(saved_param CLOUD_PUBLIC_KEY "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  saved_cloud_endpoint="$(saved_param CLOUD_ENDPOINT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  saved_cloud_port="$(saved_param CLOUD_WG_PORT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  saved_client_entry_port="$(saved_param CLIENT_ENTRY_PORT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -n "$saved_cloud_public_key" ]] && ok "已从参数文件读取 CLOUD_PUBLIC_KEY。"
-  [[ -n "$saved_cloud_endpoint" ]] && ok "已从参数文件读取 CLOUD_ENDPOINT=${saved_cloud_endpoint}。"
-
-  cloud_public_key="$(prompt_wg_key_default "请输入公网入口机 CLOUD_PUBLIC_KEY" "$saved_cloud_public_key")"
-  cloud_endpoint="$(prompt_endpoint_host "请输入公网入口机 CLOUD_ENDPOINT" "$saved_cloud_endpoint")"
-  cloud_port="$(prompt_port "请输入公网入口机 CLOUD_WG_PORT" "${saved_cloud_port:-$CLOUD_WG_PORT_DEFAULT}")"
-  CLIENT_ENTRY_PORT_DEFAULT="${saved_client_entry_port:-$CLIENT_ENTRY_PORT_DEFAULT}"
-  wg_content="$(render_leikwan_wg_config "$wg_private" "$cloud_public_key" "$cloud_endpoint" "$cloud_port")"
-  if [[ -f "$LEIKWAN_WG_CONF" ]]; then
-    local extra_peers
-    extra_peers="$(extract_extra_wg_peers "$LEIKWAN_WG_CONF" "$cloud_public_key" 2>/dev/null || true)"
-    if [[ -n "$extra_peers" ]]; then
-      wg_content="${wg_content}"$'\n'"# Preserved extra entry peers"$'\n'"${extra_peers}"
-    fi
-  fi
-
-  wg_summary="角色：利群中转机\n文件：${LEIKWAN_WG_CONF}\n接口：wg0\n地址：${LEIKWAN_WG_ADDR}\nPeer 公网入口机：${cloud_public_key}\nEndpoint：${cloud_endpoint}:${cloud_port}\nAllowedIPs：${CLOUD_WG_IP}/32\nPersistentKeepalive：${WG_KEEPALIVE_DEFAULT}\n动作：写入 WireGuard 配置并启用 wg-quick@wg0。"
-  if confirm_summary "利群中转机 WireGuard 部署摘要" "$wg_summary"; then
-    write_text_file "$LEIKWAN_WG_CONF" "$wg_content" 600 || true
-    if (( DRY_RUN == 0 )); then
-      chmod 600 "$LEIKWAN_WG_CONF"
-    fi
-    enable_wg_quick "wg0"
-  else
-    warn "已取消利群中转机 WireGuard 部署。"
-    return 0
-  fi
-
-  install_xray
-
-  local landing_address landing_port landing_uuid landing_public_key landing_short_id landing_server_name
-  local entry_uuid vless_decryption vless_encryption xray_content xray_summary encoded_encryption client_link
-
-  local saved_landing_address saved_landing_port saved_landing_uuid saved_landing_public_key saved_landing_short_id saved_landing_server_name active_landing_profile active_landing_profile_name
-  active_landing_profile="$(active_landing_file 2>/dev/null || true)"
-  active_landing_profile_name="$(active_landing_name 2>/dev/null || true)"
-  saved_landing_address="$(saved_param LANDING_ADDRESS "$active_landing_profile" "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  saved_landing_port="$(saved_param LANDING_PORT "$active_landing_profile" "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  saved_landing_uuid="$(saved_param LANDING_UUID "$active_landing_profile" "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  saved_landing_public_key="$(saved_param LANDING_PUBLIC_KEY "$active_landing_profile" "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  saved_landing_short_id="$(saved_param LANDING_SHORT_ID "$active_landing_profile" "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  saved_landing_server_name="$(saved_param LANDING_SERVER_NAME "$active_landing_profile" "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  [[ -n "$saved_landing_address" ]] && ok "已从参数文件读取 LANDING_ADDRESS=${saved_landing_address}。"
-
-  landing_address="$(prompt_endpoint_host "请输入海外落地机 LANDING_ADDRESS" "$saved_landing_address")"
-  landing_port="$(prompt_port "请输入海外落地机 LANDING_PORT" "${saved_landing_port:-$LANDING_PORT_DEFAULT}")"
-  landing_uuid="$(prompt_non_empty "请输入海外落地机 LANDING_UUID" "$saved_landing_uuid")"
-  landing_public_key="$(prompt_non_empty "请输入海外落地机 LANDING_PUBLIC_KEY" "$saved_landing_public_key")"
-  landing_short_id="$(prompt_non_empty "请输入海外落地机 LANDING_SHORT_ID" "$saved_landing_short_id")"
-  landing_server_name="$(prompt_non_empty "请输入海外落地机 LANDING_SERVER_NAME" "${saved_landing_server_name:-$LANDING_SERVER_NAME_DEFAULT}")"
-
-  entry_uuid="$(xray_uuid)"
-  get_vlessenc_pair
-  vless_decryption="$VLESSENC_DECRYPTION_RESULT"
-  vless_encryption="$VLESSENC_ENCRYPTION_RESULT"
-  xray_content="$(render_leikwan_xray_config "$entry_uuid" "$vless_decryption" "$landing_address" "$landing_port" "$landing_uuid" "$landing_public_key" "$landing_short_id" "$landing_server_name")"
-  encoded_encryption="$(urlencode "$vless_encryption")"
-  client_link="vless://${entry_uuid}@${cloud_endpoint}:${CLIENT_ENTRY_PORT_DEFAULT}?type=raw&security=none&encryption=${encoded_encryption}#Leikwan-WG-Xray-Reality"
-
-  xray_summary="角色：利群中转机\n文件：${XRAY_CONFIG}\ninbound：${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT} vless/raw/security=none\nENTRY_UUID：${entry_uuid}\nVLESSENC_DECRYPTION：${vless_decryption}\noutbound：${landing_address}:${landing_port} vless/raw/reality\nReality serverName：${landing_server_name}\nReality publicKey：${landing_public_key}\nReality shortId：${landing_short_id}\nrouting：block bittorrent\n动作：写入 Xray 中转配置，执行 xray run -test，通过后启动 ${ACTIVE_XRAY_SERVICE_NAME}.service。"
-  if ! confirm_summary "利群中转机 Xray 部署摘要" "$xray_summary"; then
-    warn "已取消利群中转机 Xray 部署。"
-    return 0
-  fi
-
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$(dirname "$XRAY_CONFIG")"
-    install -d -m 755 "$XRAY_MARKER_DIR"
-  fi
-  write_text_file "$XRAY_CONFIG" "$xray_content" 644 || true
-  if (( DRY_RUN == 0 )); then
-    printf 'leikwan-relay\n' >"${XRAY_MARKER_DIR}/role"
-  fi
-
-  if xray_test_config; then
-    ok "Xray 配置测试通过。"
-    restart_xray
-  else
-    fail "Xray 配置测试失败，未启动服务。请检查 ${XRAY_CONFIG}。"
-    show_xray_config_context "$XRAY_CONFIG"
+    report WARN "${label} 失败：${loss:-无 RTT}。请检查 EasyTier peer、路由和端口白名单。"
     return 1
   fi
-
-  local relay_output client_link_output
-  relay_output="$(cat <<EOF
-ENTRY_UUID=${entry_uuid}
-VLESSENC_ENCRYPTION=${vless_encryption}
-CLOUD_ENDPOINT=${cloud_endpoint}
-CLIENT_ENTRY_PORT=${CLIENT_ENTRY_PORT_DEFAULT}
-LANDING_ADDRESS=${landing_address}
-LANDING_PORT=${landing_port}
-ACTIVE_LANDING_NAME=${active_landing_profile_name:-current}
-ACTIVE_LANDING_ADDRESS=${landing_address}
-ACTIVE_LANDING_PORT=${landing_port}
-CLIENT_LINK=${client_link}
-LEIKWAN_PUBLIC_KEY=${wg_public}
-CLOUD_PUBLIC_KEY=${cloud_public_key}
-WG_STATUS_HINT=请运行 wg show，确认与公网入口机存在 latest handshake，并能 ping ${CLOUD_WG_IP}
-EOF
-)"
-client_link_output="$(cat <<EOF
-ENTRY_UUID=${entry_uuid}
-VLESSENC_ENCRYPTION=${vless_encryption}
-CLOUD_ENDPOINT=${cloud_endpoint}
-CLIENT_ENTRY_PORT=${CLIENT_ENTRY_PORT_DEFAULT}
-LANDING_ADDRESS=${landing_address}
-LANDING_PORT=${landing_port}
-ACTIVE_LANDING_NAME=${active_landing_profile_name:-current}
-ACTIVE_LANDING_ADDRESS=${landing_address}
-ACTIVE_LANDING_PORT=${landing_port}
-CLIENT_LINK=${client_link}
-EOF
-)"
-  print_copy_block "客户端导入链接" "CLIENT_LINK=${client_link}"
-  write_output_file "leikwan-relay" "$relay_output"
-  write_output_file "client-link" "$client_link_output"
-  landing_write_profile "${active_landing_profile_name:-current}" "$landing_address" "$landing_port" "$landing_uuid" "$landing_public_key" "$landing_short_id" "$landing_server_name" "$LANDING_FLOW_DEFAULT" "used by relay deploy" "yes"
-  landing_set_active "${active_landing_profile_name:-current}"
-  if (( DRY_RUN == 0 )); then
-    print_shortcut_hint
-  fi
-  print_relay_acceptance_commands "$landing_address" "$landing_port"
-}
-
-ensure_nc() {
-  if command -v nc >/dev/null 2>&1; then
-    return 0
-  fi
-  warn "未检测到 nc。"
-  if prompt_yes_no "是否安装 netcat-openbsd 用于链路测试？" "Y"; then
-    install_packages netcat-openbsd
+  if [[ -n "$avg" ]] && awk -v a="$avg" 'BEGIN{exit !(a > 1000)}'; then
+    report FAIL "${label} RTT avg=${avg}ms，严重异常；优先确认 EasyTier 端口是否走 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END} 白名单。"
+  elif [[ -n "$avg" ]] && awk -v a="$avg" 'BEGIN{exit !(a > 200)}'; then
+    report WARN "${label} RTT avg=${avg}ms 偏高；建议检查 EasyTier 端口是否走 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END} 白名单。"
   else
-    return 1
+    report OK "${label} 成功${avg:+，RTT avg=${avg}ms}"
   fi
 }
 
-test_cloud_entry() {
-  need_root
-  init_log
-  ensure_nc || true
-
-  echo
-  echo "${BOLD}公网入口机测试：wg show${RESET}"
-  wg show || warn "wg show 执行失败。"
-
-  echo
-  echo "${BOLD}公网入口机测试：ping ${LEIKWAN_WG_IP}${RESET}"
-  ping -c 3 -W 2 "$LEIKWAN_WG_IP" || warn "ping ${LEIKWAN_WG_IP} 失败。"
-
-  echo
-  echo "${BOLD}公网入口机测试：nc -vz ${LEIKWAN_WG_IP} ${CLIENT_ENTRY_PORT_DEFAULT}${RESET}"
-  if command -v nc >/dev/null 2>&1; then
-    nc -vz -w 3 "$LEIKWAN_WG_IP" "$CLIENT_ENTRY_PORT_DEFAULT" || warn "TCP ${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT} 连接失败。"
-  fi
-
-  echo
-  echo "${BOLD}公网入口机测试：转发方式与规则${RESET}"
-  validate_cloud_forwarding "$(cloud_forward_mode)" || true
-  if [[ "$(cloud_forward_mode)" == "realm" ]]; then
-    ss -lntup | grep "$CLIENT_ENTRY_PORT_DEFAULT" || warn "未看到 ${CLIENT_ENTRY_PORT_DEFAULT} 监听，请检查 realm。"
+doctor_cloud() {
+  report OK "角色：cloud-entry"
+  local entry_ip port iface service_name relay_ip start end
+  local _public_host _et_ip _proto _port _weight
+  entry_ip="$(current_entry_et_ip)"
+  if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then report OK "EasyTier binary 存在"; else report WARN "EasyTier binary 不存在"; fi
+  while IFS=$'\t' read -r name _public_host _et_ip _proto _port _weight enabled; do
+    [[ "$enabled" == "true" ]] || continue
+    service_name="$(entry_service_name "$name")"
+    if systemctl is-active --quiet "${service_name}.service"; then report OK "${service_name} active"; else report WARN "${service_name} 未运行"; fi
+  done < <(entries_rows)
+  iface="$(et_iface_by_ip "$entry_ip")"
+  if [[ -n "$iface" ]]; then report OK "EasyTier IP ${entry_ip} 在接口 ${iface}"; else report WARN "未检测到 EasyTier IP：${entry_ip}"; fi
+  port="$(env_file_get "$ENTRY_PAIRING_FILE" EASYTIER_PORT)"
+  [[ -n "$port" ]] || port="$(env_file_get "$NETWORK_ENV" EASYTIER_LISTEN_PORT)"
+  port="${port:-$EASYTIER_PORT_DEFAULT}"
+  if is_fast_port "$port"; then report OK "EasyTier 监听端口：tcp/${port}，位于白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; else report WARN "EasyTier 监听端口：tcp/${port}，不在白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; fi
+  if ss -lntH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then report OK "EasyTier TCP ${port} 已监听"; else report WARN "EasyTier TCP ${port} 未监听"; fi
+  report_ping_quality "$RELAY_ET_IP" "ping relay ${RELAY_ET_IP}"
+  if nft list table inet leikwan_forward >/dev/null 2>&1; then
+    report OK "nftables table inet leikwan_forward 存在"
+    if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; fi
   else
-    echo "nftables/iptables 为内核 DNAT，ss 不一定能看到 ${CLIENT_ENTRY_PORT_DEFAULT} 用户态监听。"
+    report WARN "nftables 项目表不存在"
   fi
-}
-
-test_leikwan_relay() {
-  need_root
-  init_log
-  ensure_nc || true
-
-  local landing_address landing_port
-  landing_address="$(prompt_endpoint_host "请输入 LANDING_ADDRESS")"
-  landing_port="$(prompt_port "请输入 LANDING_PORT" "$LANDING_PORT_DEFAULT")"
-
-  echo
-  echo "${BOLD}利群中转机测试：wg show${RESET}"
-  wg show || warn "wg show 执行失败。"
-
-  echo
-  echo "${BOLD}利群中转机测试：ss -lntup | grep ${CLIENT_ENTRY_PORT_DEFAULT}${RESET}"
-  ss -lntup | grep "$CLIENT_ENTRY_PORT_DEFAULT" || warn "未看到 ${CLIENT_ENTRY_PORT_DEFAULT} 监听，请检查 Xray inbound。"
-
-  echo
-  echo "${BOLD}利群中转机测试：ip route get ${landing_address}${RESET}"
-  ip route get "$landing_address" || warn "路由查询失败。"
-
-  echo
-  echo "${BOLD}利群中转机测试：nc -vz ${landing_address} ${landing_port}${RESET}"
-  if command -v nc >/dev/null 2>&1; then
-    nc -vz -w 3 "$landing_address" "$landing_port" || warn "落地机 ${landing_address}:${landing_port} TCP 连接失败。"
-  fi
-
-  echo
-  echo "${BOLD}利群中转机测试：systemctl status ${XRAY_LEIKWAN_SERVICE_NAME}${RESET}"
-  systemctl status "${XRAY_LEIKWAN_SERVICE_NAME}" --no-pager || systemctl status xray --no-pager || true
-}
-
-test_landing_server() {
-  need_root
-  init_log
-  local landing_port
-  landing_port="$(prompt_port "请输入 LANDING_PORT" "$LANDING_PORT_DEFAULT")"
-
-  echo
-  echo "${BOLD}海外落地机测试：systemctl status ${XRAY_LEIKWAN_SERVICE_NAME}${RESET}"
-  systemctl status "${XRAY_LEIKWAN_SERVICE_NAME}" --no-pager || systemctl status xray --no-pager || true
-
-  echo
-  echo "${BOLD}海外落地机测试：ss -lntup | grep ${landing_port}${RESET}"
-  ss -lntup | grep "$landing_port" || warn "未看到 ${landing_port} 监听，请检查 Xray Reality inbound。"
-
-  echo
-  echo "${BOLD}海外落地机测试：xray run -test${RESET}"
-  if [[ -x "$XRAY_BIN" ]]; then
-    xray_test_config || warn "Xray 配置测试失败。"
+  if [[ -f "$ENTRY_EXPOSE_ENV" ]]; then
+    start="$(entry_expose_start)"
+    end="$(entry_expose_end)"
+    relay_ip="$(entry_expose_relay_ip)"
+    report OK "入口端口池：${start}-${end} -> ${relay_ip}"
+    if nft list table inet leikwan_forward 2>/dev/null | grep -Fq "tcp dport ${start}-${end} dnat ip to ${relay_ip}"; then
+      report OK "入口端口池 DNAT 正常"
+    else
+      report FAIL "入口端口池 DNAT 缺失：应为 tcp dport ${start}-${end} dnat ip to ${relay_ip}"
+    fi
   else
-    warn "未找到 ${XRAY_BIN}。"
+    report WARN "公网入口端口池未配置，请执行 lq entry expose-range"
   fi
+  [[ -f "$ENTRY_PAIRING_FILE" ]] && report OK "入口配对码：已生成"
 }
 
-link_test_menu() {
-  while true; do
-    echo
-    echo "${BOLD}链路测试${RESET}"
-    echo "1. 公网入口机测试"
-    echo "2. 利群中转机测试"
-    echo "3. 海外落地机测试"
-    echo "0. 返回主菜单"
-    choice="$(prompt_menu_choice "请选择：")"
-    case "$choice" in
-      1) test_cloud_entry || true ;;
-      2) test_leikwan_relay || true ;;
-      3) test_landing_server || true ;;
-      0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
-    esac
-  done
+doctor_relay() {
+  report OK "角色：leikwan-relay"
+  local iface entries forwards name public_host et_ip proto port _weight enabled peer_text target_ip target_port
+  local entry_port target_host out_iface route_table comment
+  if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then report OK "EasyTier binary 存在"; else report WARN "EasyTier binary 不存在"; fi
+  if systemctl is-active --quiet "${EASYTIER_RELAY_SERVICE_NAME}.service"; then report OK "easytier-relay.service active"; else report WARN "easytier-relay.service 未运行"; fi
+  iface="$(et_iface_by_ip "$RELAY_ET_IP")"
+  if [[ -n "$iface" ]]; then report OK "Relay EasyTier IP ${RELAY_ET_IP} 在接口 ${iface}"; else report WARN "未检测到 Relay EasyTier IP：${RELAY_ET_IP}"; fi
+  entries="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"; report INFO "enabled entries：${entries}"
+  peer_text="$(easytier_cli_peer_text)"
+  while IFS=$'\t' read -r name public_host et_ip proto port _weight enabled; do
+    [[ "$enabled" == "true" ]] || continue
+    if grep -q "$et_ip" <<<"$peer_text"; then report OK "入口 ${name} peer 可见：${et_ip}"; else report WARN "入口 ${name} peer 暂未在 easytier-cli 中出现"; fi
+    report INFO "入口 ${name} peer 目标：${proto}://${public_host}:${port}"
+    if is_fast_port "$port"; then report OK "入口 ${name} EasyTier 端口 ${port} 位于白名单"; else report WARN "入口 ${name} EasyTier 端口 ${port} 不在白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; fi
+    report_ping_quality "$et_ip" "ping ${name} ${et_ip}"
+    if tcp_reachable "$public_host" "$port"; then
+      report OK "入口 ${name} TCP 可达：${public_host}:${port}"
+    else
+      report WARN "入口 ${name} TCP 不可达：${public_host}:${port}"
+    fi
+  done < <(entries_rows)
+  if sysctl -n net.ipv4.ip_forward 2>/dev/null | grep -qx 1; then report OK "net.ipv4.ip_forward=1"; else report WARN "net.ipv4.ip_forward 未启用"; fi
+  if nft list table inet leikwan_forward >/dev/null 2>&1; then
+    report OK "nftables table inet leikwan_forward 存在"
+    if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; fi
+  else
+    report WARN "nftables 项目表不存在"
+  fi
+  if forwards="$(enabled_forwards_count 2>/dev/null)"; then
+    report INFO "enabled forwards：${forwards}"
+  else
+    report FAIL "forwards.tsv 校验失败，请检查 TAB 分隔和字段数。"
+  fi
+  if resolve_forwards >/dev/null 2>&1; then
+    while IFS=$'\034' read -r name entry_port target_host target_ip target_port out_iface route_table enabled comment; do
+      [[ "$enabled" == "true" ]] || continue
+      if port_in_range "$entry_port" "$ENTRY_EXPOSE_START_DEFAULT" "$ENTRY_EXPOSE_END_DEFAULT"; then
+        report OK "${name} entry_port ${entry_port} 位于常见入口端口池 ${ENTRY_EXPOSE_START_DEFAULT}-${ENTRY_EXPOSE_END_DEFAULT}"
+      else
+        report WARN "${name} entry_port ${entry_port} 不在常见入口端口池 ${ENTRY_EXPOSE_START_DEFAULT}-${ENTRY_EXPOSE_END_DEFAULT}"
+      fi
+      if [[ -n "$target_ip" ]]; then
+        report OK "${name} resolved -> ${target_ip}"
+      else
+        report WARN "${name} target 未解析"
+      fi
+      if [[ -n "$target_ip" ]]; then
+        if tcp_reachable "$target_ip" "$target_port"; then
+          report OK "${name} target TCP 可达"
+        else
+          report WARN "${name} target TCP 不可达"
+        fi
+      fi
+      if [[ -n "$target_ip" ]]; then
+        if nft_has_relay_dnat "$entry_port" "$target_ip" "$target_port"; then
+          report OK "${name} relay DNAT 正常"
+        else
+          report FAIL "${name} relay DNAT 缺失：应为 tcp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
+        fi
+      fi
+    done < <(resolved_rows_usv)
+  else
+    report FAIL "resolved.tsv 更新失败，请检查 target_host 解析。"
+  fi
+  [[ -f "$NETWORK_PAIRING_FILE" ]] && report OK "relay 网络码：已生成"
 }
 
-resolved_available() {
-  systemctl list-unit-files --type=service --no-legend systemd-resolved.service 2>/dev/null \
-    | grep -q '^systemd-resolved\.service' \
-    || command -v resolvectl >/dev/null 2>&1
+doctor() {
+  local role bbr_cc bbr_qdisc
+  role="$(detect_role)"
+  bbr_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+  bbr_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+  if [[ "$bbr_cc" == "bbr" && "$bbr_qdisc" == "fq" ]]; then report OK "BBR/fq enabled"; else report INFO "BBR=${bbr_cc:-unknown}, qdisc=${bbr_qdisc:-unknown}"; fi
+  case "$role" in
+    cloud-entry) doctor_cloud ;;
+    leikwan-relay) doctor_relay ;;
+    *) report WARN "角色未知，请先执行 EasyTier 快速配对" ;;
+  esac
+  if (( VERBOSE_DOCTOR == 1 )); then
+    report DEBUG "entries.tsv=${ENTRIES_TSV}"
+    report DEBUG "forwards.tsv=${FORWARDS_TSV}"
+    report DEBUG "network.env=${NETWORK_ENV}"
+    report DEBUG "nft=${NFT_RULE_FILE}"
+  fi
 }
 
 fix_dns_ipv4_first() {
-  need_root
-  init_log
-  ensure_supported_os
-
-  local gai_content resolved_content resolved_file summary need_gai_update="no" need_resolved_update="no"
-  resolved_file="/etc/systemd/resolved.conf.d/99-custom-dns.conf"
-
-  if [[ ! -f /etc/gai.conf ]] || ! grep -Eq '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' /etc/gai.conf; then
-    need_gai_update="yes"
+  need_root_unless_dry_run
+  backup_file /etc/gai.conf
+  grep -q 'precedence ::ffff:0:0/96  100' /etc/gai.conf 2>/dev/null || echo 'precedence ::ffff:0:0/96  100' >>/etc/gai.conf
+  if systemctl list-unit-files --no-legend systemd-resolved.service 2>/dev/null | grep -q .; then
+    write_file "$DNS_RESOLVED_CONF" $'[Resolve]\nDNS=8.8.8.8 1.1.1.1 8.8.4.4\nFallbackDNS=9.9.9.9 223.5.5.5\nLLMNR=no\nMulticastDNS=no' 644
+    systemctl restart systemd-resolved 2>/dev/null || true
   fi
-
-  resolved_content='[Resolve]
-DNS=8.8.8.8 1.1.1.1 8.8.4.4
-FallbackDNS=9.9.9.9 223.5.5.5
-LLMNR=no
-MulticastDNS=no'
-
-  if resolved_available; then
-    if [[ ! -f "$resolved_file" ]] || [[ "$(cat "$resolved_file" 2>/dev/null || true)" != "$resolved_content" ]]; then
-      need_resolved_update="yes"
-    fi
-  fi
-
-  summary="文件：/etc/gai.conf\n动作：确保添加 IPv4 优先规则 precedence ::ffff:0:0/96  100\n\n文件：${resolved_file}\n动作：如果 systemd-resolved 存在，写入 DNS=8.8.8.8 1.1.1.1 8.8.4.4，FallbackDNS=9.9.9.9 223.5.5.5，并关闭 LLMNR/MulticastDNS。\n\n测试：getent ahosts raw.githubusercontent.com\n提示：raw.githubusercontent.com 能通即可；github.com 主站可能仍因出口路由不可达。Release 下载推荐 ghfast 镜像。"
-
-  if [[ "$need_gai_update" == "no" && "$need_resolved_update" == "no" ]]; then
-    ok "DNS / IPv4 优先配置已是目标状态。"
-  else
-    if ! confirm_summary "DNS / IPv4 优先修复摘要" "$summary"; then
-      warn "已取消 DNS / IPv4 优先修复。"
-      return 0
-    fi
-
-    if [[ "$need_gai_update" == "yes" ]]; then
-      gai_content="$(cat /etc/gai.conf 2>/dev/null || true)"
-      gai_content="${gai_content%$'\n'}"$'\n\n# Added by leikwan-wg-toolkit: prefer IPv4-mapped addresses\nprecedence ::ffff:0:0/96  100'
-      write_text_file /etc/gai.conf "$gai_content" 644 || true
-    fi
-
-    if resolved_available; then
-      install -d -m 755 /etc/systemd/resolved.conf.d
-      write_text_file "$resolved_file" "$resolved_content" 644 || true
-      if systemctl is-enabled systemd-resolved.service >/dev/null 2>&1 || systemctl is-active systemd-resolved.service >/dev/null 2>&1; then
-        run_cmd systemctl restart systemd-resolved.service || warn "systemd-resolved 重启失败，请手动检查。"
-      else
-        warn "systemd-resolved 存在但未启用，已写入 drop-in 配置。"
-      fi
-    else
-      warn "未检测到 systemd-resolved，跳过 resolved drop-in。"
-    fi
-  fi
-
-  echo
-  echo "${BOLD}解析测试：raw.githubusercontent.com${RESET}"
-  if getent ahosts raw.githubusercontent.com; then
-    ok "getent 测试完成。raw.githubusercontent.com 能解析即可。"
-  else
-    warn "getent 解析失败，可能仍受 DNS、出口路由或污染影响。"
-  fi
-  warn "github.com 主站可能仍因出口路由不可达；Release 下载推荐 ghfast 镜像。"
-}
-
-write_resolved_ipv6_lockdown() {
-  local file="/etc/systemd/resolved.conf.d/98-leikwan-ipv6-lockdown.conf"
-  local content='[Resolve]
-LLMNR=no
-MulticastDNS=no'
-
-  if resolved_available; then
-    install -d -m 755 /etc/systemd/resolved.conf.d
-    write_text_file "$file" "$content" 644 || true
-    if systemctl is-active systemd-resolved.service >/dev/null 2>&1; then
-      run_cmd systemctl restart systemd-resolved.service || warn "systemd-resolved 重启失败，请手动检查。"
-    fi
-  fi
+  if getent ahosts raw.githubusercontent.com >/dev/null; then ok "raw.githubusercontent.com 可解析"; else warn "raw.githubusercontent.com 解析失败"; fi
 }
 
 ipv6_lockdown() {
-  need_root
-  init_log
-  ensure_supported_os
-
-  local summary
-  summary="动作：安装 iptables-persistent，创建并刷新 V6_LOCKDOWN 链。\n允许：lo、ESTABLISHED/RELATED、ipv6-icmp、tcp/22。\n拒绝：其他 IPv6 入站流量 DROP。\n同时：关闭 LLMNR 和 MulticastDNS。\n保存：/etc/iptables/rules.v6。\n说明：不禁用 IPv6，不改 IPv4；WG/Xray 主链路不受 IPv6 入站收口影响。"
-
-  if ! confirm_summary "IPv6 入站安全收口摘要" "$summary"; then
-    warn "已取消 IPv6 入站安全收口。"
-    return 0
-  fi
-
-  export DEBIAN_FRONTEND=noninteractive
-  echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections || true
-  echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections || true
+  need_root_unless_dry_run
   install_packages iptables-persistent
-
-  backup_file /etc/iptables/rules.v6
-
   ip6tables -N V6_LOCKDOWN 2>/dev/null || true
   ip6tables -F V6_LOCKDOWN
   ip6tables -A V6_LOCKDOWN -i lo -j ACCEPT
@@ -4845,3485 +2153,384 @@ ipv6_lockdown() {
   ip6tables -A V6_LOCKDOWN -p ipv6-icmp -j ACCEPT
   ip6tables -A V6_LOCKDOWN -p tcp --dport 22 -j ACCEPT
   ip6tables -A V6_LOCKDOWN -j DROP
-  ip6tables -C INPUT -j V6_LOCKDOWN 2>/dev/null || ip6tables -I INPUT 1 -j V6_LOCKDOWN
-
-  install -d -m 755 /etc/iptables
+  ip6tables -C INPUT -j V6_LOCKDOWN 2>/dev/null || ip6tables -I INPUT -j V6_LOCKDOWN
+  mkdir -p /etc/iptables
   ip6tables-save >/etc/iptables/rules.v6
-  ok "IPv6 V6_LOCKDOWN 已保存到 /etc/iptables/rules.v6"
-
-  write_resolved_ipv6_lockdown
-
-  echo
-  echo "${BOLD}主链路检查${RESET}"
-  wg show 2>/dev/null || warn "未检测到 WireGuard 状态或 wg show 失败。"
-  ss -lntup | grep -E "(:22|:${CLOUD_WG_PORT_DEFAULT}|:${CLIENT_ENTRY_PORT_DEFAULT}|:${LANDING_PORT_DEFAULT}|realm|xray)" || true
-  ok "IPv6 入站收口完成。若业务需要 IPv6 公网入站，请先添加允许规则。"
-}
-
-PBR_FOUND_NAMES=()
-PBR_FOUND_GWS=()
-PBR_FOUND_IDS=()
-PBR_FOUND_IPS=()
-PBR_SELECTED_NAME=""
-
-pbr_route_definitions() {
-  cat <<'EOF'
-9929 10.7.0.1 ^10\.7\.
-CN2 10.8.0.1 ^10\.8\.
-JPSDWAN 10.3.0.1 ^10\.3\.[0-3]\.
-DESDWAN 10.3.10.1 ^10\.3\.(8|9|10|11)\.
-KRSDWAN 10.4.0.1 ^10\.4\.[0-3]\.
-HKSDWAN 10.3.50.1 ^10\.3\.(48|49|50|51)\.
-TWSDWAN 10.3.100.1 ^10\.3\.(100|101|102|103)\.
-SEATTLE 10.3.160.1 ^10\.3\.(160|161)\.
-MOSCOW 10.3.170.1 ^10\.3\.(170|171)\.
-SINGAPORE 10.3.180.1 ^10\.3\.180\.
-USSDWAN-LAX 10.3.150.1 ^10\.3\.(150|151)\.
-EOF
-}
-
-pbr_ensure_dir() {
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$PBR_DIR"
-  fi
-}
-
-pbr_ensure_state_dir() {
-  if (( DRY_RUN == 0 )); then
-    install -d -m 755 "$PBR_STATE_DIR"
-  fi
-}
-
-pbr_group_table_id() {
-  local target="$1"
-  local idx=101 name gw pattern
-  while read -r name gw pattern; do
-    [[ -z "$name" ]] && continue
-    if [[ "$name" == "$target" ]]; then
-      printf '%s' "$idx"
-      return 0
-    fi
-    idx=$((idx + 1))
-  done < <(pbr_route_definitions)
-  return 1
-}
-
-pbr_group_gateway() {
-  local target="$1"
-  local name gw pattern
-  while read -r name gw pattern; do
-    [[ -z "$name" ]] && continue
-    if [[ "$name" == "$target" ]]; then
-      printf '%s' "$gw"
-      return 0
-    fi
-  done < <(pbr_route_definitions)
-  return 1
-}
-
-pbr_builtin_group_exists() {
-  local target="$1"
-  local name gw pattern
-  while read -r name gw pattern; do
-    [[ -z "$name" ]] && continue
-    [[ "$name" == "$target" ]] && return 0
-  done < <(pbr_route_definitions)
-  return 1
-}
-
-pbr_table_id_to_name() {
-  local table_id="$1"
-  [[ -f "$PBR_RT_TABLES" ]] || return 1
-  awk -v id="$table_id" '$1 == id {print $2; exit}' "$PBR_RT_TABLES"
-}
-
-pbr_lookup_to_group() {
-  local lookup="$1"
-  local table_name="$lookup"
-  local group
-  if [[ "$lookup" =~ ^[0-9]+$ ]]; then
-    table_name="$(pbr_table_id_to_name "$lookup")"
-  fi
-  [[ "$table_name" == T_* ]] || return 1
-  group="${table_name#T_}"
-  pbr_builtin_group_exists "$group" || return 1
-  printf '%s' "$group"
-}
-
-pbr_lookup_to_table_id() {
-  local lookup="$1"
-  local group
-  if [[ "$lookup" =~ ^[0-9]+$ ]]; then
-    printf '%s' "$lookup"
-    return 0
-  fi
-  group="$(pbr_lookup_to_group "$lookup")" || return 1
-  pbr_group_table_id "$group"
-}
-
-pbr_rule_target_to_cidr() {
-  local target="$1"
-  normalize_ipv4_cidr "$target"
-}
-
-pbr_ensure_rt_tables() {
-  local content=""
-  local changed=0
-  local line
-  if [[ -f "$PBR_RT_TABLES" ]]; then
-    content="$(cat "$PBR_RT_TABLES")"
-  else
-    changed=1
-  fi
-
-  for line in "255 local" "254 main" "253 default" "0 unspec"; do
-    if ! grep -Eq "^${line%% *}[[:space:]]+${line#* }([[:space:]]|$)" <<<"$content"; then
-      content="${content%$'\n'}"$'\n'"$line"
-      changed=1
-    fi
-  done
-
-  if (( changed == 1 )); then
-    write_text_file "$PBR_RT_TABLES" "${content#$'\n'}" 644 || true
-  fi
-}
-
-pbr_ensure_table_for_group() {
-  local group="$1"
-  local table_id table_name content
-  table_id="$(pbr_group_table_id "$group")" || return 1
-  table_name="T_${group}"
-  pbr_ensure_rt_tables
-  content="$(cat "$PBR_RT_TABLES" 2>/dev/null || true)"
-  if ! grep -Eq "^[0-9]+[[:space:]]+${table_name}([[:space:]]|$)" <<<"$content"; then
-    content="${content%$'\n'}"$'\n'"${table_id} ${table_name}"
-    write_text_file "$PBR_RT_TABLES" "${content#$'\n'}" 644 || true
-  fi
-}
-
-pbr_ensure_tables_for_found_groups() {
-  local content changed=0 i group table_id table_name line
-  content="$(cat "$PBR_RT_TABLES" 2>/dev/null || true)"
-  for line in "255 local" "254 main" "253 default" "0 unspec"; do
-    if ! grep -Eq "^${line%% *}[[:space:]]+${line#* }([[:space:]]|$)" <<<"$content"; then
-      content="${content%$'\n'}"$'\n'"$line"
-      changed=1
-    fi
-  done
-  for ((i = 0; i < ${#PBR_FOUND_NAMES[@]}; i++)); do
-    group="${PBR_FOUND_NAMES[$i]}"
-    table_id="$(pbr_group_table_id "$group")" || continue
-    table_name="T_${group}"
-    if ! grep -Eq "^[0-9]+[[:space:]]+${table_name}([[:space:]]|$)" <<<"$content"; then
-      line="${table_id} ${table_name}"
-      content="${content%$'\n'}"$'\n'"${line}"
-      changed=1
-    fi
-  done
-  if (( changed == 1 )); then
-    write_text_file "$PBR_RT_TABLES" "${content#$'\n'}" 644 || true
-  fi
-}
-
-pbr_detect_available_routes() {
-  local mode="${1:-show}"
-  local save="${2:-no}"
-  local all_ips name gw pattern table_id matched matched_ips group_content
-
-  PBR_FOUND_NAMES=()
-  PBR_FOUND_GWS=()
-  PBR_FOUND_IDS=()
-  PBR_FOUND_IPS=()
-
-  all_ips="$(ip -4 addr show 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | grep -v '^127\.' || true)"
-
-  while read -r name gw pattern; do
-    [[ -z "$name" ]] && continue
-    matched=0
-    matched_ips=""
-    local ip_addr
-    for ip_addr in $all_ips; do
-      if [[ "$ip_addr" =~ $pattern ]]; then
-        matched=1
-        matched_ips="${matched_ips}${matched_ips:+,}${ip_addr}"
-      fi
-    done
-    if (( matched == 1 )); then
-      table_id="$(pbr_group_table_id "$name")"
-      PBR_FOUND_NAMES+=("$name")
-      PBR_FOUND_GWS+=("$gw")
-      PBR_FOUND_IDS+=("$table_id")
-      PBR_FOUND_IPS+=("$matched_ips")
-      group_content="${group_content:-}${name} ${gw} T_${name} ${table_id} ${matched_ips}"$'\n'
-    fi
-  done < <(pbr_route_definitions)
-
-  if [[ "$save" == "save" ]]; then
-    pbr_ensure_dir
-    pbr_ensure_tables_for_found_groups
-    write_text_file "$PBR_GROUP_CONF" "${group_content:-}" 644 || true
-  fi
-
-  if [[ "$mode" != "quiet" ]]; then
-    echo
-    echo "${BOLD}可用 IPv4 出口线路组${RESET}"
-    if (( ${#PBR_FOUND_NAMES[@]} == 0 )); then
-      warn "未检测到匹配的利群常见线路组 IPv4 地址。"
-    else
-      printf '%-4s %-14s %-15s %-24s\n' "No." "线路组" "网关" "检测到的本机 IP"
-      local i
-      for ((i = 0; i < ${#PBR_FOUND_NAMES[@]}; i++)); do
-        printf '%-4d %-14s %-15s %-24s\n' "$((i + 1))" "${PBR_FOUND_NAMES[$i]}" "${PBR_FOUND_GWS[$i]}" "${PBR_FOUND_IPS[$i]}"
-      done
-    fi
-  fi
-}
-
-pbr_select_group() {
-  local allow_all="${1:-yes}"
-  local choice count name gw pattern
-  pbr_detect_available_routes "show" "no"
-  count="${#PBR_FOUND_NAMES[@]}"
-
-  if (( count == 0 )) && [[ "$allow_all" != "yes" ]]; then
-    return 1
-  fi
-
-  if [[ "$allow_all" == "yes" ]]; then
-    echo "A. 其他：显示所有内置线路组"
-  fi
-  choice="$(prompt_menu_choice "请选择线路组编号，或输入 A 查看全部，留空取消：")"
-  [[ -z "$choice" ]] && return 255
-
-  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= count )); then
-    PBR_SELECTED_NAME="${PBR_FOUND_NAMES[$((choice - 1))]}"
-    return 0
-  fi
-
-  if [[ "$allow_all" == "yes" && "$choice" =~ ^[Aa]$ ]]; then
-    echo
-    echo "${BOLD}全部内置线路组${RESET}"
-    local idx=1
-    while read -r name gw pattern; do
-      printf '%-4d %-14s %-15s %s\n' "$idx" "$name" "$gw" "$pattern"
-      idx=$((idx + 1))
-    done < <(pbr_route_definitions)
-    choice="$(prompt_menu_choice "请选择线路组编号，留空取消：")"
-    [[ -z "$choice" ]] && return 255
-    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice < idx )); then
-      idx=1
-      while read -r name gw pattern; do
-        if (( idx == choice )); then
-          PBR_SELECTED_NAME="$name"
-          return 0
-        fi
-        idx=$((idx + 1))
-      done < <(pbr_route_definitions)
-    fi
-  fi
-
-  fail "无效线路组选择。"
-  return 1
-}
-
-pbr_prepare_table_for_group() {
-  local group="$1"
-  local gw table_name
-  gw="$(pbr_group_gateway "$group")" || {
-    warn "未知线路组：${group}"
-    return 1
-  }
-  table_name="T_${group}"
-  pbr_ensure_table_for_group "$group"
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将设置路由表 ${table_name}: default via ${gw}"
-    return 0
-  fi
-  if ip route replace default via "$gw" table "$table_name" 2>/dev/null; then
-    ok "已设置 ${table_name} 默认出口：${gw}"
-  else
-    warn "设置 ${table_name} 默认出口失败：${gw}。请确认本机具备该线路网关。"
-    return 1
-  fi
-}
-
-pbr_rule_exact_exists() {
-  local priority="$1"
-  local target="$2"
-  local table_name="${3:-}"
-  local target_cidr expected_table_id line_priority line_target line_lookup raw line_cidr line_table_id
-  target_cidr="$(pbr_rule_target_to_cidr "$target" 2>/dev/null || true)"
-  [[ -n "$target_cidr" ]] || return 1
-  if [[ -n "$table_name" ]]; then
-    expected_table_id="$(pbr_lookup_to_table_id "$table_name" 2>/dev/null || true)"
-    [[ -n "$expected_table_id" ]] || return 1
-  fi
-  while IFS='|' read -r line_priority line_target line_lookup raw; do
-    [[ -n "$line_priority" ]] || continue
-    [[ "$line_priority" == "$priority" ]] || continue
-    line_cidr="$(pbr_rule_target_to_cidr "$line_target" 2>/dev/null || true)"
-    [[ "$line_cidr" == "$target_cidr" ]] || continue
-    if [[ -n "$table_name" ]]; then
-      line_table_id="$(pbr_lookup_to_table_id "$line_lookup" 2>/dev/null || true)"
-      [[ "$line_table_id" == "$expected_table_id" ]] || continue
-    fi
-    return 0
-  done < <(pbr_collect_relevant_rules)
-  return 1
-}
-
-pbr_delete_rule_exact() {
-  local priority="$1"
-  local target="$2"
-  local table_name="${3:-}"
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将删除 ip rule priority ${priority} to ${target}${table_name:+ table ${table_name}}"
-    return 0
-  fi
-  while pbr_rule_exact_exists "$priority" "$target" "$table_name"; do
-    if [[ -n "$table_name" ]]; then
-      ip rule del priority "$priority" to "$target" table "$table_name" 2>/dev/null || break
-    else
-      ip rule del priority "$priority" to "$target" 2>/dev/null || break
-    fi
-  done
-}
-
-pbr_add_rule_exact() {
-  local priority="$1"
-  local target="$2"
-  local group="$3"
-  local table_name="T_${group}"
-  pbr_prepare_table_for_group "$group" || return 1
-  pbr_delete_rule_exact "$priority" "$target" "$table_name"
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将添加 ip rule priority ${priority} to ${target} table ${table_name}"
-    return 0
-  fi
-  ip rule add priority "$priority" to "$target" table "$table_name" 2>/dev/null || true
-}
-
-pbr_config_has_target() {
-  local file="$1"
-  local target="$2"
-  [[ -f "$file" ]] || return 1
-  awk -v t="$target" '$1 == t {found=1} END {exit !found}' "$file"
-}
-
-pbr_static_managed_group() {
-  local cidr="$1"
-  [[ -f "$PBR_STATIC_CONF" ]] || return 1
-  awk -v c="$cidr" '$1 == c {print $2; exit}' "$PBR_STATIC_CONF"
-}
-
-pbr_domain_state_managed() {
-  local cidr="$1"
-  local table_id="$2"
-  [[ -f "$PBR_DOMAIN_STATE" ]] || return 1
-  awk -v c="$cidr" -v t="$table_id" '$4 == c && $5 == t {found=1} END {exit !found}' "$PBR_DOMAIN_STATE"
-}
-
-pbr_collect_relevant_rules() {
-  ip rule show 2>/dev/null | awk -v ps="$PBR_STATIC_PRIORITY" -v pd="$PBR_DOMAIN_PRIORITY" '
-    $1 ~ ":" {
-      prio=$1
-      sub(/:$/, "", prio)
-      if (prio != ps && prio != pd) next
-      target=""
-      lookup=""
-      for (i=1; i<=NF; i++) {
-        if ($i == "to" && (i+1)<=NF) target=$(i+1)
-        if ($i == "lookup" && (i+1)<=NF) lookup=$(i+1)
-      }
-      if (target ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ && lookup != "") {
-        print prio "|" target "|" lookup "|" $0
-      }
-    }'
-}
-
-pbr_rule_is_managed() {
-  local priority="$1"
-  local cidr="$2"
-  local lookup="$3"
-  local group table_id static_group
-  group="$(pbr_lookup_to_group "$lookup" 2>/dev/null || true)"
-  table_id="$(pbr_lookup_to_table_id "$lookup" 2>/dev/null || true)"
-  static_group="$(pbr_static_managed_group "$cidr" 2>/dev/null || true)"
-  if [[ -n "$static_group" && -n "$group" && "$static_group" == "$group" ]]; then
-    return 0
-  fi
-  if [[ "$priority" == "$PBR_DOMAIN_PRIORITY" && -n "$table_id" ]]; then
-    pbr_domain_state_managed "$cidr" "$table_id"
-    return
-  fi
-  return 1
-}
-
-pbr_list_unmanaged_rules() {
-  local line priority target lookup raw cidr
-  while IFS='|' read -r priority target lookup raw; do
-    [[ -n "$priority" ]] || continue
-    cidr="$(pbr_rule_target_to_cidr "$target" 2>/dev/null || true)"
-    [[ -n "$cidr" ]] || continue
-    if ! pbr_rule_is_managed "$priority" "$cidr" "$lookup"; then
-      printf '%s\n' "$raw"
-    fi
-  done < <(pbr_collect_relevant_rules)
-}
-
-pbr_list_managed_rules() {
-  local line priority target lookup raw cidr
-  while IFS='|' read -r priority target lookup raw; do
-    [[ -n "$priority" ]] || continue
-    cidr="$(pbr_rule_target_to_cidr "$target" 2>/dev/null || true)"
-    [[ -n "$cidr" ]] || continue
-    if pbr_rule_is_managed "$priority" "$cidr" "$lookup"; then
-      printf '%s\n' "$raw"
-    fi
-  done < <(pbr_collect_relevant_rules)
-}
-
-pbr_add_static_route() {
-  need_root_unless_dry_run
-  init_log
-  local ret input raw item cidr group content additions summary
-  pbr_select_group "yes"
-  ret=$?
-  [[ $ret -eq 255 ]] && return 0
-  [[ $ret -ne 0 ]] && return 1
-  group="$PBR_SELECTED_NAME"
-  input="$(prompt_non_empty "请输入目标 IPv4 / CIDR，多个用逗号分隔")"
-
-  content="$(cat "$PBR_STATIC_CONF" 2>/dev/null || true)"
-  additions=""
-  IFS=',' read -r -a raw <<<"$input"
-  for item in "${raw[@]}"; do
-    if cidr="$(normalize_ipv4_cidr "$item")"; then
-      if grep -Eq "^${cidr//./\\.}[[:space:]]+" <<<"$content" || grep -Eq "^${cidr//./\\.}[[:space:]]+" <<<"$additions"; then
-        warn "跳过已存在目标：${cidr}"
-      else
-        additions="${additions}${cidr} ${group}"$'\n'
-      fi
-    else
-      warn "跳过无效 IPv4/CIDR：${item}"
-    fi
-  done
-  [[ -n "$additions" ]] || {
-    warn "没有可添加的有效规则。"
-    return 0
-  }
-
-  summary="规则类型：静态 IPv4 PBR\n优先级：${PBR_STATIC_PRIORITY}\n线路组：${group}\n路由表：T_${group}\n新增规则：\n${additions}\n说明：只为目标 IP/CIDR 指定出口，不修改 main 默认路由。"
-  if ! confirm_summary "添加静态 IPv4 PBR 规则摘要" "$summary"; then
-    return 0
-  fi
-
-  pbr_ensure_dir
-  write_text_file "$PBR_STATIC_CONF" "$(printf '%s\n%s' "${content%$'\n'}" "${additions%$'\n'}" | sed '/^$/d')" 644 || true
-  pbr_apply_saved_rules
-}
-
-pbr_resolve_domain_a() {
-  local domain="$1"
-  getent ahostsv4 "$domain" 2>/dev/null \
-    | awk '{print $1}' \
-    | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' \
-    | sort -u \
-    | paste -sd, - || true
-}
-
-pbr_add_domain_route() {
-  need_root_unless_dry_run
-  init_log
-  local ret input item domain group ips content additions summary
-  pbr_select_group "yes"
-  ret=$?
-  [[ $ret -eq 255 ]] && return 0
-  [[ $ret -ne 0 ]] && return 1
-  group="$PBR_SELECTED_NAME"
-  input="$(prompt_non_empty "请输入域名，多个用逗号分隔，只解析 A 记录")"
-
-  content="$(cat "$PBR_DOMAIN_CONF" 2>/dev/null || true)"
-  additions=""
-  IFS=',' read -r -a item <<<"$input"
-  for domain in "${item[@]}"; do
-    domain="$(trim_spaces "$domain")"
-    [[ -n "$domain" ]] || continue
-    if [[ "$domain" =~ [[:space:]/] ]]; then
-      warn "跳过无效域名：${domain}"
-      continue
-    fi
-    if grep -Eq "^${domain//./\\.}[[:space:]]+" <<<"$content" || grep -Eq "^${domain//./\\.}[[:space:]]+" <<<"$additions"; then
-      warn "跳过已存在域名：${domain}"
-      continue
-    fi
-    ips="$(pbr_resolve_domain_a "$domain")"
-    if [[ -z "$ips" ]]; then
-      warn "域名当前解析 A 记录失败，将保存规则；刷新失败时会保留旧状态和旧规则。"
-    fi
-    additions="${additions}${domain} ${group}"$'\n'
-  done
-  [[ -n "$additions" ]] || {
-    warn "没有可添加的有效域名规则。"
-    return 0
-  }
-
-  summary="规则类型：域名 DDNS IPv4 PBR\n优先级：${PBR_DOMAIN_PRIORITY}\n线路组：${group}\n路由表：T_${group}\n新增规则：\n${additions}\n说明：只解析 A 记录，不处理 AAAA；systemd timer 默认每 5 分钟刷新。"
-  if ! confirm_summary "添加域名 DDNS IPv4 PBR 规则摘要" "$summary"; then
-    return 0
-  fi
-
-  pbr_ensure_dir
-  write_text_file "$PBR_DOMAIN_CONF" "$(printf '%s\n%s' "${content%$'\n'}" "${additions%$'\n'}" | sed '/^$/d')" 644 || true
-  pbr_refresh_domains
-  pbr_install_service
-}
-
-pbr_apply_static_rules() {
-  [[ -s "$PBR_STATIC_CONF" ]] || return 0
-  local cidr group
-  while read -r cidr group _rest; do
-    [[ -z "$cidr" || "$cidr" =~ ^# ]] && continue
-    pbr_add_rule_exact "$PBR_STATIC_PRIORITY" "$cidr" "$group" || true
-  done < "$PBR_STATIC_CONF"
-}
-
-pbr_refresh_domains() {
-  need_root_unless_dry_run
-  init_log
-  pbr_detect_available_routes "quiet" "save" || true
-  [[ -s "$PBR_DOMAIN_CONF" ]] || return 0
-
-  pbr_ensure_state_dir
-
-  local new_state="" handled_keys="" domain group new_ips ip_addr old_domain old_group old_ip old_cidr old_table old_key key
-  while read -r domain group _rest; do
-    [[ -z "$domain" || "$domain" =~ ^# ]] && continue
-    key="${domain} ${group}"
-    handled_keys="${handled_keys}${key}"$'\n'
-    new_ips="$(pbr_resolve_domain_a "$domain")"
-
-    if [[ -z "$new_ips" ]]; then
-      warn "域名解析失败，保留旧规则：${domain}"
-      if [[ -f "$PBR_DOMAIN_STATE" ]]; then
-        while read -r old_domain old_group old_ip old_cidr old_table _; do
-          [[ -z "$old_domain" || "$old_domain" =~ ^# ]] && continue
-          if [[ "$old_domain" == "$domain" && "$old_group" == "$group" ]]; then
-            new_state="${new_state}${old_domain} ${old_group} ${old_ip} ${old_cidr} ${old_table}"$'\n'
-          fi
-        done < "$PBR_DOMAIN_STATE"
-      fi
-      continue
-    fi
-
-    if [[ -f "$PBR_DOMAIN_STATE" ]]; then
-      while read -r old_domain old_group old_ip old_cidr old_table _; do
-        [[ -z "$old_domain" || "$old_domain" =~ ^# ]] && continue
-        if [[ "$old_domain" == "$domain" && "$old_group" == "$group" ]]; then
-          pbr_delete_rule_exact "$PBR_DOMAIN_PRIORITY" "$old_cidr" "$old_table"
-        fi
-      done < "$PBR_DOMAIN_STATE"
-    fi
-
-    IFS=',' read -r -a new_arr <<<"$new_ips"
-    for ip_addr in "${new_arr[@]}"; do
-      [[ -n "$ip_addr" ]] || continue
-      pbr_add_rule_exact "$PBR_DOMAIN_PRIORITY" "${ip_addr}/32" "$group" || true
-      new_state="${new_state}${domain} ${group} ${ip_addr} ${ip_addr}/32 $(pbr_group_table_id "$group")"$'\n'
-    done
-  done < "$PBR_DOMAIN_CONF"
-
-  if [[ -f "$PBR_DOMAIN_STATE" ]]; then
-    while read -r old_domain old_group old_ip old_cidr old_table _; do
-      [[ -z "$old_domain" || "$old_domain" =~ ^# ]] && continue
-      old_key="${old_domain} ${old_group}"
-      if ! grep -Fxq "$old_key" <<<"$handled_keys"; then
-        pbr_delete_rule_exact "$PBR_DOMAIN_PRIORITY" "$old_cidr" "$old_table"
-      fi
-    done < "$PBR_DOMAIN_STATE"
-  fi
-
-  write_text_file "$PBR_DOMAIN_STATE" "${new_state%$'\n'}" 644 || true
-}
-
-pbr_apply_saved_rules() {
-  need_root_unless_dry_run
-  init_log
-  pbr_ensure_dir
-  pbr_detect_available_routes "quiet" "save" || true
-  pbr_apply_static_rules
-  pbr_refresh_domains
-  ok "IPv4 PBR 规则已应用。"
-}
-
-pbr_audit_existing_rules() {
-  local quiet="${1:-show}"
-  local managed="" unmanaged="" conflicts="" line priority target lookup raw cidr group table_id expected_group actual_group count
-
-  while IFS='|' read -r priority target lookup raw; do
-    [[ -n "$priority" ]] || continue
-    cidr="$(pbr_rule_target_to_cidr "$target" 2>/dev/null || true)"
-    [[ -n "$cidr" ]] || continue
-    actual_group="$(pbr_lookup_to_group "$lookup" 2>/dev/null || true)"
-    table_id="$(pbr_lookup_to_table_id "$lookup" 2>/dev/null || true)"
-
-    if pbr_rule_is_managed "$priority" "$cidr" "$lookup"; then
-      managed="${managed}${raw}"$'\n'
-    else
-      unmanaged="${unmanaged}${raw}"$'\n'
-    fi
-
-    if [[ "$priority" == "$PBR_STATIC_PRIORITY" ]]; then
-      expected_group="$(pbr_static_managed_group "$cidr" 2>/dev/null || true)"
-      if [[ -n "$expected_group" && -n "$actual_group" && "$expected_group" != "$actual_group" ]]; then
-        conflicts="${conflicts}配置要求 ${cidr} -> T_${expected_group}，系统存在 ${cidr} -> T_${actual_group}: ${raw}"$'\n'
-      fi
-    fi
-
-    count="$(pbr_collect_relevant_rules | awk -F'|' -v p="$priority" -v t="$target" '$1==p && $2==t {c++} END{print c+0}')"
-    if (( count > 1 )); then
-      conflicts="${conflicts}同一目标存在多个 priority ${priority} 规则：${target}"$'\n'
-    fi
-  done < <(pbr_collect_relevant_rules)
-
-  if [[ "$quiet" == "quiet" ]]; then
-    [[ -n "$unmanaged" ]] && return 2
-    [[ -n "$conflicts" ]] && return 3
-    return 0
-  fi
-
-  echo
-  echo "${BOLD}IPv4 PBR 审计${RESET}"
-  echo
-  echo "${BOLD}1. 本项目已管理规则${RESET}"
-  [[ -n "$managed" ]] && printf '%s' "$managed" || echo "(无)"
-  echo
-  echo "${BOLD}2. 疑似手工规则 / 非本项目规则${RESET}"
-  if [[ -n "$unmanaged" ]]; then
-    printf '%s' "$unmanaged"
-    warn "可在菜单中选择\"导入已有 PBR 规则\"接管。"
-  else
-    echo "(无)"
-  fi
-  echo
-  echo "${BOLD}3. 冲突规则${RESET}"
-  [[ -n "$conflicts" ]] && printf '%s' "$conflicts" || echo "(无)"
-}
-
-pbr_show() {
-  local domain group ips state_domain state_group state_ip state_cidr state_table system_rules unmanaged_rules
-  echo
-  echo "${BOLD}1. 可用线路组${RESET}"
-  pbr_detect_available_routes "quiet" "no" || true
-  if (( ${#PBR_FOUND_NAMES[@]} == 0 )); then
-    echo "(未检测到)"
-  else
-    local i
-    for ((i = 0; i < ${#PBR_FOUND_NAMES[@]}; i++)); do
-      printf '%s %s detected (%s)\n' "${PBR_FOUND_NAMES[$i]}" "${PBR_FOUND_GWS[$i]}" "${PBR_FOUND_IPS[$i]}"
-    done
-  fi
-
-  echo
-  echo "${BOLD}2. 项目静态规则${RESET}"
-  if [[ -s "$PBR_STATIC_CONF" ]]; then
-    awk '{print $1" -> "$2}' "$PBR_STATIC_CONF"
-  else
-    echo "(空)"
-  fi
-
-  echo
-  echo "${BOLD}3. 项目域名规则${RESET}"
-  if [[ -s "$PBR_DOMAIN_CONF" ]]; then
-    awk '{print $1" -> "$2}' "$PBR_DOMAIN_CONF"
-  else
-    echo "(空)"
-  fi
-
-  echo
-  echo "${BOLD}4. 域名当前解析状态${RESET}"
-  if [[ -s "$PBR_DOMAIN_CONF" ]]; then
-    while read -r domain group _; do
-      [[ -z "$domain" || "$domain" =~ ^# ]] && continue
-      ips="$(pbr_resolve_domain_a "$domain")"
-      if [[ -n "$ips" ]]; then
-        printf '%s -> %s\n' "$domain" "$ips"
-      else
-        warn "${domain} 当前解析失败"
-      fi
-    done < "$PBR_DOMAIN_CONF"
-  else
-    echo "(空)"
-  fi
-
-  echo
-  echo "${BOLD}5. 域名状态文件${RESET}"
-  if [[ -s "$PBR_DOMAIN_STATE" ]]; then
-    while read -r state_domain state_group state_ip state_cidr state_table _; do
-      [[ -z "$state_domain" || "$state_domain" =~ ^# ]] && continue
-      printf '%s -> %s (%s table %s)\n' "$state_domain" "$state_ip" "$state_cidr" "$state_table"
-    done < "$PBR_DOMAIN_STATE"
-  else
-    echo "(空)"
-  fi
-
-  echo
-  echo "${BOLD}6. 系统生效规则${RESET}"
-  system_rules="$(pbr_collect_relevant_rules | awk -F'|' '{print $4}' || true)"
-  if [[ -n "$system_rules" ]]; then
-    printf '%s\n' "$system_rules"
-  else
-    echo "(无)"
-  fi
-
-  echo
-  echo "${BOLD}7. 未被项目管理的疑似规则${RESET}"
-  unmanaged_rules="$(pbr_list_unmanaged_rules | sed '/^$/d' || true)"
-  if [[ -n "$unmanaged_rules" ]]; then
-    printf '%s\n' "$unmanaged_rules"
-  else
-    echo "(无)"
-  fi
-}
-
-pbr_delete_rule() {
-  need_root_unless_dry_run
-  init_log
-  local kind file priority choice total line target group ips summary
-  echo "1. 删除静态 IP/CIDR 规则"
-  echo "2. 删除域名 DDNS 规则"
-  kind="$(prompt_menu_choice "请选择：")"
-  case "$kind" in
-    1) file="$PBR_STATIC_CONF"; priority="$PBR_STATIC_PRIORITY" ;;
-    2) file="$PBR_DOMAIN_CONF"; priority="$PBR_DOMAIN_PRIORITY" ;;
-    "") warn "请输入选项编号。"; return 1 ;;
-    *) warn "无效选择。"; return 1 ;;
-  esac
-  [[ -s "$file" ]] || {
-    warn "规则文件为空：${file}"
-    return 0
-  }
-
-  awk '{print NR". "$0}' "$file"
-  choice="$(prompt_value "请输入要删除的编号")"
-  choice="$(normalize_menu_choice "$choice")"
-  [[ "$choice" =~ ^[0-9]+$ ]] || {
-    warn "编号无效。"
-    return 1
-  }
-  total="$(wc -l < "$file")"
-  (( choice >= 1 && choice <= total )) || {
-    warn "编号超出范围。"
-    return 1
-  }
-  line="$(awk -v n="$choice" 'NR==n {print; exit}' "$file")"
-  target="$(awk -v n="$choice" 'NR==n {print $1; exit}' "$file")"
-  group="$(awk -v n="$choice" 'NR==n {print $2; exit}' "$file")"
-  ips="$(awk -v n="$choice" 'NR==n {print $3; exit}' "$file")"
-
-  summary="文件：${file}\n删除行：${line}\n动作：删除配置行，并只删除本项目对应 priority ${priority} 的 ip rule。"
-  if ! confirm_summary "删除 IPv4 PBR 规则摘要" "$summary"; then
-    return 0
-  fi
-
-  if [[ "$kind" == "1" ]]; then
-    pbr_delete_rule_exact "$priority" "$target" "T_${group}"
-  else
-    if [[ -f "$PBR_DOMAIN_STATE" ]]; then
-      local state_domain state_group state_ip state_cidr state_table kept_state=""
-      while read -r state_domain state_group state_ip state_cidr state_table _; do
-        [[ -z "$state_domain" || "$state_domain" =~ ^# ]] && continue
-        if [[ "$state_domain" == "$target" && "$state_group" == "$group" ]]; then
-          pbr_delete_rule_exact "$priority" "$state_cidr" "$state_table"
-        else
-          kept_state="${kept_state}${state_domain} ${state_group} ${state_ip} ${state_cidr} ${state_table}"$'\n'
-        fi
-      done < "$PBR_DOMAIN_STATE"
-      write_text_file "$PBR_DOMAIN_STATE" "${kept_state%$'\n'}" 644 || true
-    fi
-  fi
-
-  write_text_file "$file" "$(awk -v n="$choice" 'NR != n {print}' "$file")" 644 || true
-  ok "已删除规则。"
-}
-
-pbr_install_service() {
-  need_root_unless_dry_run
-  init_log
-  local script_path pbr_service_content ddns_service_content timer_content summary
-  script_path="$(script_self_path)"
-  pbr_service_content="$(cat <<EOF
-# Managed by leikwan-wg-toolkit
-[Unit]
-Description=Leikwan IPv4 PBR apply saved rules
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash ${script_path} --pbr-apply
-
-[Install]
-WantedBy=multi-user.target
-EOF
-)"
-  ddns_service_content="$(cat <<EOF
-# Managed by leikwan-wg-toolkit
-[Unit]
-Description=Leikwan IPv4 PBR refresh domain routes
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash ${script_path} --pbr-refresh-domains
-EOF
-)"
-  timer_content="$(cat <<EOF
-# Managed by leikwan-wg-toolkit
-[Unit]
-Description=Leikwan IPv4 PBR DDNS refresh timer
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=5min
-Unit=${PBR_DDNS_SERVICE_NAME}.service
-
-[Install]
-WantedBy=timers.target
-EOF
-)"
-
-  summary="服务：${PBR_SERVICE_NAME}.service\n动作：开机执行 --pbr-apply，只应用本项目保存的规则。\n\n服务：${PBR_DDNS_SERVICE_NAME}.service\n定时器：${PBR_DDNS_SERVICE_NAME}.timer\n动作：每 5 分钟执行 --pbr-refresh-domains，刷新域名 A 记录。\n\n说明：不修改 main 默认路由，不删除系统已有默认网关。"
-  if ! confirm_summary "安装 / 重启 IPv4 PBR 开机恢复服务摘要" "$summary"; then
-    return 0
-  fi
-
-  write_text_file "$PBR_SERVICE" "$pbr_service_content" 644 || true
-  write_text_file "$PBR_DDNS_SERVICE" "$ddns_service_content" 644 || true
-  write_text_file "$PBR_DDNS_TIMER" "$timer_content" 644 || true
-  run_cmd systemctl daemon-reload
-  run_cmd systemctl enable "$PBR_SERVICE_NAME.service"
-  run_cmd systemctl enable --now "$PBR_DDNS_SERVICE_NAME.timer"
-  run_cmd systemctl restart "$PBR_SERVICE_NAME.service" || true
-  ok "IPv4 PBR 开机恢复服务和 DDNS timer 已安装/重启。"
-}
-
-pbr_read_landing_address() {
-  local value=""
-  value="$(read_landing_param LANDING_ADDRESS address 2>/dev/null || true)"
-  [[ -z "$value" ]] && value="$(saved_param LANDING_ADDRESS "$RELAY_OUTPUT_FILE" "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  if [[ -z "$value" ]]; then
-    value="$(parse_landing_from_xray_config address || true)"
-  fi
-  if [[ -n "$value" && ! "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    local resolved
-    resolved="$(pbr_resolve_domain_a "$value" | cut -d, -f1)"
-    [[ -n "$resolved" ]] && value="$resolved"
-  fi
-  printf '%s' "$value"
-}
-
-pbr_normalize_landing_ipv4() {
-  local value="$1"
-  if [[ -n "$value" && ! "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    local resolved
-    resolved="$(pbr_resolve_domain_a "$value" | cut -d, -f1)"
-    [[ -n "$resolved" ]] && value="$resolved"
-  fi
-  printf '%s' "$value"
-}
-
-pbr_group_from_route_output() {
-  local route_output="$1"
-  local name gw pattern escaped_gw
-  while read -r name gw pattern; do
-    [[ -z "$name" ]] && continue
-    escaped_gw="${gw//./\\.}"
-    if grep -Eq "(^|[[:space:]])via[[:space:]]+${escaped_gw}([[:space:]]|$)" <<<"$route_output"; then
-      printf '%s' "$name"
-      return 0
-    fi
-  done < <(pbr_route_definitions)
-  return 1
-}
-
-pbr_route_landing() {
-  need_root_unless_dry_run
-  init_log
-  local landing_ip cidr content imported_content group summary ret existing_raw="" existing_group="" existing_lookup="" existing_priority="" config_group="" new_content
-  local current_file current_name current_address current_port xray_address xray_port source_address=""
-  xray_address="$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)"
-  xray_port="$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)"
-  current_file="$(active_landing_file 2>/dev/null || true)"
-  if [[ -n "$xray_address" ]]; then
-    source_address="$xray_address"
-    if [[ -n "$current_file" && -f "$current_file" ]] && ! landing_active_matches_xray; then
-      current_name="$(landing_env_get "$current_file" LANDING_NAME)"
-      current_address="$(landing_env_get "$current_file" LANDING_ADDRESS)"
-      current_port="$(landing_env_get "$current_file" LANDING_PORT)"
-      warn "current.env 与 Xray outbound 不一致。"
-      echo "current.env：${current_name:-unknown} / ${current_address:-unknown}:${current_port:-unknown}"
-      echo "Xray 实际 outbound：${xray_address}:${xray_port:-unknown}"
-      warn "默认将对 Xray 实际 outbound 写 PBR。"
-      if prompt_yes_no "是否改为对 current.env 写 PBR？" "N"; then
-        source_address="$current_address"
-      fi
-    fi
-  else
-    source_address="$(pbr_read_landing_address)"
-  fi
-  landing_ip="$(pbr_normalize_landing_ipv4 "$source_address")"
-  if ! is_ipv4 "$landing_ip"; then
-    landing_ip="$(prompt_non_empty "未读取到 Reality 落地机 IPv4，请输入 LANDING_ADDRESS IPv4")"
-  fi
-  is_ipv4 "$landing_ip" || {
-    fail "落地机地址不是有效 IPv4：${landing_ip}"
-    return 1
-  }
-  pbr_select_group "yes"
-  ret=$?
-  [[ $ret -eq 255 ]] && return 0
-  [[ $ret -ne 0 ]] && return 1
-  group="$PBR_SELECTED_NAME"
-  cidr="${landing_ip}/32"
-  content="$(cat "$PBR_STATIC_CONF" 2>/dev/null || true)"
-
-  while IFS='|' read -r existing_priority target existing_lookup raw; do
-    [[ "$existing_priority" == "$PBR_STATIC_PRIORITY" ]] || continue
-    if [[ "$(pbr_rule_target_to_cidr "$target" 2>/dev/null || true)" == "$cidr" ]]; then
-      existing_group="$(pbr_lookup_to_group "$existing_lookup" 2>/dev/null || true)"
-      existing_raw="$raw"
-      break
-    fi
-  done < <(pbr_collect_relevant_rules)
-
-  config_group="$(pbr_static_managed_group "$cidr" 2>/dev/null || true)"
-
-  if [[ -n "$config_group" ]]; then
-    if [[ "$config_group" == "$group" ]]; then
-      ok "落地机规则已由本项目托管：${cidr} -> ${group}"
-    else
-      warn "检测到本项目已有落地机规则：${cidr} -> ${config_group}"
-      summary="目标：${cidr}\n当前托管出口：T_${config_group}\n新出口：T_${group}\n动作：只删除 ${cidr} 在 T_${config_group} 的旧托管规则，并改写为 T_${group}。"
-      if ! confirm_summary "修改 Reality 落地机 PBR 出口摘要" "$summary"; then
-        return 0
-      fi
-      pbr_delete_rule_exact "$PBR_STATIC_PRIORITY" "$cidr" "T_${config_group}"
-      new_content="$(awk -v c="$cidr" -v g="$group" '$1 == c {$2=g} {print}' <<<"$content")"
-      write_text_file "$PBR_STATIC_CONF" "$new_content" 644 || true
-    fi
-  elif [[ -n "$existing_raw" ]]; then
-    warn "检测到已有手工规则：${existing_raw}"
-    if [[ "$existing_group" == "$group" ]]; then
-      summary="检测到已有规则：${existing_raw}\n导入为：${cidr} ${group}\n动作：只写入 ${PBR_STATIC_CONF}，不删除原系统规则；后续 --pbr-apply 会识别为本项目托管。"
-      if ! confirm_summary "导入 Reality 落地机已有 PBR 规则摘要" "$summary"; then
-        warn "未导入已有规则，不重复添加。"
-        return 0
-      fi
-      pbr_ensure_dir
-      write_text_file "$PBR_STATIC_CONF" "$(printf '%s\n%s %s\n' "${content%$'\n'}" "$cidr" "$group" | sed '/^$/d')" 644 || true
-    else
-      warn "冲突：已有规则走 ${existing_group:-未知出口}，你选择的是 ${group}。"
-      if [[ -z "$existing_group" ]]; then
-        warn "无法把已有 lookup 反查为内置线路组，已停止，避免误删非项目规则。"
-        return 0
-      fi
-      summary="检测到已有手工规则：${existing_raw}\n目标：${cidr}\n已有出口：T_${existing_group}\n新出口：T_${group}\n动作：先导入已有规则作为本项目托管记录，再仅删除同一目标 ${cidr} 的 T_${existing_group} 规则，最后改写为 T_${group}。不会删除其他目标或默认路由。"
-      if ! confirm_summary "接管并修改 Reality 落地机 PBR 出口摘要" "$summary"; then
-        warn "未接管已有规则，不重复添加冲突规则。"
-        return 0
-      fi
-      pbr_ensure_dir
-      imported_content="$(printf '%s\n%s %s\n' "${content%$'\n'}" "$cidr" "$existing_group" | sed '/^$/d')"
-      write_text_file "$PBR_STATIC_CONF" "$imported_content" 644 || true
-      pbr_delete_rule_exact "$PBR_STATIC_PRIORITY" "$cidr" "T_${existing_group}"
-      new_content="$(awk -v c="$cidr" -v g="$group" '$1 == c {$2=g} {print}' <<<"$imported_content")"
-      write_text_file "$PBR_STATIC_CONF" "$new_content" 644 || true
-    fi
-  else
-    summary="目标：${cidr}\n线路组：${group}\n路由表：T_${group}\n动作：为当前 Reality 落地机指定 IPv4 出口，并执行 ip route get ${landing_ip}。"
-    if ! confirm_summary "一键为 Reality 落地机指定出口摘要" "$summary"; then
-      return 0
-    fi
-    pbr_ensure_dir
-    write_text_file "$PBR_STATIC_CONF" "$(printf '%s\n%s %s\n' "${content%$'\n'}" "$cidr" "$group" | sed '/^$/d')" 644 || true
-  fi
-
-  pbr_apply_saved_rules
-  echo
-  echo "${BOLD}当前实际出口：ip route get ${landing_ip}${RESET}"
-  ip route get "$landing_ip" || true
-}
-
-pbr_import_existing_rules() {
-  need_root_unless_dry_run
-  init_log
-  local pbr_candidates="" priority target lookup raw cidr group content import_all=0 choice additions="" imported_targets=""
-  while IFS='|' read -r priority target lookup raw; do
-    [[ -n "$priority" ]] || continue
-    cidr="$(pbr_rule_target_to_cidr "$target" 2>/dev/null || true)"
-    [[ -n "$cidr" ]] || continue
-    group="$(pbr_lookup_to_group "$lookup" 2>/dev/null || true)"
-    [[ -n "$group" ]] || continue
-    if [[ "$priority" != "$PBR_STATIC_PRIORITY" && "$priority" != "$PBR_DOMAIN_PRIORITY" ]]; then
-      continue
-    fi
-    if pbr_rule_is_managed "$priority" "$cidr" "$lookup"; then
-      continue
-    fi
-    pbr_candidates="${pbr_candidates}${priority}|${cidr}|${group}|${raw}"$'\n'
-  done < <(pbr_collect_relevant_rules)
-
-  if [[ -z "$pbr_candidates" ]]; then
-    ok "未发现可导入的已有 IPv4 PBR 规则。"
-    return 0
-  fi
-
-  echo
-  echo "${BOLD}可导入的已有 IPv4 PBR 规则${RESET}"
-  printf '%s' "$pbr_candidates" | awk -F'|' '{printf "%d. priority %s %s -> %s | %s\n", NR, $1, $2, $3, $4}'
-
-  content="$(cat "$PBR_STATIC_CONF" 2>/dev/null || true)"
-  while IFS='|' read -r priority cidr group raw; do
-    [[ -n "$priority" ]] || continue
-    if grep -Eq "^${cidr//./\\.}[[:space:]]+${group}([[:space:]]|$)" <<<"$content" || grep -Eq "^${cidr//./\\.}[[:space:]]+${group}([[:space:]]|$)" <<<"$additions"; then
-      continue
-    fi
-    if (( import_all == 0 )); then
-      echo
-      echo "规则：${raw}"
-      echo "导入为：${cidr} ${group}"
-      echo "1. 导入"
-      echo "2. 跳过"
-      echo "3. 全部导入"
-      echo "4. 取消"
-      choice="$(prompt_menu_choice "请选择：")"
-      case "$choice" in
-        1) ;;
-        2) continue ;;
-        3) import_all=1 ;;
-        4) warn "已取消导入。"; break ;;
-        "") warn "请输入选项编号。"; continue ;;
-        *) warn "无效选择，跳过。"; continue ;;
-      esac
-    fi
-    additions="${additions}${cidr} ${group}"$'\n'
-    imported_targets="${imported_targets}${cidr}"$'\n'
-  done <<<"$pbr_candidates"
-
-  [[ -n "$additions" ]] || {
-    warn "没有导入任何规则。"
-    return 0
-  }
-
-  local summary="导入目标文件：${PBR_STATIC_CONF}\n新增规则：\n${additions}\n说明：导入后不删除原系统规则；后续 --pbr-apply 会识别为本项目托管规则。"
-  if ! confirm_summary "导入已有 IPv4 PBR 规则摘要" "$summary"; then
-    return 0
-  fi
-
-  pbr_ensure_dir
-  write_text_file "$PBR_STATIC_CONF" "$(printf '%s\n%s' "${content%$'\n'}" "${additions%$'\n'}" | sed '/^$/d')" 644 || true
-  ok "导入完成。"
-
-  while read -r existing; do
-    [[ -n "$existing" ]] || continue
-    echo
-    echo "${BOLD}实际出口：ip route get ${existing%/32}${RESET}"
-    ip route get "${existing%/32}" || true
-  done <<<"$imported_targets"
-}
-
-pbr_remove_project_rules_only() {
-  need_root
-  init_log
-  local cidr group domain state_ip state_cidr state_table managed_summary="" unmanaged_summary content name gw pattern
-  if [[ -s "$PBR_STATIC_CONF" ]]; then
-    while read -r cidr group _rest; do
-      [[ -z "$cidr" || "$cidr" =~ ^# ]] && continue
-      managed_summary="${managed_summary}priority ${PBR_STATIC_PRIORITY}: to ${cidr} table T_${group}"$'\n'
-      if pbr_rule_exact_exists "$PBR_DOMAIN_PRIORITY" "$cidr" "T_${group}"; then
-        managed_summary="${managed_summary}priority ${PBR_DOMAIN_PRIORITY}: to ${cidr} table T_${group} (static-routes.conf 导入托管)"$'\n'
-      fi
-    done < "$PBR_STATIC_CONF"
-  fi
-  if [[ -s "$PBR_DOMAIN_STATE" ]]; then
-    while read -r domain group state_ip state_cidr state_table _rest; do
-      [[ -z "$domain" || "$domain" =~ ^# ]] && continue
-      managed_summary="${managed_summary}priority ${PBR_DOMAIN_PRIORITY}: ${domain} ${state_ip} (${state_cidr}) table ${state_table}"$'\n'
-    done < "$PBR_DOMAIN_STATE"
-  fi
-  unmanaged_summary="$(pbr_list_unmanaged_rules | sed '/^$/d' || true)"
-  summary="将删除以下本项目托管规则：\n${managed_summary:-（无）}\n以下同 priority 但未托管规则会保留：\n${unmanaged_summary:-（无）}\n说明：不会清空 ${PBR_RT_TABLES}，不会修改 main/default/local 基础表，不删除系统默认网关。"
-  if ! confirm_summary "仅删除 IPv4 PBR 规则摘要" "$summary"; then
-    return 0
-  fi
-
-  if [[ -s "$PBR_STATIC_CONF" ]]; then
-    while read -r cidr group _rest; do
-      [[ -z "$cidr" || "$cidr" =~ ^# ]] && continue
-      pbr_delete_rule_exact "$PBR_STATIC_PRIORITY" "$cidr" "T_${group}"
-      pbr_delete_rule_exact "$PBR_DOMAIN_PRIORITY" "$cidr" "T_${group}"
-    done < "$PBR_STATIC_CONF"
-  fi
-  if [[ -s "$PBR_DOMAIN_STATE" ]]; then
-    while read -r domain group state_ip state_cidr state_table _rest; do
-      [[ -z "$domain" || "$domain" =~ ^# ]] && continue
-      pbr_delete_rule_exact "$PBR_DOMAIN_PRIORITY" "$state_cidr" "$state_table"
-    done < "$PBR_DOMAIN_STATE"
-  fi
-  ok "已删除本项目 IPv4 PBR 运行中规则。"
-  warn "如果 ${PBR_DDNS_SERVICE_NAME}.timer 仍在运行，域名规则可能会被再次刷新。"
-
-  if prompt_yes_no "是否二次确认删除 rt_tables 中本项目追加的 T_ 表名？" "N"; then
-    if prompt_yes_no "二次确认：删除 T_9929/T_CN2 等本项目表名，但保留系统默认表？" "N"; then
-      content="$(cat "$PBR_RT_TABLES" 2>/dev/null || true)"
-      while read -r name gw pattern; do
-        [[ -z "$name" ]] && continue
-        content="$(printf '%s\n' "$content" | grep -Ev "^[0-9]+[[:space:]]+T_${name}([[:space:]]|$)" || true)"
-      done < <(pbr_route_definitions)
-      write_text_file "$PBR_RT_TABLES" "$content" 644 || true
-      ok "已删除本项目 T_ 路由表名。"
-    fi
-  fi
-}
-
-bbr_status_report() {
-  local cc qdisc module_state
-  cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || printf '%s' unknown)"
-  qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || printf '%s' unknown)"
-  echo "net.ipv4.tcp_congestion_control=${cc}"
-  echo "net.core.default_qdisc=${qdisc}"
-  if [[ "$cc" == "bbr" && "$qdisc" == "fq" ]]; then
-    echo "[OK] BBR + fq 已启用"
-  else
-    echo "[INFO] BBR + fq 未完全启用"
-  fi
-  if lsmod 2>/dev/null | grep -q '^tcp_bbr'; then
-    module_state="loaded"
-  elif [[ "$cc" == "bbr" ]]; then
-    module_state="built-in-or-not-listed"
-  else
-    module_state="not-loaded-or-unavailable"
-  fi
-  echo "[INFO] tcp_bbr_module=${module_state}"
-  if [[ -f "$BBR_SYSCTL_CONF" ]]; then
-    echo "leikwan_bbr_conf=present:${BBR_SYSCTL_CONF}"
-  else
-    echo "leikwan_bbr_conf=absent"
-  fi
-  if [[ -f /etc/sysctl.d/99-bbr-fq.conf ]]; then
-    echo "other_bbr_conf=present:/etc/sysctl.d/99-bbr-fq.conf"
-  fi
-}
-
-bbr_show_status() {
-  echo
-  echo "${BOLD}BBR / 系统优化状态${RESET}"
-  bbr_status_report
-}
-
-bbr_enable() {
-  need_root_unless_dry_run
-  init_log
-  local content summary
-  if [[ -f /etc/sysctl.d/99-bbr-fq.conf && ! -f "$BBR_SYSCTL_CONF" ]]; then
-    warn "检测到已有 BBR 配置：/etc/sysctl.d/99-bbr-fq.conf，本操作只写入 ${BBR_SYSCTL_CONF}，不覆盖用户文件。"
-  fi
-  content="$(cat <<EOF
-# Managed by leikwan-wg-toolkit
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-EOF
-)"
-  summary="写入：${BBR_SYSCTL_CONF}\n内容：\n${content}\n动作：modprobe tcp_bbr；sysctl --system。\n说明：不修改其他 sysctl 文件。"
-  if ! confirm_summary "启用 BBR + fq 摘要" "$summary"; then
-    return 0
-  fi
-  write_text_file "$BBR_SYSCTL_CONF" "$content" 644 || true
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 跳过 modprobe tcp_bbr 和 sysctl --system"
-    return 0
-  fi
-  modprobe tcp_bbr 2>/dev/null || true
-  run_cmd sysctl --system
-  bbr_show_status
-}
-
-bbr_restore_default() {
-  need_root_unless_dry_run
-  init_log
-  if [[ ! -f "$BBR_SYSCTL_CONF" ]]; then
-    warn "未找到 ${BBR_SYSCTL_CONF}，不会删除用户其他 BBR 配置。"
-    return 0
-  fi
-  if ! confirm_summary "恢复系统默认拥塞控制摘要" "将备份并删除：${BBR_SYSCTL_CONF}\n随后执行：sysctl --system\n不会删除 /etc/sysctl.d/99-bbr-fq.conf 或其他用户配置。"; then
-    return 0
-  fi
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将删除 ${BBR_SYSCTL_CONF} 并执行 sysctl --system"
-    return 0
-  fi
-  backup_file "$BBR_SYSCTL_CONF"
-  rm -f "$BBR_SYSCTL_CONF"
-  run_cmd sysctl --system || true
-  bbr_show_status
-}
-
-run_official_optimize() {
-  need_root
-  init_log
-  echo
-  warn "即将从 ${OFFICIAL_OPTIMIZE_URL} 下载并执行利群官方系统优化脚本。"
-  warn "这是远程脚本，可能修改系统网络参数。"
-  local answer
-  answer="$(prompt_value "是否继续？请输入 YES 确认" "")"
-  if [[ "$answer" != "YES" ]]; then
-    warn "已取消执行官方 optimize.sh。"
-    return 0
-  fi
-  mkdir -p "$BACKUP_DIR"
-  sysctl -a >"${BACKUP_DIR}/sysctl.before-optimize.$(date '+%Y%m%d-%H%M%S').txt" 2>/dev/null || true
-  if command -v wget >/dev/null 2>&1; then
-    wget -O "$OFFICIAL_OPTIMIZE_PATH" "$OFFICIAL_OPTIMIZE_URL"
-  else
-    curl -fsSL "$OFFICIAL_OPTIMIZE_URL" -o "$OFFICIAL_OPTIMIZE_PATH"
-  fi
-  sha256sum "$OFFICIAL_OPTIMIZE_PATH" || true
-  chmod +x "$OFFICIAL_OPTIMIZE_PATH"
-  bash "$OFFICIAL_OPTIMIZE_PATH"
+  ok "IPv6 入站已收口。"
 }
 
 bbr_menu() {
-  while true; do
-    echo
-    echo "${BOLD}BBR / 系统优化${RESET}"
-    echo "1. 查看当前拥塞控制状态"
-    echo "2. 启用 BBR + fq"
-    echo "3. 恢复系统默认拥塞控制"
-    echo "4. 执行利群官方 optimize.sh（高级，需二次确认）"
-    echo "0. 返回"
-    local choice
-    choice="$(prompt_menu_choice "请选择：")"
-    case "$choice" in
-      1) bbr_show_status || true ;;
-      2) bbr_enable || true ;;
-      3) bbr_restore_default || true ;;
-      4) run_official_optimize || true ;;
-      0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
-    esac
-  done
-}
-
-wg_transfer_total() {
-  local iface="$1"
-  wg show "$iface" transfer 2>/dev/null | awk '{rx += $2; tx += $3} END {printf "%.0f", rx + tx}'
-}
-
-wg_handshake_age_report() {
-  local iface="$1"
-  local now peer ts age any=0
-  now="$(date +%s)"
-  while read -r peer ts; do
-    [[ -n "$peer" ]] || continue
-    any=1
-    if [[ "$ts" =~ ^[0-9]+$ && "$ts" -gt 0 ]]; then
-      age=$((now - ts))
-      echo "[OK] ${iface} peer ${peer}: handshake ${age}s ago"
-    else
-      echo "[WARN] ${iface} peer ${peer}: no latest handshake"
-    fi
-  done < <(wg show "$iface" latest-handshakes 2>/dev/null || true)
-  if (( any == 0 )); then
-    echo "[WARN] ${iface}: 未发现 Peer handshake 记录"
-  fi
-}
-
-parse_ping_loss() {
-  grep -Eo '[0-9.]+% packet loss' | head -n 1 | awk -F% '{print $1}'
-}
-
-parse_ping_avg() {
-  awk -F'= |/' '/min\/avg\/max/ {print $3; exit}'
-}
-
-parse_ping_mdev_line() {
-  awk -F'= ' '/min\/avg\/max/ {print $2; exit}'
-}
-
-udp_wg_quality_check() {
-  need_root_unless_dry_run
-  init_log
-  local role iface peer_ip before after delta ping_output loss avg stats conclusion="UDP 正常"
-  role="$(detect_current_role)"
-  if role_has "$role" "cloud-entry"; then
-    iface="wg1"
-    peer_ip="$LEIKWAN_WG_IP"
-  else
-    iface="wg0"
-    peer_ip="$CLOUD_WG_IP"
-  fi
-
-  echo
-  echo "${BOLD}UDP / WireGuard 质量检测${RESET}"
-  echo "当前角色：${role}"
-  echo "接口：${iface}"
-  echo "对端 WG IP：${peer_ip}"
-
-  if ! command -v wg >/dev/null 2>&1; then
-    fail "未检测到 wg 命令。"
-    return 1
-  fi
-  if ! ip addr show "$iface" >/dev/null 2>&1; then
-    warn "未检测到接口 ${iface}，请先部署 WireGuard。"
-    return 1
-  fi
-
-  echo
-  echo "${BOLD}Handshake${RESET}"
-  wg_handshake_age_report "$iface" || true
-
-  before="$(wg_transfer_total "$iface")"
-  echo
-  echo "${BOLD}30 秒 ping 采样：${peer_ip}${RESET}"
-  ping_output="$(ping -c 30 -i 1 -w 35 "$peer_ip" 2>&1 || true)"
-  printf '%s\n' "$ping_output"
-  after="$(wg_transfer_total "$iface")"
-  delta=$(( ${after:-0} - ${before:-0} ))
-  loss="$(printf '%s\n' "$ping_output" | parse_ping_loss)"
-  avg="$(printf '%s\n' "$ping_output" | parse_ping_avg)"
-  stats="$(printf '%s\n' "$ping_output" | parse_ping_mdev_line)"
-
-  echo
-  echo "min/avg/max/mdev：${stats:-unknown}"
-  echo "丢包率：${loss:-unknown}%"
-  echo "wg transfer 增量：${delta} bytes"
-
-  if [[ -z "$loss" || "$loss" == "100" ]]; then
-    conclusion="疑似 WireGuard 不通或对端防火墙阻断"
-  elif awk "BEGIN {exit !($loss >= 20)}"; then
-    conclusion="疑似 UDP QoS 或入口机线路差"
-  elif [[ -n "$avg" ]] && awk "BEGIN {exit !($avg >= 250)}"; then
-    if role_has "$role" "leikwan-relay"; then
-      conclusion="疑似入口机线路差或利群侧出口问题"
-    else
-      conclusion="疑似入口机线路差"
-    fi
-  elif (( delta <= 0 )); then
-    conclusion="疑似 wg transfer 未增长，请检查 Peer / AllowedIPs"
-  fi
-
-  echo
-  case "$conclusion" in
-    "UDP 正常") validate_report ok "$conclusion" ;;
-    *"利群侧出口问题"*) validate_report warn "$conclusion" ;;
-    *"入口机线路差"*) validate_report warn "$conclusion" ;;
-    *"UDP QoS"*) validate_report warn "$conclusion" ;;
-    *) validate_report warn "$conclusion" ;;
-  esac
-
-  if command -v iperf3 >/dev/null 2>&1; then
-    echo
-    validate_report info "已检测到 iperf3。若对端已运行 iperf3 -s，可手动测试：iperf3 -u -c ${peer_ip} -b 10M -t 10"
-  else
-    echo
-    validate_report info "未安装 iperf3，已跳过；本检测不会强制安装 iperf3。"
-  fi
-}
-
-entry_safe_name() {
-  local name="$1"
-  name="$(trim_spaces "$name")"
-  name="${name// /-}"
-  name="$(printf '%s' "$name" | sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^-+//; s/-+$//')"
-  [[ -n "$name" ]] || name="entry"
-  printf '%s' "$name"
-}
-
-entry_file_for_name() {
-  local name
-  name="$(entry_safe_name "$1")"
-  printf '%s/entry-%s.env' "$ENTRIES_DIR" "$name"
-}
-
-entry_files() {
-  if [[ -d "$ENTRIES_DIR" ]]; then
-    find "$ENTRIES_DIR" -maxdepth 1 -type f -name 'entry-*.env' | sort
-  fi
-}
-
-entry_write_file() {
-  local file="$1"
-  local entry_name="$2"
-  local public_key="$3"
-  local endpoint="$4"
-  local wg_port="$5"
-  local entry_port="$6"
-  local forward_mode="$7"
-  local endpoint_type="$8"
-  local enabled="$9"
-  local last_rtt="${10:-}"
-  local last_loss="${11:-}"
-  local content
-  content="$(cat <<EOF
-ENTRY_NAME=${entry_name}
-CLOUD_PUBLIC_KEY=${public_key}
-CLOUD_ENDPOINT=${endpoint}
-CLOUD_ENDPOINT_TYPE=${endpoint_type}
-CLOUD_WG_PORT=${wg_port}
-CLIENT_ENTRY_PORT=${entry_port}
-FORWARD_MODE=${forward_mode}
-LAST_RTT=${last_rtt}
-LAST_PACKET_LOSS=${last_loss}
-ENABLED=${enabled}
-EOF
-)"
-  write_text_file "$file" "$content" 600 || true
-}
-
-append_leikwan_wg_peer_if_needed() {
-  local entry_name="$1"
-  local public_key="$2"
-  local endpoint="$3"
-  local wg_port="$4"
-  local existing new_block new_content
-  [[ -f "$LEIKWAN_WG_CONF" ]] || return 0
-  if grep -qF "$public_key" "$LEIKWAN_WG_CONF"; then
-    ok "wg0 已存在该入口 Peer：${entry_name}"
-    return 0
-  fi
-  warn "多入口会向 wg0 追加 Peer，不覆盖旧 Peer。若多个入口共用 ${CLOUD_WG_IP}/32，请按实际规划确认 WG 地址。"
-  if ! prompt_yes_no "是否把 ${entry_name} 追加到 ${LEIKWAN_WG_CONF}？" "N"; then
-    return 0
-  fi
-  existing="$(cat "$LEIKWAN_WG_CONF")"
-  new_block="$(cat <<EOF
-
-[Peer]
-# Entry ${entry_name}
-PublicKey = ${public_key}
-Endpoint = ${endpoint}:${wg_port}
-AllowedIPs = ${CLOUD_WG_IP}/32
-PersistentKeepalive = ${WG_KEEPALIVE_DEFAULT}
-EOF
-)"
-  new_content="${existing}${new_block}"
-  write_text_file "$LEIKWAN_WG_CONF" "$new_content" 600 || true
-  warn "已追加 Peer。重启 wg-quick@wg0 前请确认 AllowedIPs 不与现有入口冲突。"
-}
-
-entry_add() {
-  need_root_unless_dry_run
-  init_log
-  local name file public_key endpoint wg_port entry_port forward_mode endpoint_type enabled summary
-  name="$(prompt_non_empty "请输入入口名称，例如 aliyun/home/tencent")"
-  name="$(entry_safe_name "$name")"
-  file="$(entry_file_for_name "$name")"
-  public_key="$(prompt_wg_key_default "请输入 CLOUD_PUBLIC_KEY" "$(saved_param CLOUD_PUBLIC_KEY "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)")"
-  endpoint="$(prompt_endpoint_host "请输入 CLOUD_ENDPOINT（公网 IP 或 DDNS 域名）" "$(saved_param CLOUD_ENDPOINT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)")"
-  endpoint_type="$(prompt_value "请输入 CLOUD_ENDPOINT_TYPE：auto-ip / manual / ddns" "$(saved_param CLOUD_ENDPOINT_TYPE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || printf '%s' manual)")"
-  wg_port="$(prompt_port "请输入 CLOUD_WG_PORT" "$(saved_param CLOUD_WG_PORT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || printf '%s' "$CLOUD_WG_PORT_DEFAULT")")"
-  entry_port="$(prompt_port "请输入 CLIENT_ENTRY_PORT" "$(saved_param CLIENT_ENTRY_PORT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || printf '%s' "$CLIENT_ENTRY_PORT_DEFAULT")")"
-  forward_mode="$(prompt_value "请输入 FORWARD_MODE：nftables / iptables / realm / none" "$(saved_param FORWARD_MODE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || printf '%s' nftables)")"
-  enabled="$(prompt_value "是否启用该入口 yes/no" "yes")"
-  summary="入口：${name}\n文件：${file}\nEndpoint：${endpoint} (${endpoint_type})\nWG：${wg_port}/udp\n客户端入口端口：${entry_port}\n转发方式：${forward_mode}\n启用：${enabled}"
-  if ! confirm_summary "添加公网入口摘要" "$summary"; then
-    return 0
-  fi
-  if (( DRY_RUN == 0 )); then
-    install -d -m 700 "$ENTRIES_DIR"
-  fi
-  entry_write_file "$file" "$name" "$public_key" "$endpoint" "$wg_port" "$entry_port" "$forward_mode" "$endpoint_type" "$enabled"
-  if role_has "$(detect_current_role)" "leikwan-relay"; then
-    append_leikwan_wg_peer_if_needed "$name" "$public_key" "$endpoint" "$wg_port"
-  fi
-}
-
-entry_delete() {
-  need_root
-  init_log
-  local file name
-  entry_show
-  name="$(prompt_non_empty "请输入要删除的入口名称")"
-  file="$(entry_file_for_name "$name")"
-  if [[ ! -f "$file" ]]; then
-    warn "未找到入口文件：${file}"
-    return 0
-  fi
-  if confirm_summary "删除公网入口摘要" "将备份并删除：${file}\n不会删除 wg0 中已有 Peer。"; then
-    backup_file "$file"
-    rm -f "$file"
-    ok "已删除入口：${file}"
-  fi
-}
-
-entry_show() {
-  echo
-  echo "${BOLD}多公网入口列表${RESET}"
-  local file
-  if [[ -z "$(entry_files)" ]]; then
-    warn "未找到入口配置：${ENTRIES_DIR}/entry-*.env"
-    return 0
-  fi
-  while read -r file; do
-    [[ -n "$file" ]] || continue
-    echo "----------------------------------------"
-    grep -E '^(ENTRY_NAME|CLOUD_ENDPOINT|CLOUD_ENDPOINT_TYPE|CLOUD_WG_PORT|CLIENT_ENTRY_PORT|FORWARD_MODE|LAST_RTT|LAST_PACKET_LOSS|ENABLED)=' "$file" || true
-  done < <(entry_files)
-}
-
-entry_update_quality() {
-  local file="$1"
-  local rtt="$2"
-  local loss="$3"
-  local name public_key endpoint endpoint_type wg_port entry_port forward_mode enabled
-  name="$(env_file_get "$file" ENTRY_NAME 2>/dev/null || basename "$file" .env)"
-  public_key="$(env_file_get "$file" CLOUD_PUBLIC_KEY 2>/dev/null || true)"
-  endpoint="$(env_file_get "$file" CLOUD_ENDPOINT 2>/dev/null || true)"
-  endpoint_type="$(env_file_get "$file" CLOUD_ENDPOINT_TYPE 2>/dev/null || true)"
-  wg_port="$(env_file_get "$file" CLOUD_WG_PORT 2>/dev/null || true)"
-  entry_port="$(env_file_get "$file" CLIENT_ENTRY_PORT 2>/dev/null || true)"
-  forward_mode="$(env_file_get "$file" FORWARD_MODE 2>/dev/null || true)"
-  enabled="$(env_file_get "$file" ENABLED 2>/dev/null || true)"
-  entry_write_file "$file" "$name" "$public_key" "$endpoint" "${wg_port:-$CLOUD_WG_PORT_DEFAULT}" "${entry_port:-$CLIENT_ENTRY_PORT_DEFAULT}" "${forward_mode:-unknown}" "${endpoint_type:-manual}" "${enabled:-yes}" "$rtt" "$loss"
-}
-
-entry_test_one() {
-  local file="$1"
-  local name endpoint port ping_output loss avg nc_status="fail"
-  name="$(env_file_get "$file" ENTRY_NAME 2>/dev/null || basename "$file" .env)"
-  endpoint="$(env_file_get "$file" CLOUD_ENDPOINT 2>/dev/null || true)"
-  port="$(env_file_get "$file" CLIENT_ENTRY_PORT 2>/dev/null || printf '%s' "$CLIENT_ENTRY_PORT_DEFAULT")"
-  echo
-  echo "${BOLD}测试入口：${name} (${endpoint}:${port})${RESET}"
-  if [[ -z "$endpoint" ]]; then
-    warn "缺少 CLOUD_ENDPOINT"
-    return 1
-  fi
-  if getent ahosts "$endpoint" >/dev/null 2>&1; then
-    ok "Endpoint 可解析：${endpoint}"
-  else
-    warn "Endpoint 解析失败：${endpoint}"
-  fi
-  ping_output="$(ping -c 5 -W 2 "$endpoint" 2>&1 || true)"
-  printf '%s\n' "$ping_output"
-  loss="$(printf '%s\n' "$ping_output" | parse_ping_loss)"
-  avg="$(printf '%s\n' "$ping_output" | parse_ping_avg)"
-  if command -v nc >/dev/null 2>&1 && nc -vz -w 3 "$endpoint" "$port" >/dev/null 2>&1; then
-    nc_status="ok"
-    ok "TCP ${endpoint}:${port} 可连接"
-  else
-    warn "TCP ${endpoint}:${port} 连接失败或未安装 nc"
-  fi
-  entry_update_quality "$file" "${avg:-9999}" "${loss:-100}"
-  echo "LAST_RTT=${avg:-unknown}"
-  echo "LAST_PACKET_LOSS=${loss:-unknown}"
-  [[ "$nc_status" == "ok" ]]
-}
-
-entry_test_quality() {
-  need_root_unless_dry_run
-  init_log
-  local file
-  if [[ -z "$(entry_files)" ]]; then
-    warn "暂无入口，请先添加。"
-    return 0
-  fi
-  while read -r file; do
-    [[ -n "$file" ]] || continue
-    entry_test_one "$file" || true
-  done < <(entry_files)
-}
-
-entry_generate_links() {
-  need_root_unless_dry_run
-  init_log
-  local entry_uuid encryption file name endpoint port enabled encoded link output="" var_name
-  entry_uuid="$(saved_param ENTRY_UUID "$CLIENT_LINK_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  encryption="$(saved_param VLESSENC_ENCRYPTION "$CLIENT_LINK_FILE" "$RELAY_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  if [[ -z "$entry_uuid" || -z "$encryption" ]]; then
-    warn "缺少 ENTRY_UUID 或 VLESSENC_ENCRYPTION，无法生成多入口 CLIENT_LINK。"
-    return 1
-  fi
-  encoded="$(urlencode "$encryption")"
-  while read -r file; do
-    [[ -n "$file" ]] || continue
-    enabled="$(env_file_get "$file" ENABLED 2>/dev/null || printf '%s' yes)"
-    [[ "$enabled" == "yes" ]] || continue
-    name="$(env_file_get "$file" ENTRY_NAME 2>/dev/null || basename "$file" .env)"
-    endpoint="$(env_file_get "$file" CLOUD_ENDPOINT 2>/dev/null || true)"
-    port="$(env_file_get "$file" CLIENT_ENTRY_PORT 2>/dev/null || printf '%s' "$CLIENT_ENTRY_PORT_DEFAULT")"
-    [[ -n "$endpoint" ]] || continue
-    link="vless://${entry_uuid}@${endpoint}:${port}?type=raw&security=none&encryption=${encoded}#Leikwan-WG-Xray-Reality-${name}"
-    var_name="$(printf '%s' "$name" | tr '[:lower:].-' '[:upper:]__' | sed -E 's/[^A-Z0-9_]+/_/g')"
-    output="${output}CLIENT_LINK_${var_name}=${link}"$'\n'
-  done < <(entry_files)
-  [[ -n "$output" ]] || {
-    warn "没有可用的 ENABLED=yes 入口。"
-    return 0
-  }
-  write_text_file "$CLIENT_LINKS_FILE" "${output%$'\n'}" 600 || true
-  print_copy_block "多入口客户端链接" "${output%$'\n'}"
-}
-
-entry_recommend_best() {
-  local best_file="" best_name="" best_rtt="999999" best_loss="100" file name rtt loss enabled
-  while read -r file; do
-    [[ -n "$file" ]] || continue
-    enabled="$(env_file_get "$file" ENABLED 2>/dev/null || printf '%s' yes)"
-    [[ "$enabled" == "yes" ]] || continue
-    rtt="$(env_file_get "$file" LAST_RTT 2>/dev/null || true)"
-    loss="$(env_file_get "$file" LAST_PACKET_LOSS 2>/dev/null || true)"
-    [[ "$rtt" =~ ^[0-9.]+$ ]] || continue
-    [[ "$loss" =~ ^[0-9.]+$ ]] || loss="100"
-    if awk "BEGIN {exit !(($loss < $best_loss) || ($loss == $best_loss && $rtt < $best_rtt))}"; then
-      best_file="$file"
-      best_rtt="$rtt"
-      best_loss="$loss"
-    fi
-  done < <(entry_files)
-  if [[ -z "$best_file" ]]; then
-    warn "没有可推荐入口，请先执行入口质量测试。"
-    return 1
-  fi
-  best_name="$(env_file_get "$best_file" ENTRY_NAME 2>/dev/null || basename "$best_file" .env)"
-  ok "推荐最佳入口：${best_name}"
-  echo "原因：丢包 ${best_loss}%，RTT ${best_rtt} ms。"
-}
-
-entry_menu() {
-  while true; do
-    echo
-    echo "${BOLD}多公网入口机管理${RESET}"
-    echo "1. 添加入口"
-    echo "2. 删除入口"
-    echo "3. 查看入口"
-    echo "4. 测试入口质量"
-    echo "5. 生成多个 CLIENT_LINK"
-    echo "6. 推荐最佳入口"
-    echo "0. 返回"
-    local choice
-    choice="$(prompt_menu_choice "请选择：")"
-    case "$choice" in
-      1) entry_add || true ;;
-      2) entry_delete || true ;;
-      3) entry_show || true ;;
-      4) entry_test_quality || true ;;
-      5) entry_generate_links || true ;;
-      6) entry_recommend_best || true ;;
-      0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
-    esac
-  done
-}
-
-pbr_quality_test_landing() {
-  need_root_unless_dry_run
-  init_log
-  local landing_address landing_port groups=() group file cidr configured_group route_output nc_ok="no" best_group="" best_reason="" candidate ping_output="" landing_ping_avg="" selected_landing
   local choice
-  if [[ -n "$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)" || -n "$(landing_files)" ]]; then
-    echo
-    echo "${BOLD}请选择 PBR 质量测试对象${RESET}"
-    echo "1. 当前 Xray 实际 outbound（推荐）"
-    echo "2. 从 landing profile 选择"
-    echo "0. 取消"
-    choice="$(prompt_menu_choice "请选择 [1]: ")"
-    choice="${choice:-1}"
-    case "$choice" in
-      1)
-        landing_address="$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)"
-        landing_port="$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)"
-        ;;
-      2)
-        if ! landing_select_file; then
-          return 0
-        fi
-        selected_landing="$SELECTED_LANDING_FILE"
-        if [[ -n "$selected_landing" ]]; then
-          landing_address="$(landing_env_get "$selected_landing" LANDING_ADDRESS)"
-          landing_port="$(landing_env_get "$selected_landing" LANDING_PORT)"
-        fi
-        ;;
-      0) return 0 ;;
-      *) warn "无效选择，默认使用当前 Xray 实际 outbound。"
-         landing_address="$(xray_actual_landing_value LANDING_ADDRESS 2>/dev/null || true)"
-         landing_port="$(xray_actual_landing_value LANDING_PORT 2>/dev/null || true)"
-         ;;
-    esac
-  fi
-  landing_address="${landing_address:-$(read_landing_param LANDING_ADDRESS address)}"
-  landing_port="${landing_port:-$(read_landing_param LANDING_PORT port)}"
-  if [[ -z "$landing_address" ]]; then
-    landing_address="$(prompt_endpoint_host "请输入 LANDING_ADDRESS")"
-  fi
-  landing_port="${landing_port:-$(prompt_port "请输入 LANDING_PORT" "$LANDING_PORT_DEFAULT")}"
-
-  echo
-  echo "${BOLD}PBR 落地机出口质量测试：${landing_address}:${landing_port}${RESET}"
-  echo
-  echo "${BOLD}main${RESET}"
-  ip route get "$landing_address" || true
-  if command -v nc >/dev/null 2>&1 && nc -vz -w 3 "$landing_address" "$landing_port" >/dev/null 2>&1; then
-    nc_ok="yes"
-    ok "当前策略 TCP 连接成功：${landing_address}:${landing_port}"
-  else
-    warn "当前策略 TCP 连接失败或未安装 nc。"
-  fi
-  if command -v ping >/dev/null 2>&1; then
-    echo
-    echo "${BOLD}可选 ping 采样${RESET}"
-    ping_output="$(ping -c 5 -W 2 "$landing_address" 2>&1 || true)"
-    printf '%s\n' "$ping_output"
-    landing_ping_avg="$(printf '%s\n' "$ping_output" | parse_ping_avg)"
-  fi
-  if command -v mtr >/dev/null 2>&1; then
-    echo
-    echo "${BOLD}可选 mtr 采样${RESET}"
-    mtr -rwzc 5 "$landing_address" || true
-  fi
-
-  groups+=(9929 CN2)
-  if [[ -s "$PBR_STATIC_CONF" ]]; then
-    while read -r cidr configured_group _; do
-      [[ -z "$cidr" || "$cidr" =~ ^# ]] && continue
-      groups+=("$configured_group")
-    done < "$PBR_STATIC_CONF"
-  fi
-  pbr_detect_available_routes "quiet" "no" || true
-  for group in "${PBR_FOUND_NAMES[@]}"; do
-    groups+=("$group")
-  done
-
-  echo
-  echo "${BOLD}候选 T_ 路由表${RESET}"
-  for candidate in $(printf '%s\n' "${groups[@]}" | sed '/^$/d' | sort -u); do
-    echo
-    echo "T_${candidate}"
-    pbr_ensure_table_for_group "$candidate" || true
-    if route_output="$(ip route get "$landing_address" table "T_${candidate}" 2>&1)"; then
-      printf '%s\n' "$route_output"
-      if [[ -z "$best_group" ]]; then
-        best_group="$candidate"
-        best_reason="可达，路由表存在；当前 TCP ${nc_ok}${landing_ping_avg:+，ping avg ${landing_ping_avg} ms}"
-      fi
-    else
-      warn "T_${candidate} 查询失败：${route_output}"
-    fi
-  done
-
-  if [[ -z "$best_group" ]]; then
-    warn "未找到可推荐线路组。"
-    return 0
-  fi
-  echo
-  ok "推荐线路组：${best_group}"
-  echo "原因：${best_reason}"
-  if prompt_yes_no "是否一键应用推荐结果到 LANDING_ADDRESS？" "N"; then
-    file="$PBR_STATIC_CONF"
-    pbr_ensure_dir
-    local existing_content
-    existing_content="$(cat "$file" 2>/dev/null | grep -Ev "^${landing_address//./\\.}/32[[:space:]]+" || true)"
-    write_text_file "$file" "$(printf '%s\n%s/32 %s\n' "$existing_content" "$landing_address" "$best_group" | sed '/^$/d')" 644 || true
-    pbr_apply_saved_rules
-  fi
-}
-
-pbr_menu() {
   while true; do
-    echo
-    echo "${BOLD}IPv4 多出口策略路由${RESET}"
-    echo "1. 检测可用 IPv4 出口"
-    echo "2. 添加目标 IP/CIDR 指定出口"
-    echo "3. 添加域名 DDNS 指定出口"
-    echo "4. 一键为当前 Reality 落地机指定出口"
-    echo "5. 查看当前 PBR 规则"
-    echo "6. 删除规则"
-    echo "7. 刷新并应用规则"
-    echo "8. 安装 / 重启 PBR 开机恢复服务"
-    echo "9. 导入已有 PBR 规则"
-    echo "10. 测试落地机出口质量"
-    echo "0. 返回"
+    echo; echo "${BOLD}BBR / 系统优化${RESET}"
+    echo "1. 查看状态"; echo "2. 启用 BBR + fq"; echo "3. 恢复默认"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) pbr_detect_available_routes "show" "no" || true ;;
-      2) pbr_add_static_route || true ;;
-      3) pbr_add_domain_route || true ;;
-      4) pbr_route_landing || true ;;
-      5) pbr_show || true ;;
-      6) pbr_delete_rule || true ;;
-      7) pbr_apply_saved_rules || true ;;
-      8) pbr_install_service || true ;;
-      9) pbr_import_existing_rules || true ;;
-      10) pbr_quality_test_landing || true ;;
+      1) sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc 2>/dev/null || true ;;
+      2) write_file "$BBR_SYSCTL_CONF" $'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr' 644; modprobe tcp_bbr 2>/dev/null || true; sysctl --system ;;
+      3) backup_file "$BBR_SYSCTL_CONF"; rm -f "$BBR_SYSCTL_CONF"; sysctl --system ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
     esac
   done
 }
 
-redact_allowed_ip() {
-  local ip="$1"
-  local o1 o2 o3 o4
-  is_ipv4 "$ip" || return 0
-  IFS=. read -r o1 o2 o3 o4 <<<"$ip"
-  (( o1 == 0 || o1 == 10 || o1 == 127 )) && return 0
-  (( o1 == 169 && o2 == 254 )) && return 0
-  (( o1 == 172 && o2 >= 16 && o2 <= 31 )) && return 0
-  (( o1 == 192 && o2 == 168 )) && return 0
-  (( o1 == 192 && o2 == 0 && o3 == 2 )) && return 0
-  (( o1 == 198 && o2 == 51 && o3 == 100 )) && return 0
-  (( o1 == 203 && o2 == 0 && o3 == 113 )) && return 0
-  (( o1 == 100 && o2 >= 64 && o2 <= 127 )) && return 0
-  (( o1 >= 224 )) && return 0
-  return 1
-}
-
-redact_debug_line() {
-  local line="$1"
-  local ip
-  line="$(sed -E \
-    -e 's#vless://[^[:space:]]+#<CLIENT_LINK>#g' \
-    -e 's/[A-Za-z0-9+\/]{43}=/<WG_PUBLIC_KEY>/g' \
-    -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<UUID>/g' \
-    -e 's/mlkem[^[:space:]"]+/<VLESSENC>/g' \
-    -e 's/(LANDING_PUBLIC_KEY=)[^[:space:]]+/\1<REALITY_PUBLIC_KEY>/g' \
-    -e 's/(LANDING_SHORT_ID=)[^[:space:]]+/\1<SHORT_ID>/g' \
-    -e 's/("publicKey"[[:space:]]*:[[:space:]]*")[^"]+/\1<REALITY_PUBLIC_KEY>/g' \
-    -e 's/("shortId"[[:space:]]*:[[:space:]]*"?)[^",[:space:]]+/\1<SHORT_ID>/g' \
-    -e 's/(Reality PublicKey[=: ][[:space:]]*)[^[:space:]\",]+/\1<REALITY_PUBLIC_KEY>/g' \
-    -e 's/(ShortID[=: ][[:space:]]*)[^[:space:]\",]+/\1<SHORT_ID>/g' <<<"$line")"
-  while read -r ip; do
-    [[ -n "$ip" ]] || continue
-    if ! redact_allowed_ip "$ip"; then
-      line="${line//$ip/<PUBLIC_IP>}"
-    fi
-  done < <(grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' <<<"$line" | sort -u || true)
-  printf '%s\n' "$line"
-}
-
-redact_debug_report_file() {
-  local input="$1"
-  local output="$2"
-  : >"$output"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    redact_debug_line "$line" >>"$output"
-  done < "$input"
-}
-
-debug_section() {
-  local title="$1"
-  shift
-  echo
-  echo "===== ${title} ====="
-  "$@" 2>&1 || true
-}
-
-outputs_integrity_report() {
-  local file key
-  for file in "$CLOUD_OUTPUT_FILE" "$LANDING_OUTPUT_FILE" "$RELAY_OUTPUT_FILE" "$CLIENT_LINK_FILE"; do
-    echo "FILE=${file}"
-    if [[ -f "$file" ]]; then
-      for key in CLOUD_PUBLIC_KEY CLOUD_ENDPOINT CLOUD_ENDPOINT_TYPE CLOUD_WG_PORT CLIENT_ENTRY_PORT FORWARD_TARGET_MODE FORWARD_TARGET_ADDRESS FORWARD_TARGET_PORT FORWARD_TARGET_RESOLVED_IP LANDING_ADDRESS LANDING_PORT LANDING_UUID LANDING_PUBLIC_KEY LANDING_SHORT_ID ACTIVE_LANDING_NAME ACTIVE_LANDING_ADDRESS ACTIVE_LANDING_PORT ENTRY_UUID VLESSENC_ENCRYPTION CLIENT_LINK; do
-        if env_file_get "$file" "$key" >/dev/null 2>&1; then
-          echo "  ${key}=present"
-        fi
-      done
-    else
-      echo "  missing"
-    fi
+link_test_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}链路测试${RESET}"
+    echo "1. ping relay EasyTier IP"; echo "2. ping 所有入口 EasyTier IP"; echo "3. 测入口 EasyTier TCP"; echo "4. 测后端 target"; echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) ping -c 4 "$RELAY_ET_IP" || true ;;
+      2) entries_rows | while IFS=$'\t' read -r _n _h ip _proto _port _w e; do [[ "$e" == "true" ]] && ping -c 2 "$ip" || true; done ;;
+      3) entries_rows | while IFS=$'\t' read -r _n h _ip _proto port _w e; do [[ "$e" == "true" ]] && nc -vz -w 3 "$h" "$port" || true; done ;;
+      4) resolved_rows | while IFS=$'\t' read -r _n _ep _th ti tp _oi _rt en _c; do [[ "$en" == "true" && -n "$ti" ]] && nc -vz -w 3 "$ti" "$tp" || true; done ;;
+      0) return 0 ;;
+    esac
   done
 }
 
 generate_debug_report() {
   need_root_unless_dry_run
-  init_log
   local tmp
   tmp="$(mktemp)"
   {
-    echo "leikwan-wg-toolkit debug report"
-    echo "TOOL_VERSION=${TOOL_VERSION}"
-    echo "TIME=$(date '+%F %T %z')"
-    debug_section "os-release" cat /etc/os-release
-    debug_section "ip -br addr" ip -br addr
-    debug_section "ip route" ip route
-    debug_section "ip rule" ip rule
-    debug_section "bbr status" bbr_status_report
-    debug_section "wg show" wg show
-    debug_section "systemctl leikwan services" systemctl --no-pager --full status wg-quick@wg0 wg-quick@wg1 "$XRAY_LEIKWAN_SERVICE_NAME" "$REALM_ENTRY_STEM" "$FORWARD_NFT_SERVICE_NAME" "$FORWARD_IPTABLES_SERVICE_NAME" "$PBR_SERVICE_NAME" "$PBR_DDNS_SERVICE_NAME.timer"
-    debug_section "ss -lntup" ss -lntup
-    if command -v nft >/dev/null 2>&1; then
-      debug_section "nft leikwan rules" sh -c "nft list ruleset | sed -n '/leikwan/,+40p'"
-    fi
-    if command -v iptables >/dev/null 2>&1; then
-      debug_section "iptables leikwan rules" sh -c "iptables -t nat -S | grep -E '10\\.198\\.1\\.1|30000|leikwan' || true; iptables -S FORWARD | grep -E '10\\.198\\.1\\.1|30000|leikwan' || true"
-    fi
-    if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
-      debug_section "xray config test" "$XRAY_BIN" run -test -config "$XRAY_CONFIG"
-    fi
-    debug_section "doctor verbose" bash "$(script_self_path)" --doctor --verbose
-    debug_section "outputs integrity" outputs_integrity_report
+    echo "leikwan-wg-toolkit debug report ${TOOL_VERSION}"
+    cat /etc/os-release 2>/dev/null || true
+    ip -br addr || true
+    ip route || true
+    ip rule || true
+    systemctl --no-pager --full status "$EASYTIER_RELAY_SERVICE_NAME" 'easytier-entry-*' "$NFT_SERVICE_NAME" 2>&1 || true
+    ss -lntup || true
+    nft list table inet leikwan_forward 2>&1 || true
+    "$EASYTIER_CLI_BIN" peer 2>&1 || true
+    doctor || true
+    echo "outputs:"
+    [[ -f "$FORWARD_TSV" ]] && sed -n '1,120p' "$FORWARD_TSV"
   } >"$tmp" 2>&1
-
-  if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将生成脱敏故障报告：${DEBUG_REPORT_FILE}"
-    redact_debug_report_file "$tmp" /dev/stdout
-    rm -f "$tmp"
-    return 0
-  fi
-  redact_debug_report_file "$tmp" "$DEBUG_REPORT_FILE"
-  chmod 600 "$DEBUG_REPORT_FILE"
+  sed -E \
+    -e 's/(EASYTIER_NETWORK_SECRET=).*/\1<redacted>/g' \
+    -e 's/(PrivateKey[[:space:]]*=[[:space:]]*)[^[:space:]]+/\1<redacted>/g' \
+    -e 's#(vless|vmess|trojan|ss|hysteria)://[^[:space:]]+#<proxy-link-redacted>#g' \
+    "$tmp" >"$REPORT_FILE"
   rm -f "$tmp"
-  ok "已生成脱敏故障报告：${DEBUG_REPORT_FILE}"
-  warn "报告已脱敏公网 IP、公钥、UUID、VLESSENC、CLIENT_LINK、Reality PublicKey/ShortID。"
+  chmod 600 "$REPORT_FILE"
+  ok "已生成脱敏故障报告：${REPORT_FILE}"
 }
 
-show_status() {
+legacy_cleanup_menu() {
   need_root
-  init_log
-  echo
-  echo "${BOLD}WireGuard 状态${RESET}"
-  if command -v wg >/dev/null 2>&1; then
-    wg show || true
-  else
-    warn "未安装 wg 命令。"
-  fi
-
-  echo
-  echo "${BOLD}接口地址${RESET}"
-  ip addr show wg0 2>/dev/null || true
-  ip addr show wg1 2>/dev/null || true
-
-  echo
-  echo "${BOLD}Xray 状态${RESET}"
-  systemctl status "${XRAY_LEIKWAN_SERVICE_NAME}" --no-pager 2>/dev/null \
-    || systemctl status xray --no-pager 2>/dev/null \
-    || warn "未检测到 xray-leikwan.service / xray.service 或服务未运行。"
-  [[ -x "$XRAY_BIN" ]] && "$XRAY_BIN" version 2>/dev/null | head -n 1 || true
-
-  echo
-  echo "${BOLD}公网入口转发状态${RESET}"
-  validate_cloud_forwarding "$(cloud_forward_mode)" || true
-  echo
-  echo "${BOLD}realm 状态${RESET}"
-  local services=()
-  [[ -f "$REALM_ENTRY_SERVICE" ]] && services+=("$REALM_ENTRY_SERVICE")
-  local service stem
-  if (( ${#services[@]} == 0 )); then
-    warn "未找到本项目创建的 realm 服务。"
-  else
-    for service in "${services[@]}"; do
-      stem="$(basename "$service" .service)"
-      systemctl --no-pager --full status "${stem}.service" || true
-    done
-  fi
-
-  echo
-  echo "${BOLD}关键端口${RESET}"
-  ss -lntup | grep -E "(:${CLOUD_WG_PORT_DEFAULT}|:${CLIENT_ENTRY_PORT_DEFAULT}|:${LANDING_PORT_DEFAULT}|realm|xray)" || warn "未匹配到默认关键端口。"
+  local choice
+  while true; do
+    echo; echo "${BOLD}legacy 清理（默认不执行）${RESET}"
+    echo "1. 清理旧 WireGuard 配置与服务"; echo "2. 清理旧 Phantun 组件"; echo "3. 清理旧 FRP 组件"; echo "4. 清理旧 Xray 组件"; echo "5. 清理旧 realm 组件"; echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1)
+        if prompt_yes_no "二次确认清理旧 WireGuard wg0/wg1？" "N"; then
+          systemctl disable --now wg-quick@wg0 wg-quick@wg1 2>/dev/null || true
+          rm -f /etc/wireguard/wg0.conf /etc/wireguard/wg1.conf /etc/wireguard/wg0_privatekey /etc/wireguard/wg1_privatekey /etc/wireguard/wg0_publickey /etc/wireguard/wg1_publickey
+        fi
+        ;;
+      2)
+        if prompt_yes_no "二次确认清理旧 Phantun 组件？" "N"; then
+          systemctl disable --now phantun-server-leikwan 'phantun-client-entry-*' 2>/dev/null || true
+          rm -f /etc/systemd/system/phantun-server-leikwan.service /etc/systemd/system/phantun-client-entry-*.service /usr/local/bin/phantun_server /usr/local/bin/phantun_client
+        fi
+        ;;
+      3)
+        if prompt_yes_no "二次确认清理旧 FRP 组件？" "N"; then
+          systemctl disable --now frps-leikwan frpc-leikwan 2>/dev/null || true
+          rm -f /etc/systemd/system/frps-leikwan.service /etc/systemd/system/frpc-leikwan.service /etc/frp/frps-leikwan.toml /etc/frp/frpc-leikwan.toml
+        fi
+        ;;
+      4)
+        if prompt_yes_no "二次确认清理旧 Xray 组件？" "N"; then
+          systemctl disable --now xray-leikwan 2>/dev/null || true
+          rm -f /etc/systemd/system/xray-leikwan.service
+          rm -rf /usr/local/etc/xray/leikwan
+        fi
+        ;;
+      5)
+        if prompt_yes_no "二次确认清理旧 realm 组件？" "N"; then
+          systemctl disable --now realm-leikwan 2>/dev/null || true
+          rm -f /etc/systemd/system/realm-leikwan.service
+          rm -rf "${STATE_DIR}/realm"
+        fi
+        ;;
+      0) return 0 ;;
+    esac
+    systemctl daemon-reload || true
+  done
 }
 
-create_snapshot_backup() {
+uninstall_new_mode() {
   need_root
-  init_log
-  local tag="${1:-manual}"
-  local tar_path
-  tar_path="${BACKUP_DIR}/${tag}-$(date '+%Y%m%d-%H%M%S').tar.gz"
-  local paths=()
+  prompt_yes_no "确认卸载 v0.4 EasyTier 模式组件？" "N" || return 0
+  systemctl disable --now "$EASYTIER_RELAY_SERVICE_NAME" "$NFT_SERVICE_NAME" 2>/dev/null || true
+  systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | awk '{print $1}' | while read -r svc; do systemctl disable --now "$svc" 2>/dev/null || true; rm -f "/etc/systemd/system/${svc}"; done
+  rm -f "$EASYTIER_RELAY_SERVICE" "$NFT_SERVICE"
+  nft delete table inet leikwan_forward 2>/dev/null || true
+  if prompt_yes_no "是否删除 EasyTier 二进制？" "N"; then rm -f "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN"; fi
+  if prompt_yes_no "是否删除 /etc/leikwan-wg-toolkit？" "N"; then rm -rf "$STATE_DIR"; fi
+  systemctl daemon-reload || true
+  ok "卸载完成。"
+}
 
+backup_snapshot() {
+  need_root_unless_dry_run
+  local dest
+  dest="${BACKUP_DIR}/leikwan-v0.4-snapshot.$(date '+%Y%m%d-%H%M%S').tar.gz"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] tar -czf ${dest} ${STATE_DIR} ${FORWARD_SYSCTL}"
+    return 0
+  fi
   mkdir -p "$BACKUP_DIR"
-  [[ -e /etc/wireguard ]] && paths+=(etc/wireguard)
-  [[ -e "$XRAY_CONFIG" ]] && paths+=("${XRAY_CONFIG#/}")
-  [[ -e "$STATE_DIR" ]] && paths+=("${STATE_DIR#/}")
-  [[ -e /etc/gai.conf ]] && paths+=(etc/gai.conf)
-  [[ -e /etc/systemd/resolved.conf.d/99-custom-dns.conf ]] && paths+=(etc/systemd/resolved.conf.d/99-custom-dns.conf)
-  [[ -e /etc/systemd/resolved.conf.d/98-leikwan-ipv6-lockdown.conf ]] && paths+=(etc/systemd/resolved.conf.d/98-leikwan-ipv6-lockdown.conf)
-  [[ -e /etc/iptables/rules.v4 ]] && paths+=(etc/iptables/rules.v4)
-  [[ -e /etc/iptables/rules.v6 ]] && paths+=(etc/iptables/rules.v6)
-  [[ -e "$PBR_DIR" ]] && paths+=("${PBR_DIR#/}")
-  [[ -e "$PBR_SERVICE" ]] && paths+=("${PBR_SERVICE#/}")
-  [[ -e "$PBR_DDNS_SERVICE" ]] && paths+=("${PBR_DDNS_SERVICE#/}")
-  [[ -e "$PBR_DDNS_TIMER" ]] && paths+=("${PBR_DDNS_TIMER#/}")
-  [[ -e "$PBR_RT_TABLES" ]] && paths+=("${PBR_RT_TABLES#/}")
-  [[ -e "$FORWARD_NFT_DIR" ]] && paths+=("${FORWARD_NFT_DIR#/}")
-  [[ -e "$FORWARD_IPTABLES_DIR" ]] && paths+=("${FORWARD_IPTABLES_DIR#/}")
-  [[ -e "$FORWARD_NFT_SERVICE" ]] && paths+=("${FORWARD_NFT_SERVICE#/}")
-  [[ -e "$FORWARD_IPTABLES_SERVICE" ]] && paths+=("${FORWARD_IPTABLES_SERVICE#/}")
-  [[ -e "$FORWARD_SYSCTL_CONF" ]] && paths+=("${FORWARD_SYSCTL_CONF#/}")
-
-  shopt -s nullglob
-  local realm_files=("${REALM_DIR}"/*.toml /etc/systemd/system/realm-leikwan.service)
-  shopt -u nullglob
-  local item
-  for item in "${realm_files[@]}"; do
-    [[ -e "$item" ]] && paths+=("${item#/}")
-  done
-
-  if (( ${#paths[@]} == 0 )); then
-    warn "没有找到可备份的项目相关配置。"
-    return 0
-  fi
-
-  tar -C / -czf "$tar_path" "${paths[@]}"
-  ok "快照备份已创建：${tar_path}"
+  tar -czf "$dest" "$STATE_DIR" "$FORWARD_SYSCTL" 2>/dev/null || true
+  ok "已生成备份：${dest}"
 }
 
-list_snapshot_backups() {
-  need_root
-  shopt -s nullglob
-  local backups=("${BACKUP_DIR}"/*.tar.gz)
-  shopt -u nullglob
-
-  if (( ${#backups[@]} == 0 )); then
-    warn "暂无快照备份。"
-    return 0
-  fi
-
-  local i=1 item
-  for item in "${backups[@]}"; do
-    printf '%d. %s\n' "$i" "$item"
-    i=$((i + 1))
-  done
-}
-
-restore_snapshot_backup() {
-  need_root
-  init_log
-  shopt -s nullglob
-  local backups=("${BACKUP_DIR}"/*.tar.gz)
-  shopt -u nullglob
-
-  if (( ${#backups[@]} == 0 )); then
-    warn "暂无快照备份可恢复。"
-    return 0
-  fi
-
-  list_snapshot_backups
-  local choice idx backup summary
-  choice="$(prompt_value "请输入要恢复的备份编号")"
-  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#backups[@]} )); then
-    fail "编号无效。"
-    return 1
-  fi
-  idx=$((choice - 1))
-  backup="${backups[$idx]}"
-  summary="备份：${backup}\n动作：先创建 pre-restore 快照，再将备份内容恢复到 /etc 与 systemd 相关路径。"
-  if ! confirm_summary "恢复备份摘要" "$summary"; then
-    warn "已取消恢复。"
-    return 0
-  fi
-
-  create_snapshot_backup "pre-restore"
-  tar -C / -xzf "$backup"
-  run_cmd systemctl daemon-reload || true
-  ok "恢复完成。WireGuard、Xray 或 realm 服务如需生效，请手动重启对应服务。"
+restore_snapshot() {
+  need_root_unless_dry_run
+  local path
+  path="$(prompt_value "请输入备份 tar.gz 路径")"
+  [[ -f "$path" ]] || { warn "文件不存在：${path}"; return 0; }
+  confirm_summary "恢复备份摘要" "来源：${path}\n动作：解包到 /，覆盖本项目配置；不删除用户其它规则。" || return 0
+  (( DRY_RUN == 1 )) && return 0
+  tar -xzf "$path" -C /
+  systemctl daemon-reload || true
+  ok "备份已恢复。请按需重启 EasyTier/nft 服务。"
 }
 
 backup_restore_menu() {
+  local choice
   while true; do
-    echo
-    echo "${BOLD}备份 / 恢复${RESET}"
-    echo "1. 创建快照备份"
-    echo "2. 查看快照备份"
-    echo "3. 从快照恢复"
-    echo "0. 返回主菜单"
+    echo; echo "${BOLD}备份 / 恢复${RESET}"
+    echo "1. 生成配置快照"; echo "2. 从快照恢复"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) create_snapshot_backup "manual" || true ;;
-      2) list_snapshot_backups || true ;;
-      3) restore_snapshot_backup || true ;;
+      1) backup_snapshot ;;
+      2) restore_snapshot ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
     esac
   done
 }
 
-remove_ipv6_lockdown() {
-  need_root
-  init_log
-  local summary="动作：删除 INPUT 中跳转到 V6_LOCKDOWN 的规则，清空并删除 V6_LOCKDOWN 链，然后保存 /etc/iptables/rules.v6。"
-  if ! confirm_summary "删除 IPv6 V6_LOCKDOWN 摘要" "$summary"; then
-    warn "已取消删除 IPv6 V6_LOCKDOWN。"
-    return 0
-  fi
-
-  if ! command -v ip6tables >/dev/null 2>&1; then
-    warn "未检测到 ip6tables。"
-    return 0
-  fi
-
-  while ip6tables -C INPUT -j V6_LOCKDOWN 2>/dev/null; do
-    ip6tables -D INPUT -j V6_LOCKDOWN || break
-  done
-
-  if ip6tables -L V6_LOCKDOWN >/dev/null 2>&1; then
-    ip6tables -F V6_LOCKDOWN || true
-    ip6tables -X V6_LOCKDOWN || true
-  fi
-
-  if [[ -e /etc/iptables/rules.v6 ]]; then
-    backup_file /etc/iptables/rules.v6
-    ip6tables-save >/etc/iptables/rules.v6 || true
-  fi
-  ok "已删除 IPv6 V6_LOCKDOWN 规则。"
-}
-
-remove_project_realm_services() {
-  local services=()
-  [[ -f "$REALM_ENTRY_SERVICE" ]] && services+=("$REALM_ENTRY_SERVICE")
-  local service stem conf summary
-
-  if (( ${#services[@]} == 0 )); then
-    warn "未找到本项目创建的 realm 服务。"
-    return 0
-  fi
-
-  summary="动作：停止并删除本项目创建的 realm-leikwan.service 与 ${REALM_DIR} 下对应配置。\n不会删除用户其他 realm 服务。"
-  if ! confirm_summary "删除 realm 服务摘要" "$summary"; then
-    warn "已取消删除 realm 服务。"
-    return 0
-  fi
-
-  for service in "${services[@]}"; do
-    stem="$(basename "$service" .service)"
-    conf="$(grep -Eo -- '-c[[:space:]]+[^[:space:]]+' "$service" | awk '{print $2}' | tail -n 1 || true)"
-    systemctl disable --now "${stem}.service" >/dev/null 2>&1 || true
-    backup_file "$service"
-    rm -f "$service"
-    if [[ -n "$conf" && "$conf" == "$REALM_DIR"/* && -f "$conf" ]]; then
-      backup_file "$conf"
-      rm -f "$conf"
-    fi
-    ok "已删除 realm 服务：${stem}.service"
-  done
-  run_cmd systemctl daemon-reload || true
-}
-
-remove_nft_forward_rules() {
-  need_root
-  init_log
-  local summary="动作：停止并删除 ${FORWARD_NFT_SERVICE_NAME}.service，删除 table ip leikwan_nat 和 table inet leikwan_filter，备份后删除 ${FORWARD_NFT_DIR}。\n不会 flush ruleset，不删除用户其他 nftables 表。"
-  if ! confirm_summary "删除 nftables 转发规则摘要" "$summary"; then
-    warn "已取消删除 nftables 转发规则。"
-    return 0
-  fi
-  systemctl disable --now "${FORWARD_NFT_SERVICE_NAME}.service" >/dev/null 2>&1 || true
-  if command -v nft >/dev/null 2>&1; then
-    nft delete table ip leikwan_nat 2>/dev/null || true
-    nft delete table inet leikwan_filter 2>/dev/null || true
-  fi
-  [[ -f "$FORWARD_NFT_SERVICE" ]] && backup_file "$FORWARD_NFT_SERVICE" && rm -f "$FORWARD_NFT_SERVICE"
-  [[ -d "$FORWARD_NFT_DIR" ]] && backup_file "$FORWARD_NFT_DIR" && rm -rf "$FORWARD_NFT_DIR"
-  run_cmd systemctl daemon-reload || true
-  ok "已删除本项目 nftables 转发规则。"
-}
-
-remove_iptables_forward_rules() {
-  need_root
-  init_log
-  local summary="动作：停止并删除 ${FORWARD_IPTABLES_SERVICE_NAME}.service，执行本项目脚本 delete 删除精确 iptables 规则，备份后删除 ${FORWARD_IPTABLES_DIR}。\n不会 flush 任何链，不删除用户其他 iptables 规则。"
-  if ! confirm_summary "删除 iptables 转发规则摘要" "$summary"; then
-    warn "已取消删除 iptables 转发规则。"
-    return 0
-  fi
-  systemctl disable --now "${FORWARD_IPTABLES_SERVICE_NAME}.service" >/dev/null 2>&1 || true
-  load_current_forward_target
-  local target_address target_port
-  target_address="$(forward_target_effective_address)"
-  target_port="$FORWARD_TARGET_PORT"
-  if [[ -x "$FORWARD_IPTABLES_SCRIPT" ]]; then
-    "$FORWARD_IPTABLES_SCRIPT" delete || true
-  elif command -v iptables >/dev/null 2>&1; then
-    while iptables -t nat -C PREROUTING -p tcp --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j DNAT --to-destination "${target_address}:${target_port}" 2>/dev/null; do iptables -t nat -D PREROUTING -p tcp --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j DNAT --to-destination "${target_address}:${target_port}"; done
-    while iptables -t nat -C POSTROUTING -p tcp -d "$target_address" --dport "$target_port" -j MASQUERADE 2>/dev/null; do iptables -t nat -D POSTROUTING -p tcp -d "$target_address" --dport "$target_port" -j MASQUERADE; done
-    while iptables -C FORWARD -p tcp -d "$target_address" --dport "$target_port" -j ACCEPT 2>/dev/null; do iptables -D FORWARD -p tcp -d "$target_address" --dport "$target_port" -j ACCEPT; done
-    while iptables -C FORWARD -p tcp -s "$target_address" --sport "$target_port" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do iptables -D FORWARD -p tcp -s "$target_address" --sport "$target_port" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; done
-  fi
-  [[ -f "$FORWARD_IPTABLES_SERVICE" ]] && backup_file "$FORWARD_IPTABLES_SERVICE" && rm -f "$FORWARD_IPTABLES_SERVICE"
-  [[ -d "$FORWARD_IPTABLES_DIR" ]] && backup_file "$FORWARD_IPTABLES_DIR" && rm -rf "$FORWARD_IPTABLES_DIR"
-  run_cmd systemctl daemon-reload || true
-  ok "已删除本项目 iptables 转发规则。"
-}
-
-remove_forward_sysctl() {
-  need_root
-  init_log
-  if [[ ! -f "$FORWARD_SYSCTL_CONF" ]]; then
-    warn "未找到 ${FORWARD_SYSCTL_CONF}。"
-    return 0
-  fi
-  local summary="动作：备份并删除 ${FORWARD_SYSCTL_CONF}，然后执行 sysctl --system。\n不会修改其他 sysctl 文件。"
-  if ! confirm_summary "删除 IPv4 转发 sysctl 摘要" "$summary"; then
-    warn "已取消删除 sysctl 配置。"
-    return 0
-  fi
-  backup_file "$FORWARD_SYSCTL_CONF"
-  rm -f "$FORWARD_SYSCTL_CONF"
-  run_cmd sysctl --system || true
-  ok "已删除 ${FORWARD_SYSCTL_CONF}"
-}
-
-wg_config_is_managed() {
-  local conf="$1"
-  [[ -f "$conf" ]] && grep -q 'Managed by leikwan-wg-toolkit' "$conf"
-}
-
-remove_wg_iface_if_managed() {
-  local iface="$1"
-  local conf="/etc/wireguard/${iface}.conf"
-
-  if [[ ! -e "$conf" ]]; then
-    warn "未找到 ${conf}。"
-    return 0
-  fi
-
-  if ! wg_config_is_managed "$conf"; then
-    warn "${conf} 不是本项目标记创建的配置，跳过删除。"
-    return 0
-  fi
-
-  local summary="接口：${iface}\n配置：${conf}\n动作：停止并禁用 wg-quick@${iface}，备份后删除本项目创建的配置文件。"
-  if ! confirm_summary "删除 WireGuard ${iface} 摘要" "$summary"; then
-    warn "已取消删除 ${iface}。"
-    return 0
-  fi
-
-  systemctl disable --now "wg-quick@${iface}.service" >/dev/null 2>&1 || true
-  backup_file "$conf"
-  rm -f "$conf"
-  ok "已删除 ${conf}"
-}
-
-xray_config_is_managed() {
-  [[ -f "$XRAY_CONFIG" ]] && grep -q 'leikwan-' "$XRAY_CONFIG"
-}
-
-remove_xray_config_with_double_confirm() {
-  if [[ ! -f "$XRAY_CONFIG" ]]; then
-    warn "未找到 ${XRAY_CONFIG}。"
-    return 0
-  fi
-
-  if ! xray_config_is_managed; then
-    warn "${XRAY_CONFIG} 未检测到本项目 tag，跳过删除。"
-    return 0
-  fi
-
-  local role="$1"
-  local summary="角色：${role}\n配置：${XRAY_CONFIG}\n动作：停止 xray-leikwan.service；如果用户选择过覆盖模式且 unit 带本项目标记，也会按确认删除。\n不会删除 xray 二进制，不会删除非本项目 systemd 服务。"
-  if ! confirm_summary "删除 Xray 配置摘要" "$summary"; then
-    warn "已取消删除 Xray 配置。"
-    return 0
-  fi
-  if ! prompt_yes_no "二次确认：确定删除 ${XRAY_CONFIG} 吗？" "N"; then
-    warn "二次确认未通过，保留 Xray 配置。"
-    return 0
-  fi
-
-  systemctl stop "${XRAY_LEIKWAN_SERVICE_NAME}.service" >/dev/null 2>&1 || true
-  systemctl stop xray.service >/dev/null 2>&1 || true
-  backup_file "$XRAY_CONFIG"
-  rm -f "$XRAY_CONFIG"
-  ok "已删除 ${XRAY_CONFIG}"
-
-  if [[ -f "$XRAY_LEIKWAN_SERVICE" ]] && grep -q 'Managed by leikwan-wg-toolkit' "$XRAY_LEIKWAN_SERVICE"; then
-    systemctl disable "${XRAY_LEIKWAN_SERVICE_NAME}.service" >/dev/null 2>&1 || true
-    backup_file "$XRAY_LEIKWAN_SERVICE"
-    rm -f "$XRAY_LEIKWAN_SERVICE"
-    ok "已删除本项目创建的 ${XRAY_LEIKWAN_SERVICE_NAME}.service。"
-  fi
-
-  if [[ -f "$XRAY_SYSTEM_SERVICE" ]] && grep -q 'Managed by leikwan-wg-toolkit' "$XRAY_SYSTEM_SERVICE"; then
-    if prompt_yes_no "检测到 xray.service 带本项目标记，是否删除该 unit 文件？" "N"; then
-      systemctl disable xray.service >/dev/null 2>&1 || true
-      backup_file "$XRAY_SYSTEM_SERVICE"
-      rm -f "$XRAY_SYSTEM_SERVICE"
-      ok "已删除本项目覆盖写入的 xray.service。"
-    fi
-  fi
-  run_cmd systemctl daemon-reload || true
-}
-
-uninstall_cloud_entry() {
-  need_root
-  init_log
-  create_snapshot_backup "pre-uninstall-cloud" || true
-  remove_wg_iface_if_managed "wg1"
-  remove_nft_forward_rules
-  remove_iptables_forward_rules
-  remove_project_realm_services
-  remove_forward_sysctl
-  remove_shortcuts
-}
-
-uninstall_leikwan_relay() {
-  need_root
-  init_log
-  create_snapshot_backup "pre-uninstall-leikwan" || true
-  remove_wg_iface_if_managed "wg0"
-  remove_xray_config_with_double_confirm "利群中转机"
-  remove_shortcuts
-}
-
-uninstall_landing_server() {
-  need_root
-  init_log
-  create_snapshot_backup "pre-uninstall-landing" || true
-  remove_xray_config_with_double_confirm "海外落地机"
-  remove_shortcuts
-}
-
-uninstall_menu() {
+easytier_menu() {
+  local choice
   while true; do
-    echo
-    echo "${BOLD}卸载${RESET}"
-    echo "1. 卸载公网入口机组件"
-    echo "2. 卸载利群中转机组件"
-    echo "3. 卸载海外落地机组件"
-    echo "4. 单独删除 IPv6 V6_LOCKDOWN 规则"
-    echo "5. 仅删除 IPv4 PBR 规则"
-    echo "6. 删除 nftables 转发规则"
-    echo "7. 删除 iptables 转发规则"
-    echo "8. 删除 realm 转发服务"
-    echo "9. 删除快捷命令 lq / LQ"
-    echo "0. 返回主菜单"
+    echo; echo "${BOLD}EasyTier 组网管理${RESET}"
+    echo "1. 安装 / 修复 EasyTier"; echo "2. B 生成网络码"; echo "3. A 粘贴网络码并部署入口"; echo "4. B 粘贴入口码并完成接入"; echo "5. 启动 / 重启 entry 服务"; echo "6. 启动 / 重启 relay 服务"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) uninstall_cloud_entry || true ;;
-      2) uninstall_leikwan_relay || true ;;
-      3) uninstall_landing_server || true ;;
-      4) remove_ipv6_lockdown || true ;;
-      5) pbr_remove_project_rules_only || true ;;
-      6) remove_nft_forward_rules || true ;;
-      7) remove_iptables_forward_rules || true ;;
-      8) remove_project_realm_services || true ;;
-      9) remove_shortcuts || true ;;
+      1) install_easytier_binary ;;
+      2) quick_generate_network_pairing ;;
+      3) quick_deploy_entry_from_network_pairing ;;
+      4) quick_deploy_relay_from_entry_pairing ;;
+      5) apply_easytier_entry_services ;;
+      6) apply_easytier_relay_service ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
     esac
   done
 }
 
-validate_report() {
-  local status="$1"
-  local message="$2"
-  case "$status" in
-    ok) echo "${GREEN}[OK]${RESET} ${message}" ;;
-    info) echo "[INFO] ${message}" ;;
-    warn) echo "${YELLOW}[WARN]${RESET} ${message}" ;;
-    fail) echo "${RED}[FAIL]${RESET} ${message}" ;;
-  esac
-}
-
-validate_url_reachable() {
-  local name="$1"
-  local url="$2"
-  if command -v curl >/dev/null 2>&1; then
-    if curl -4 -fsSI --connect-timeout 8 --max-time 12 "$url" >/dev/null 2>&1; then
-      validate_report ok "${name} 可达：${url}"
-    else
-      validate_report warn "${name} 不可达或超时：${url}"
-    fi
-  else
-    validate_report warn "未安装 curl，跳过 ${name} 可达性检查"
-  fi
-}
-
-validate_command_exists() {
-  local cmd="$1"
-  if command -v "$cmd" >/dev/null 2>&1; then
-    validate_report ok "命令存在：${cmd} ($(command -v "$cmd"))"
-    return 0
-  fi
-  validate_report fail "命令不存在：${cmd}"
-  return 1
-}
-
-validate_xray_exists() {
-  if command -v xray >/dev/null 2>&1; then
-    validate_report ok "命令存在：xray ($(command -v xray))"
-  elif [[ -x "$XRAY_BIN" ]]; then
-    validate_report ok "命令存在：${XRAY_BIN}"
-  else
-    validate_report fail "命令不存在：xray / ${XRAY_BIN}"
-    return 1
-  fi
-}
-
-validate_service() {
-  local service="$1"
-  if systemctl list-unit-files --type=service --no-legend "${service}.service" 2>/dev/null | grep -q "^${service}\\.service"; then
-    if systemctl is-active --quiet "${service}.service"; then
-      validate_report ok "服务运行中：${service}.service"
-    else
-      validate_report warn "服务存在但未运行：${service}.service"
-    fi
-    return 0
-  fi
-  validate_report warn "服务不存在：${service}.service"
-  return 1
-}
-
-validate_oneshot_service_status() {
-  local service="$1"
-  local unit="${service}.service"
-  local enabled active result
-  if ! systemctl list-unit-files --type=service --no-legend "$unit" 2>/dev/null | grep -q "^${unit}"; then
-    validate_report warn "服务不存在：${unit}"
-    return 1
-  fi
-  enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
-  active="$(systemctl is-active "$unit" 2>/dev/null || true)"
-  result="$(systemctl show "$unit" -p Result --value 2>/dev/null || true)"
-  if [[ "$enabled" == "enabled" ]]; then
-    validate_report ok "服务已 enabled：${unit}"
-  else
-    validate_report warn "服务未 enabled：${unit} (${enabled:-unknown})"
-  fi
-  if [[ "$active" == "active" ]]; then
-    validate_report ok "服务 active：${unit}"
-  elif [[ "$result" == "success" ]]; then
-    validate_report ok "oneshot 上次执行成功：${unit}"
-  else
-    validate_report warn "oneshot 当前未运行或未成功执行：${unit} (active=${active:-unknown}, result=${result:-unknown})"
-  fi
-}
-
-validate_timer_status() {
-  local timer="$1"
-  local unit="${timer}.timer"
-  local enabled active
-  if ! systemctl list-unit-files --type=timer --no-legend "$unit" 2>/dev/null | grep -q "^${unit}"; then
-    validate_report warn "timer 不存在：${unit}"
-    return 1
-  fi
-  enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
-  active="$(systemctl is-active "$unit" 2>/dev/null || true)"
-  if [[ "$enabled" == "enabled" ]]; then
-    validate_report ok "timer 已 enabled：${unit}"
-  else
-    validate_report warn "timer 未 enabled：${unit} (${enabled:-unknown})"
-  fi
-  if [[ "$active" == "active" ]]; then
-    validate_report ok "timer 运行中：${unit}"
-  else
-    validate_report warn "timer 未运行：${unit} (${active:-unknown})"
-  fi
-}
-
-validate_port_listen() {
-  local port="$1"
-  local name="$2"
-  if ss -lntup 2>/dev/null | grep -q ":${port}\\b"; then
-    validate_report ok "端口监听存在：${name} ${port}"
-  else
-    validate_report warn "未检测到端口监听：${name} ${port}"
-  fi
-}
-
-wait_for_tcp_listen() {
-  local port="$1"
-  local host="${2:-}"
-  local timeout="${3:-10}"
-  local i
-  for ((i = 1; i <= timeout; i++)); do
-    if ss -lntH 2>/dev/null | awk -v port="$port" -v host="$host" '
-      function has_port(addr, p) {
-        return addr ~ ":" p "$" || addr ~ "\\]:" p "$"
-      }
-      {
-        addr = $4
-        if (host == "") {
-          if (has_port(addr, port)) found = 1
-        } else if (addr == host ":" port || addr == "0.0.0.0:" port || addr == "*:" port || addr == "[::]:" port || addr == ":::" port || has_port(addr, port)) {
-          found = 1
-        }
-      }
-      END { exit !found }
-    '; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
-cloud_forward_mode() {
-  local mode
-  mode="$(saved_param FORWARD_MODE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  if [[ -n "$mode" ]]; then
-    printf '%s' "$mode"
-    return 0
-  fi
-  if systemctl list-unit-files --type=service --no-legend "${FORWARD_NFT_SERVICE_NAME}.service" 2>/dev/null | grep -q "^${FORWARD_NFT_SERVICE_NAME}.service"; then
-    printf '%s' "nftables"
-  elif systemctl list-unit-files --type=service --no-legend "${FORWARD_IPTABLES_SERVICE_NAME}.service" 2>/dev/null | grep -q "^${FORWARD_IPTABLES_SERVICE_NAME}.service"; then
-    printf '%s' "iptables"
-  elif systemctl list-unit-files --type=service --no-legend "${REALM_ENTRY_STEM}.service" 2>/dev/null | grep -q "^${REALM_ENTRY_STEM}.service"; then
-    printf '%s' "realm"
-  else
-    printf '%s' "unknown"
-  fi
-}
-
-validate_ip_forward_enabled() {
-  local value
-  value="$(sysctl -n net.ipv4.ip_forward 2>/dev/null || true)"
-  if [[ "$value" == "1" ]]; then
-    validate_report ok "net.ipv4.ip_forward=1"
-  else
-    validate_report warn "net.ipv4.ip_forward=${value:-unknown}，内核转发需要设置为 1"
-  fi
-}
-
-iptables_forward_rules_present() {
-  local target_address target_port
-  command -v iptables >/dev/null 2>&1 || return 1
-  load_current_forward_target
-  target_address="$(forward_target_effective_address)"
-  target_port="$FORWARD_TARGET_PORT"
-  iptables -t nat -C PREROUTING -p tcp --dport "$CLIENT_ENTRY_PORT_DEFAULT" -j DNAT --to-destination "${target_address}:${target_port}" 2>/dev/null || return 1
-  iptables -t nat -C POSTROUTING -p tcp -d "$target_address" --dport "$target_port" -j MASQUERADE 2>/dev/null || return 1
-  iptables -C FORWARD -p tcp -d "$target_address" --dport "$target_port" -j ACCEPT 2>/dev/null || return 1
-  iptables -C FORWARD -p tcp -s "$target_address" --sport "$target_port" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || return 1
-}
-
-validate_forward_target_profile() {
-  local mode="${1:-$(cloud_forward_mode)}"
-  local current_ip=""
-  load_current_forward_target
-  validate_report ok "FORWARD_TARGET_MODE=${FORWARD_TARGET_MODE}"
-  validate_report ok "FORWARD_TARGET=${FORWARD_TARGET_ADDRESS}:${FORWARD_TARGET_PORT}"
-  if ! is_ipv4 "$FORWARD_TARGET_ADDRESS"; then
-    current_ip="$(resolve_ipv4_first "$FORWARD_TARGET_ADDRESS" 2>/dev/null || true)"
-    if [[ -n "$current_ip" ]]; then
-      validate_report ok "转发目标域名当前解析：${FORWARD_TARGET_ADDRESS} -> ${current_ip}"
-      if [[ "$mode" != "realm" && -n "$FORWARD_TARGET_RESOLVED_IP" && "$current_ip" != "$FORWARD_TARGET_RESOLVED_IP" ]]; then
-        validate_report warn "转发目标解析已变化，当前规则使用 ${FORWARD_TARGET_RESOLVED_IP}，建议运行：bash wg-toolkit.sh --refresh-forward-target"
-      fi
-    else
-      validate_report warn "转发目标域名解析失败：${FORWARD_TARGET_ADDRESS}"
-    fi
-  fi
-  case "$mode" in
-    nftables)
-      if command -v nft >/dev/null 2>&1 && nft list table ip leikwan_nat 2>/dev/null | grep -q "$(forward_target_effective_address)"; then
-        validate_report ok "nftables DNAT 目标与 profile 匹配"
-      elif command -v nft >/dev/null 2>&1; then
-        validate_report warn "nftables DNAT 目标可能与 profile 不一致，建议运行 --refresh-forward-target"
-      fi
-      ;;
-    iptables)
-      if command -v iptables >/dev/null 2>&1 && iptables -t nat -S 2>/dev/null | grep -q -- "--to-destination ${FORWARD_TARGET}"; then
-        validate_report ok "iptables DNAT 目标与 profile 匹配"
-      elif command -v iptables >/dev/null 2>&1; then
-        validate_report warn "iptables DNAT 目标可能与 profile 不一致，建议运行 --refresh-forward-target"
-      fi
-      ;;
-  esac
-}
-
-validate_cloud_forwarding() {
-  local mode="${1:-$(cloud_forward_mode)}"
-  load_current_forward_target
-  case "$mode" in
-    nftables)
-      validate_report ok "转发方式：nftables"
-      validate_forward_target_profile "$mode"
-      validate_command_exists nft || true
-      validate_service "$FORWARD_NFT_SERVICE_NAME" || true
-      validate_ip_forward_enabled
-      if command -v nft >/dev/null 2>&1 && nft list table ip leikwan_nat >/dev/null 2>&1 && nft list table inet leikwan_filter >/dev/null 2>&1; then
-        validate_report ok "nftables DNAT：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET}"
-      else
-        validate_report warn "未检测到 nftables leikwan_nat / leikwan_filter 表"
-      fi
-      ;;
-    iptables)
-      validate_report ok "转发方式：iptables"
-      validate_forward_target_profile "$mode"
-      validate_command_exists iptables || true
-      validate_service "$FORWARD_IPTABLES_SERVICE_NAME" || true
-      validate_ip_forward_enabled
-      if iptables_forward_rules_present; then
-        validate_report ok "iptables DNAT：0.0.0.0:${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET}"
-      else
-        validate_report warn "未检测到完整 iptables DNAT/MASQUERADE/FORWARD 规则"
-      fi
-      ;;
-    realm)
-      validate_report ok "转发方式：realm"
-      validate_forward_target_profile "$mode"
-      validate_service "$REALM_ENTRY_STEM" || true
-      if [[ -f "$REALM_ENTRY_CONF" ]]; then
-        validate_report ok "realm 配置存在：${REALM_ENTRY_CONF}"
-      else
-        validate_report warn "realm 配置不存在：${REALM_ENTRY_CONF}"
-      fi
-      validate_port_listen "$CLIENT_ENTRY_PORT_DEFAULT" "公网客户端入口 / realm"
-      ;;
-    none)
-      validate_report info "转发方式：未配置"
-      ;;
-    *)
-      validate_report warn "未能识别公网入口转发方式"
-      ;;
-  esac
-}
-
-validate_cloud_forwarding_concise() {
-  local mode="${1:-$(cloud_forward_mode)}"
-  load_current_forward_target
-  case "$mode" in
-    nftables)
-      if command -v nft >/dev/null 2>&1 && nft list table ip leikwan_nat >/dev/null 2>&1; then
-        validate_report ok "转发方式：nftables，${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET}"
-      else
-        validate_report warn "转发方式：nftables，但未检测到 leikwan_nat"
-      fi
-      validate_ip_forward_enabled
-      ;;
-    iptables)
-      if iptables_forward_rules_present; then
-        validate_report ok "转发方式：iptables，${CLIENT_ENTRY_PORT_DEFAULT} -> ${FORWARD_TARGET}"
-      else
-        validate_report warn "转发方式：iptables，但规则不完整"
-      fi
-      validate_ip_forward_enabled
-      ;;
-    realm)
-      if systemctl is-active --quiet "${REALM_ENTRY_STEM}.service"; then
-        validate_report ok "转发方式：realm，${CLIENT_ENTRY_PORT_DEFAULT}"
-      else
-        validate_report warn "转发方式：realm，但服务未运行"
-      fi
-      ;;
-    none)
-      validate_report info "转发方式：未配置"
-      ;;
-    *)
-      validate_report warn "转发方式：未知"
-      ;;
-  esac
-}
-
-validate_ping() {
-  local target="$1"
-  local name="$2"
-  if ping -c 1 -W 2 "$target" >/dev/null 2>&1; then
-    validate_report ok "链路 ping 成功：${name} ${target}"
-  else
-    validate_report warn "链路 ping 失败：${name} ${target}"
-  fi
-}
-
-parse_landing_from_xray_config() {
-  local field="$1"
-  [[ -f "$XRAY_CONFIG" ]] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
-  case "$field" in
-    address)
-      xray_relay_outbound_field address
-      ;;
-    port)
-      xray_relay_outbound_field port
-      ;;
-    id|uuid)
-      xray_relay_outbound_field id
-      ;;
-    publicKey)
-      xray_relay_outbound_field publicKey
-      ;;
-    shortId)
-      xray_relay_outbound_field shortId
-      ;;
-    serverName)
-      xray_relay_outbound_field serverName
-      ;;
-    flow)
-      xray_relay_outbound_field flow
-      ;;
-  esac
-}
-
-detect_current_role() {
-  local roles=()
-  if ip -4 addr show wg0 2>/dev/null | grep -q "${LEIKWAN_WG_IP}/"; then
-    roles+=("leikwan-relay")
-  elif [[ -f "$LEIKWAN_WG_CONF" ]] && grep -q "$LEIKWAN_WG_IP" "$LEIKWAN_WG_CONF"; then
-    roles+=("leikwan-relay")
-  fi
-  if ip -4 addr show wg1 2>/dev/null | grep -q "${CLOUD_WG_IP}/"; then
-    roles+=("cloud-entry")
-  elif [[ -f "$CLOUD_WG_CONF" ]] && grep -q "$CLOUD_WG_IP" "$CLOUD_WG_CONF"; then
-    roles+=("cloud-entry")
-  fi
-  if [[ -f "$XRAY_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
-    if jq -e --argjson port "$LANDING_PORT_DEFAULT" '.inbounds[]? | select(.listen=="0.0.0.0" and .port==$port and .streamSettings.security=="reality")' "$XRAY_CONFIG" >/dev/null 2>&1; then
-      roles+=("landing-server")
-    fi
-  elif [[ -f "${XRAY_MARKER_DIR}/role" ]] && grep -q '^landing' "${XRAY_MARKER_DIR}/role"; then
-    roles+=("landing-server")
-  fi
-  if (( ${#roles[@]} == 0 )); then
-    printf '%s' "unknown"
-  elif (( ${#roles[@]} == 1 )); then
-    printf '%s' "${roles[0]}"
-  else
-    printf '%s' "multiple:${roles[*]}"
-  fi
-}
-
-role_has() {
-  local role="$1"
-  local needle="$2"
-  [[ "$role" == "$needle" || "$role" == multiple:*"$needle"* ]]
-}
-
-read_landing_param() {
-  local key="$1"
-  local field="$2"
-  local value active_profile
-  value="$(xray_actual_landing_value "$key" 2>/dev/null || true)"
-  if [[ -z "$value" ]]; then
-    value="$(parse_landing_from_xray_config "$field" 2>/dev/null || true)"
-  fi
-  active_profile="$(active_landing_file 2>/dev/null || true)"
-  if [[ -z "$value" ]]; then
-    value="$(saved_param "$key" "$active_profile" "$RELAY_OUTPUT_FILE" "$LANDING_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-  fi
-  printf '%s' "$value"
-}
-
-validate_all() {
-  init_log
-  local role pretty_name landing_address landing_port client_link unmanaged_rules route_output expected_group expected_gw actual_group
-  role="$(detect_current_role)"
-  echo "${BOLD}${PROJECT_TITLE} Doctor 诊断报告${RESET}"
-  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-    warn "建议使用 root 运行 --doctor / --validate，否则 wg show、ss 进程名等信息可能不完整。"
-  fi
-
-  echo
-  echo "${BOLD}1. 系统信息${RESET}"
-  pretty_name="$(awk -F= '$1=="PRETTY_NAME" {gsub(/"/, "", $2); print $2; exit}' /etc/os-release 2>/dev/null || true)"
-  validate_report ok "工具版本：${TOOL_VERSION}"
-  validate_report ok "当前角色：${role}"
-  validate_report ok "系统：${pretty_name:-unknown}"
-  validate_report ok "内核：$(uname -srmo 2>/dev/null || uname -a)"
-  validate_report ok "架构：$(uname -m)"
-  validate_report ok "时间：$(date '+%F %T %z')"
-  notice_outputs_missing "$role"
-  if [[ -w "$LOG_FILE" || ! -e "$LOG_FILE" ]]; then
-    validate_report ok "脚本日志路径：${LOG_FILE}"
-  else
-    validate_report warn "脚本日志不可写：${LOG_FILE}"
-  fi
-
-  echo
-  echo "${BOLD}1.1 BBR / 系统优化${RESET}"
-  local bbr_cc bbr_qdisc
-  bbr_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
-  bbr_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
-  if [[ "$bbr_cc" == "bbr" && "$bbr_qdisc" == "fq" ]]; then
-    validate_report ok "BBR + fq 已启用"
-  else
-    validate_report info "BBR 状态：tcp_congestion_control=${bbr_cc:-unknown}, default_qdisc=${bbr_qdisc:-unknown}"
-  fi
-  if [[ -f "$BBR_SYSCTL_CONF" ]]; then
-    validate_report ok "本项目 BBR 配置存在：${BBR_SYSCTL_CONF}"
-  else
-    validate_report info "本项目未写入 BBR 配置"
-  fi
-
-  echo
-  echo "${BOLD}2. 基础命令${RESET}"
-  validate_command_exists ip || true
-  validate_command_exists ss || true
-  validate_command_exists getent || true
-  if role_has "$role" "cloud-entry" || role_has "$role" "leikwan-relay"; then
-    validate_command_exists wg || true
-  else
-    command -v wg >/dev/null 2>&1 && validate_report info "已安装 wg，但当前角色不强制检查 WireGuard"
-  fi
-  if role_has "$role" "leikwan-relay" || role_has "$role" "landing-server"; then
-    validate_xray_exists || true
-  else
-    validate_report info "当前角色不要求 xray-leikwan"
-  fi
-  if role_has "$role" "cloud-entry"; then
-    case "$(cloud_forward_mode)" in
-      nftables) validate_command_exists nft || true ;;
-      iptables) validate_command_exists iptables || true ;;
-      realm) validate_command_exists realm || true ;;
-      *) validate_report info "当前公网入口转发方式未知，跳过转发命令强制检查" ;;
-    esac
-  else
-    validate_report info "当前角色不要求公网入口转发命令"
-  fi
-
-  echo
-  echo "${BOLD}3. WireGuard 状态${RESET}"
-  if role_has "$role" "cloud-entry"; then
-    if ip addr show wg1 >/dev/null 2>&1; then
-      validate_report ok "检测到 wg1（公网入口机）"
-    else
-      validate_report warn "未检测到 wg1"
-    fi
-    validate_port_listen "$CLOUD_WG_PORT_DEFAULT" "wg1 ${CLOUD_WG_PORT_DEFAULT}/udp"
-  elif role_has "$role" "leikwan-relay"; then
-    if ip addr show wg0 >/dev/null 2>&1; then
-      validate_report ok "检测到 wg0（利群中转机）"
-    else
-      validate_report warn "未检测到 wg0"
-    fi
-  else
-    validate_report info "未按当前角色强制检查 wg0/wg1"
-  fi
-  command -v wg >/dev/null 2>&1 && wg show || true
-
-  echo
-  echo "${BOLD}4. 角色组件状态${RESET}"
-  if role_has "$role" "cloud-entry"; then
-    validate_cloud_forwarding "$(cloud_forward_mode)"
-    local cloud_endpoint cloud_endpoint_type
-    cloud_endpoint="$(saved_param CLOUD_ENDPOINT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-    cloud_endpoint_type="$(saved_param CLOUD_ENDPOINT_TYPE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-    if [[ "$cloud_endpoint_type" == "ddns" && -n "$cloud_endpoint" ]]; then
-      if getent ahosts "$cloud_endpoint" >/dev/null 2>&1; then
-        validate_report ok "DDNS 入口解析成功：${cloud_endpoint}"
-      else
-        validate_report warn "DDNS 入口解析失败：${cloud_endpoint}"
-      fi
-      validate_report warn "家宽 DDNS 入口上行可能成为瓶颈，请结合 UDP / WireGuard 质量检测判断。"
-    fi
-  else
-    validate_report info "公网入口转发组件属于公网入口机，当前角色缺失不报 WARN"
-  fi
-  if role_has "$role" "leikwan-relay"; then
-    local active_name landing_count
-    active_name="$(active_landing_name 2>/dev/null || true)"
-    landing_count="$(landing_files | wc -l | awk '{print $1}')"
-    if [[ -n "$active_name" ]]; then
-      validate_report ok "当前激活落地：${active_name}（配置数量：${landing_count}）"
-    elif (( landing_count > 0 )); then
-      validate_report warn "存在 ${landing_count} 个落地机 profile，但未设置 active landing"
-    else
-      validate_report info "未配置多落地机 profile"
-    fi
-    landing_report_active_consistency "verbose"
-  elif role_has "$role" "landing-server"; then
-    validate_report info "active landing 是利群中转机概念；落地机本机仅输出 LANDING 参数。"
-  fi
-  if role_has "$role" "leikwan-relay" || role_has "$role" "landing-server"; then
-    validate_service "$XRAY_LEIKWAN_SERVICE_NAME" || true
-    if [[ -f "$XRAY_CONFIG" ]]; then
-      validate_report ok "Xray leikwan 配置存在：${XRAY_CONFIG}"
-    else
-      validate_report warn "Xray leikwan 配置不存在：${XRAY_CONFIG}"
-    fi
-    if role_has "$role" "leikwan-relay"; then
-      validate_port_listen "$CLIENT_ENTRY_PORT_DEFAULT" "利群 Xray inbound ${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}"
-    fi
-    if role_has "$role" "landing-server"; then
-      validate_port_listen "$LANDING_PORT_DEFAULT" "海外落地 Reality ${LANDING_PORT_DEFAULT}/tcp"
-    fi
-  else
-    validate_report info "xray-leikwan 属于利群中转机/海外落地机，当前角色缺失不报 WARN"
-  fi
-
-  echo
-  echo "${BOLD}5. DNS / IPv4 优先状态${RESET}"
-  if getent ahosts raw.githubusercontent.com >/tmp/leikwan-dns-validate.$$ 2>&1; then
-    validate_report ok "raw.githubusercontent.com 解析成功"
-  else
-    validate_report warn "raw.githubusercontent.com 解析失败"
-  fi
-  rm -f /tmp/leikwan-dns-validate.$$
-  if [[ -f /etc/gai.conf ]] && grep -Eq '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' /etc/gai.conf; then
-    validate_report ok "IPv4 优先规则已存在：/etc/gai.conf"
-  else
-    validate_report warn "未检测到 IPv4 优先规则：precedence ::ffff:0:0/96  100"
-  fi
-
-  echo
-  echo "${BOLD}6. IPv6 V6_LOCKDOWN 状态${RESET}"
-  if command -v ip6tables >/dev/null 2>&1 && ip6tables -S V6_LOCKDOWN >/dev/null 2>&1; then
-    validate_report ok "检测到 V6_LOCKDOWN 链"
-    if ip6tables -C INPUT -j V6_LOCKDOWN >/dev/null 2>&1; then
-      validate_report ok "INPUT 已接入 V6_LOCKDOWN"
-    else
-      validate_report warn "INPUT 未接入 V6_LOCKDOWN"
-    fi
-    if [[ -f /etc/iptables/rules.v6 ]]; then
-      validate_report ok "IPv6 规则已持久化：/etc/iptables/rules.v6"
-    else
-      validate_report warn "未找到 /etc/iptables/rules.v6"
-    fi
-  else
-    validate_report info "未检测到 V6_LOCKDOWN 链；如果未启用 IPv6 入站收口，可忽略"
-  fi
-
-  echo
-  echo "${BOLD}7. IPv4 PBR / 多出口策略路由${RESET}"
-  if role_has "$role" "leikwan-relay" || [[ -s "$PBR_STATIC_CONF" || -s "$PBR_DOMAIN_CONF" ]]; then
-    if [[ -f "$PBR_STATIC_CONF" ]]; then
-      validate_report ok "静态规则配置存在：${PBR_STATIC_CONF}"
-    else
-      validate_report info "静态规则配置暂不存在"
-    fi
-    if [[ -f "$PBR_DOMAIN_CONF" ]]; then
-      validate_report ok "域名规则配置存在：${PBR_DOMAIN_CONF}"
-    else
-      validate_report info "域名规则配置暂不存在"
-    fi
-    if [[ -f "$PBR_DOMAIN_STATE" ]]; then
-      validate_report ok "域名状态文件存在：${PBR_DOMAIN_STATE}"
-    else
-      validate_report info "域名状态文件暂不存在"
-    fi
-    pbr_detect_available_routes "quiet" "no" || true
-    if (( ${#PBR_FOUND_NAMES[@]} > 0 )); then
-      validate_report ok "检测到可用线路组：${PBR_FOUND_NAMES[*]}"
-    else
-      validate_report warn "未检测到利群常见 IPv4 线路组"
-    fi
-    unmanaged_rules="$(pbr_list_unmanaged_rules | sed '/^$/d' || true)"
-    if [[ -n "$unmanaged_rules" ]]; then
-      validate_report warn "检测到未托管 PBR 规则"
-      printf '%s\n' "$unmanaged_rules"
-    else
-      validate_report ok "未检测到未托管的 priority ${PBR_STATIC_PRIORITY}/${PBR_DOMAIN_PRIORITY} 规则"
-    fi
-    if systemctl list-unit-files --type=service --no-legend "${PBR_SERVICE_NAME}.service" 2>/dev/null | grep -q "^${PBR_SERVICE_NAME}.service"; then
-      validate_oneshot_service_status "$PBR_SERVICE_NAME" || true
-    else
-      validate_report warn "PBR 开机恢复服务未安装，当前规则已生效但重启后可能丢失。"
-      validate_report warn "修复：高级功能 -> IPv4 多出口策略路由 -> 安装 / 重启 PBR 开机恢复服务"
-    fi
-    if [[ -s "$PBR_DOMAIN_CONF" ]]; then
-      validate_oneshot_service_status "$PBR_DDNS_SERVICE_NAME" || true
-      validate_timer_status "$PBR_DDNS_SERVICE_NAME" || true
-    else
-      validate_report info "未启用域名 PBR，跳过 ${PBR_DDNS_SERVICE_NAME}.timer 检查"
-    fi
-    landing_address="$(read_landing_param LANDING_ADDRESS address)"
-    if is_ipv4 "$landing_address"; then
-      if route_output="$(ip route get "$landing_address" 2>&1)"; then
-        printf '%s\n' "$route_output"
-        actual_group="$(pbr_group_from_route_output "$route_output" 2>/dev/null || true)"
-        if [[ -n "$actual_group" ]]; then
-          validate_report ok "LANDING_ADDRESS 当前走 T_${actual_group}"
-        else
-          validate_report info "未能从 ip route get 输出识别 T_ 出口"
-        fi
-        expected_group="$(pbr_static_managed_group "${landing_address}/32" 2>/dev/null || true)"
-        if [[ -n "$expected_group" ]]; then
-          expected_gw="$(pbr_group_gateway "$expected_group" 2>/dev/null || true)"
-          if [[ -n "$expected_gw" && "$route_output" == *" via ${expected_gw} "* ]]; then
-            validate_report ok "LANDING_ADDRESS 与 static-routes.conf 一致：T_${expected_group}"
-          else
-            validate_report fail "LANDING_ADDRESS 实际出口与 static-routes.conf 不一致，期望 T_${expected_group}"
-          fi
-        fi
-      else
-        validate_report warn "ip route get ${landing_address} 执行失败：${route_output}"
-      fi
-    else
-      validate_report info "未读取到 LANDING_ADDRESS，跳过落地机 PBR 出口检查"
-    fi
-  else
-    validate_report info "PBR 只建议在利群中转机启用，当前角色跳过"
-  fi
-
-  echo
-  echo "${BOLD}8. 链路连通性${RESET}"
-  if role_has "$role" "cloud-entry"; then
-    validate_ping "$LEIKWAN_WG_IP" "公网入口机 -> 利群中转机"
-    if command -v nc >/dev/null 2>&1 && nc -vz -w 3 "$LEIKWAN_WG_IP" "$CLIENT_ENTRY_PORT_DEFAULT" >/tmp/leikwan-nc-validate.$$ 2>&1; then
-      validate_report ok "公网入口机到利群入口 TCP 可达：${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}"
-    else
-      validate_report warn "公网入口机到利群入口 TCP 不可达或未安装 nc"
-    fi
-    rm -f /tmp/leikwan-nc-validate.$$
-  elif role_has "$role" "leikwan-relay"; then
-    validate_ping "$CLOUD_WG_IP" "利群中转机 -> 公网入口机"
-    landing_address="$(read_landing_param LANDING_ADDRESS address)"
-    landing_port="$(read_landing_param LANDING_PORT port)"
-    if [[ -n "$landing_address" && -n "$landing_port" ]]; then
-      ip route get "$landing_address" || validate_report warn "ip route get ${landing_address} 执行失败"
-      if command -v nc >/dev/null 2>&1 && nc -vz -w 3 "$landing_address" "$landing_port" >/tmp/leikwan-nc-validate.$$ 2>&1; then
-        validate_report ok "利群中转机到落地机 TCP 可达：${landing_address}:${landing_port}"
-      else
-        validate_report warn "利群中转机到落地机 TCP 不可达或未安装 nc：${landing_address}:${landing_port}"
-      fi
-      rm -f /tmp/leikwan-nc-validate.$$
-    else
-      validate_report warn "未能解析 LANDING_ADDRESS/LANDING_PORT"
-    fi
-    client_link="$(env_file_get "$CLIENT_LINK_FILE" CLIENT_LINK 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" CLIENT_LINK 2>/dev/null || true)"
-    if [[ -n "$client_link" ]]; then
-      validate_report ok "CLIENT_LINK 已生成：${CLIENT_LINK_FILE}"
-    else
-      validate_report warn "CLIENT_LINK 不存在，可运行：bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption 'mlkem...'"
-    fi
-  elif role_has "$role" "landing-server"; then
-    validate_report info "落地机链路入口由外部客户端/利群访问，当前只检查 Xray 服务与端口"
-  else
-    validate_report info "未知角色，跳过角色链路检查"
-  fi
-
-  echo
-  echo "${BOLD}9. Xray 配置测试${RESET}"
-  if role_has "$role" "leikwan-relay" || role_has "$role" "landing-server"; then
-    if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
-      if "$XRAY_BIN" run -test -config "$XRAY_CONFIG" >/tmp/leikwan-xray-test.$$ 2>&1; then
-        validate_report ok "Xray leikwan 配置测试通过"
-      else
-        validate_report fail "Xray leikwan 配置测试失败：$(tr '\n' ' ' </tmp/leikwan-xray-test.$$)"
-        show_xray_config_context "$XRAY_CONFIG"
-      fi
-      rm -f /tmp/leikwan-xray-test.$$
-    else
-      validate_report warn "跳过 Xray 配置测试，缺少 ${XRAY_BIN} 或 ${XRAY_CONFIG}"
-    fi
-  else
-    validate_report info "当前角色不需要 Xray 配置测试"
-  fi
-
-  echo
-  echo "${BOLD}10. GitHub/raw/ghfast 可达性${RESET}"
-  validate_url_reachable "github.com" "https://github.com/"
-  validate_url_reachable "raw.githubusercontent.com" "https://raw.githubusercontent.com/github/gitignore/main/README.md"
-  validate_url_reachable "ghfast" "https://ghfast.top/"
-}
-
-validate_doctor_concise() {
-  init_log
-  local role wg_iface handshake_ts handshake_age landing_address pbr_group client_link github_ok=0 raw_ok=0 ghfast_ok=0
-  local bbr_cc="" bbr_qdisc="" active_name="" landing_count="" cloud_endpoint="" cloud_endpoint_type=""
-  role="$(detect_current_role)"
-  validate_report ok "角色：${role}"
-  notice_outputs_missing "$role"
-
-  bbr_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
-  bbr_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
-  if [[ "$bbr_cc" == "bbr" && "$bbr_qdisc" == "fq" ]]; then
-    validate_report ok "BBR：bbr + fq"
-  else
-    validate_report info "BBR：tcp_congestion_control=${bbr_cc:-unknown}, default_qdisc=${bbr_qdisc:-unknown}"
-  fi
-
-  if role_has "$role" "cloud-entry"; then
-    wg_iface="wg1"
-  elif role_has "$role" "leikwan-relay"; then
-    wg_iface="wg0"
-  else
-    wg_iface=""
-  fi
-
-  if [[ -n "$wg_iface" ]] && command -v wg >/dev/null 2>&1; then
-    handshake_ts="$(wg show "$wg_iface" latest-handshakes 2>/dev/null | awk '$2 > 0 {print $2; exit}' || true)"
-    if [[ -n "$handshake_ts" ]]; then
-      handshake_age=$(( $(date +%s) - handshake_ts ))
-      validate_report ok "WG：handshake ${handshake_age} 秒前"
-    else
-      validate_report warn "WG：未检测到 handshake"
-    fi
-  elif [[ -n "$wg_iface" ]]; then
-    validate_report warn "WG：未安装 wg 或接口不可读"
-  else
-    validate_report info "WG：当前角色不需要"
-  fi
-
-  if role_has "$role" "cloud-entry"; then
-    validate_cloud_forwarding_concise "$(cloud_forward_mode)"
-    cloud_endpoint="$(saved_param CLOUD_ENDPOINT "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-    cloud_endpoint_type="$(saved_param CLOUD_ENDPOINT_TYPE "$CLOUD_OUTPUT_FILE" "$OUTPUT_FILE" 2>/dev/null || true)"
-    if [[ "$cloud_endpoint_type" == "ddns" && -n "$cloud_endpoint" ]]; then
-      if getent ahosts "$cloud_endpoint" >/dev/null 2>&1; then
-        validate_report ok "DDNS：${cloud_endpoint} 可解析"
-      else
-        validate_report warn "DDNS：${cloud_endpoint} 解析失败"
-      fi
-      validate_report warn "家宽入口：上行可能成为瓶颈"
-    fi
-  elif role_has "$role" "leikwan-relay"; then
-    if systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service"; then
-      validate_report ok "Xray：${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}"
-    else
-      validate_report warn "Xray：未运行"
-    fi
-    active_name="$(active_landing_name 2>/dev/null || true)"
-    landing_count="$(landing_files | wc -l | awk '{print $1}')"
-    if [[ -n "$active_name" ]]; then
-      validate_report ok "当前落地：${active_name}（共 ${landing_count:-0} 个 profile）"
-    elif (( ${landing_count:-0} > 0 )); then
-      validate_report warn "落地机 profile 存在但未选择 active"
-    else
-      validate_report info "落地机 profile：未配置多落地"
-    fi
-    landing_report_active_consistency "concise"
-  elif role_has "$role" "landing-server"; then
-    if systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service"; then
-      validate_report ok "Xray：0.0.0.0:${LANDING_PORT_DEFAULT}"
-    else
-      validate_report warn "Xray：未运行"
-    fi
-  fi
-
-  if role_has "$role" "leikwan-relay"; then
-    landing_address="$(read_landing_param LANDING_ADDRESS address)"
-    if is_ipv4 "$landing_address"; then
-      pbr_group="$(pbr_static_managed_group "${landing_address}/32" 2>/dev/null || true)"
-      if [[ -n "$pbr_group" ]]; then
-        validate_report ok "PBR：${landing_address} -> T_${pbr_group}"
-        if ! systemctl list-unit-files --type=service --no-legend "${PBR_SERVICE_NAME}.service" 2>/dev/null | grep -q "^${PBR_SERVICE_NAME}.service"; then
-          validate_report warn "PBR 开机恢复服务未安装，当前规则已生效但重启后可能丢失。修复：高级功能 -> IPv4 多出口策略路由 -> 安装 / 重启 PBR 开机恢复服务"
-        fi
-      else
-        validate_report info "PBR：LANDING_ADDRESS 未指定出口"
-      fi
-    else
-      validate_report info "PBR：未读取到 LANDING_ADDRESS"
-    fi
-    client_link="$(env_file_get "$CLIENT_LINK_FILE" CLIENT_LINK 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" CLIENT_LINK 2>/dev/null || true)"
-    if [[ -n "$client_link" ]]; then
-      validate_report ok "客户端链接：存在"
-    elif [[ -f "$XRAY_CONFIG" ]]; then
-      validate_report warn "客户端链接：不存在，可运行 --rebuild-outputs 修复"
-    else
-      validate_report info "客户端链接：未生成"
-    fi
-  fi
-
-  command -v curl >/dev/null 2>&1 && curl -4 -fsSI --connect-timeout 5 --max-time 8 https://github.com/ >/dev/null 2>&1 && github_ok=1
-  command -v curl >/dev/null 2>&1 && curl -4 -fsSI --connect-timeout 5 --max-time 8 https://raw.githubusercontent.com/github/gitignore/main/README.md >/dev/null 2>&1 && raw_ok=1
-  command -v curl >/dev/null 2>&1 && curl -4 -fsSI --connect-timeout 5 --max-time 8 https://ghfast.top/ >/dev/null 2>&1 && ghfast_ok=1
-  if (( github_ok == 1 )); then
-    validate_report ok "GitHub：github.com 可达"
-  elif (( raw_ok == 1 || ghfast_ok == 1 )); then
-    validate_report warn "GitHub：github.com 不可达，raw/ghfast 可达"
-  else
-    validate_report warn "GitHub：github/raw/ghfast 均不可达或 curl 不存在"
-  fi
-  echo "详细报告：bash wg-toolkit.sh --doctor --verbose"
-}
-
-recommended_wizard_menu() {
+entries_menu() {
+  local choice
   while true; do
-    local role
-    role="$(detect_current_role)"
-    echo
-    print_banner
-    echo
-    echo "${BOLD}极速部署向导${RESET}"
-    echo "当前角色：${role}"
-    local choice
-    if role_has "$role" "landing-server"; then
-      echo "1. 部署 / 更新 Reality 落地"
-      echo "2. 查看 LANDING 参数"
-      echo "3. doctor"
-      echo "0. 返回"
-      choice="$(prompt_menu_choice "请选择：")"
-      case "$choice" in
-        1) deploy_landing_server || true ;;
-        2) show_copy_params || true ;;
-        3) validate_doctor_concise || true ;;
-        0) return 0 ;;
-        "") echo "请输入选项编号。" ;;
-        *) echo "无效选择。" ;;
-      esac
-    elif role_has "$role" "cloud-entry"; then
-      echo "1. 导入 / 输入 LEIKWAN_PUBLIC_KEY"
-      echo "2. 部署 / 更新 WireGuard + 转发"
-      echo "3. 查看 CLOUD 参数"
-      echo "4. doctor"
-      echo "0. 返回"
-      choice="$(prompt_menu_choice "请选择：")"
-      case "$choice" in
-        1) cloud_import_leikwan_public_key || true ;;
-        2) deploy_cloud_entry || true ;;
-        3) show_copy_params || true ;;
-        4) validate_doctor_concise || true ;;
-        0) return 0 ;;
-        "") echo "请输入选项编号。" ;;
-        *) echo "无效选择。" ;;
-      esac
-    elif role_has "$role" "leikwan-relay"; then
-      echo "1. 查看 / 生成 LEIKWAN_PUBLIC_KEY"
-      echo "2. 导入 CLOUD 参数"
-      echo "3. 导入 LANDING 参数"
-      echo "4. 完成链式代理部署"
-      echo "5. 指定 Reality 落地机出口"
-      echo "6. 查看客户端链接"
-      echo "7. doctor"
-      echo "0. 返回"
-      choice="$(prompt_menu_choice "请选择：")"
-      case "$choice" in
-        1) show_wg_identity_for_iface "wg0" || true ;;
-        2) import_params_file || true ;;
-        3) import_params_file || true ;;
-        4) deploy_leikwan_relay || true ;;
-        5) pbr_route_landing || true ;;
-        6) view_client_link || true ;;
-        7) validate_doctor_concise || true ;;
-        0) return 0 ;;
-        "") echo "请输入选项编号。" ;;
-        *) echo "无效选择。" ;;
-      esac
-    else
-      echo "1. 我这是海外落地机"
-      echo "2. 我这是公网入口机"
-      echo "3. 我这是利群中转机"
-      echo "0. 返回"
-      choice="$(prompt_menu_choice "请选择：")"
-      case "$choice" in
-        1) deploy_landing_server || true ;;
-        2) cloud_import_leikwan_public_key || true; deploy_cloud_entry || true ;;
-        3) show_wg_identity_for_iface "wg0" || true ;;
-        0) return 0 ;;
-        "") echo "请输入选项编号。" ;;
-        *) echo "无效选择。" ;;
-      esac
-    fi
+    echo; echo "${BOLD}公网入口机管理${RESET}"
+    echo "1. 添加公网入口机"; echo "2. 删除公网入口机"; echo "3. 启用 / 禁用入口机"; echo "4. 修改权重"; echo "5. 查看所有入口机"; echo "6. 测试入口机"; echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) add_entry ;;
+      2) delete_entry ;;
+      3) set_entry_enabled ;;
+      4) set_entry_weight ;;
+      5) list_entries ;;
+      6) test_entries ;;
+      0) return 0 ;;
+    esac
   done
 }
 
-deployment_overview() {
-  init_log
-  local role wg_pub="" link="" landing_address landing_port pbr_group peer_line active_name landing_count
-  role="$(detect_current_role)"
-  echo
-  echo "${BOLD}部署总览 / 下一步提示${RESET}"
-  echo "当前角色：${role}"
+forwards_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}转发目标管理${RESET}"
+    echo "1. B relay：添加落地转发"
+    echo "2. B relay：修改落地转发"
+    echo "3. B relay：删除落地转发"
+    echo "4. 查看当前转发"
+    echo "5. 启用 / 禁用转发目标"
+    echo "6. 重新应用 relay nftables"
+    echo "7. 解析 target_host"
+    echo "8. 测试单个转发目标"
+    echo "9. 导入 forwards.tsv（高级）"
+    echo "10. 导出 forwards.tsv"
+    echo "11. 生成转发入口输出"
+    echo "12. A entry：导入 FORWARD 码（legacy 兼容，不推荐）"
+    echo "13. A entry：配置入口端口池"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) add_forward ;;
+      2) edit_forward ;;
+      3) delete_forward ;;
+      4) list_forwards ;;
+      5) set_forward_enabled ;;
+      6) apply_nft_rules "leikwan-relay" ;;
+      7) resolve_forwards ;;
+      8) test_forward ;;
+      9) import_forwards_tsv ;;
+      10) export_forwards_tsv ;;
+      11) generate_forward_outputs ;;
+      12) import_forward_code ;;
+      13) entry_expose_range ;;
+      0) return 0 ;;
+    esac
+  done
+}
 
-  if role_has "$role" "leikwan-relay"; then
-    wg_pub="$(read_key_file "$LEIKWAN_WG_PUBLIC_FILE" 2>/dev/null || true)"
-    echo "WG：wg0 ${LEIKWAN_WG_ADDR}"
-    [[ -n "$wg_pub" ]] && echo "本机 WG PublicKey：${wg_pub}"
-    peer_line="$(wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}' | head -n 1 || true)"
-    [[ -n "$peer_line" && "$peer_line" != "0" ]] && echo "Handshake：$(( $(date +%s) - peer_line )) 秒前" || echo "Handshake：未检测到"
-    systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service" && echo "Xray：active" || echo "Xray：inactive/unknown"
-    echo "Inbound：${LEIKWAN_WG_IP}:${CLIENT_ENTRY_PORT_DEFAULT}"
-    active_name="$(active_landing_name 2>/dev/null || true)"
-    landing_count="$(landing_files | wc -l | awk '{print $1}')"
-    if [[ -n "$active_name" ]]; then
-      echo "当前落地：${active_name}（共 ${landing_count:-0} 个 profile）"
-    fi
-    landing_report_active_consistency "concise"
-    landing_address="$(read_landing_param LANDING_ADDRESS address)"
-    landing_port="$(read_landing_param LANDING_PORT port)"
-    [[ -n "$landing_address" && -n "$landing_port" ]] && echo "Reality：${landing_address}:${landing_port}"
-    if is_ipv4 "$landing_address"; then
-      pbr_group="$(pbr_static_managed_group "${landing_address}/32" 2>/dev/null || true)"
-      [[ -n "$pbr_group" ]] && echo "PBR：${landing_address} -> T_${pbr_group}"
-    fi
-    link="$(env_file_get "$CLIENT_LINK_FILE" CLIENT_LINK 2>/dev/null || env_file_get "$RELAY_OUTPUT_FILE" CLIENT_LINK 2>/dev/null || true)"
-    [[ -n "$link" ]] && echo "CLIENT_LINK：${link}" || echo "下一步：完成利群中转机链式部署以生成 CLIENT_LINK"
-    echo
-    echo "验收命令：wg show; ss -lntup | grep ${CLIENT_ENTRY_PORT_DEFAULT}; bash wg-toolkit.sh --doctor"
-  elif role_has "$role" "cloud-entry"; then
-    wg_pub="$(read_key_file "$CLOUD_WG_PUBLIC_FILE" 2>/dev/null || true)"
-    local forward_mode
-    forward_mode="$(cloud_forward_mode)"
-    load_current_forward_target
-    echo "WG：wg1 ${CLOUD_WG_ADDR}"
-    [[ -n "$wg_pub" ]] && echo "本机 WG PublicKey：${wg_pub}"
-    echo "转发方式：${forward_mode}"
-    if [[ "$forward_mode" == "realm" ]]; then
-      echo "可选优化：nftables 内核转发 / iptables 内核转发"
-    fi
-    echo "入口端口：${CLIENT_ENTRY_PORT_DEFAULT}"
-    echo "转发目标：${FORWARD_TARGET_MODE} -> ${FORWARD_TARGET_ADDRESS}:${FORWARD_TARGET_PORT}"
-    if [[ "$FORWARD_TARGET_ADDRESS" != "$FORWARD_TARGET_RESOLVED_IP" && -n "$FORWARD_TARGET_RESOLVED_IP" ]]; then
-      echo "解析后目标：${FORWARD_TARGET_RESOLVED_IP}:${FORWARD_TARGET_PORT}"
-    fi
-    echo "需要复制给利群：${CLOUD_OUTPUT_FILE}"
-    echo
-    echo "验收命令：wg show; ping ${LEIKWAN_WG_IP}; nc -vz ${LEIKWAN_WG_IP} ${CLIENT_ENTRY_PORT_DEFAULT}"
-  elif role_has "$role" "landing-server"; then
-    systemctl is-active --quiet "${XRAY_LEIKWAN_SERVICE_NAME}.service" && echo "Xray：active" || echo "Xray：inactive/unknown"
-    echo "Reality：0.0.0.0:${LANDING_PORT_DEFAULT}"
-    echo "需要复制给利群：${LANDING_OUTPUT_FILE}"
-    echo
-    echo "验收命令：systemctl status ${XRAY_LEIKWAN_SERVICE_NAME}; ss -lntup | grep ${LANDING_PORT_DEFAULT}; ${XRAY_BIN} run -test -config ${XRAY_CONFIG}"
-  else
-    echo "下一步：建议从\"推荐部署向导\"开始。"
-  fi
+pbr_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}IPv4 多出口策略路由 / PBR${RESET}"
+    echo "1. 添加静态 PBR"; echo "2. 应用 PBR"; echo "3. 查看 PBR"; echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) pbr_add_static ;;
+      2) pbr_apply ;;
+      3) [[ -f "$PBR_STATIC_CONF" ]] && cat "$PBR_STATIC_CONF" || true; ip rule show | grep "$PBR_PRIORITY" || true ;;
+      0) return 0 ;;
+    esac
+  done
+}
+
+wizard_menu() {
+  echo
+  echo "${BOLD}极速部署向导默认使用 EasyTier 快速配对。${RESET}"
+  pairing_menu
+}
+
+quick_forward_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}快速转发${RESET}"
+    echo "1. A 公网入口：配置入口端口池"
+    echo "2. B 利群中转：添加落地转发"
+    echo "3. B 利群中转：修改落地转发"
+    echo "4. B 利群中转：删除落地转发"
+    echo "5. B 利群中转：查看落地转发"
+    echo "6. B 利群中转：重新应用转发规则"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) entry_expose_range ;;
+      2) add_forward ;;
+      3) edit_forward ;;
+      4) delete_forward ;;
+      5) list_forwards ;;
+      6) apply_nft_rules "leikwan-relay" ;;
+      0) return 0 ;;
+    esac
+  done
+}
+
+install_shortcuts() {
+  need_root_unless_dry_run
+  local script_path content
+  script_path="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+  content="#!/usr/bin/env bash
+# Managed by leikwan-wg-toolkit
+exec bash ${script_path@Q} \"\$@\""
+  write_file "$SHORTCUT_LQ" "$content" 755
+  write_file "$SHORTCUT_LQ_UPPER" "$content" 755
 }
 
 advanced_menu() {
+  local choice
   while true; do
-    echo
-    echo "${BOLD}高级功能${RESET}"
-    echo "1. 查看 / 生成本机 WireGuard 身份"
-    echo "2. 部署总览 / 下一步提示"
-    echo "3. 公网入口机部署"
-    echo "4. 利群中转机部署"
-    echo "5. 海外落地机部署"
-    echo "6. 导入参数文件"
-    echo "7. IPv4 多出口策略路由"
-    echo "8. 链路测试"
-    echo "9. DNS / IPv4 优先修复"
-    echo "10. IPv6 入站安全收口"
-    echo "11. 查看状态"
-    echo "12. 备份 / 恢复"
-    echo "13. 卸载"
-    echo "14. 安装 / 修复快捷命令"
-    echo "15. UDP / WireGuard 质量检测"
-    echo "16. 多公网入口机管理"
-    echo "17. 生成脱敏故障报告"
-    echo "18. BBR / 系统优化"
-    echo "19. 多落地机管理"
-    echo "20. 公网入口转发目标管理"
-    echo "0. 返回"
-    local choice
+    echo; echo "${BOLD}高级功能${RESET}"
+    echo "1. EasyTier 组网管理"; echo "2. 公网入口机管理"; echo "3. 转发目标管理"; echo "4. nftables 规则管理"; echo "5. IPv4 多出口策略路由"; echo "6. 链路测试"; echo "7. DNS / IPv4 优先修复"; echo "8. IPv6 入站安全收口"; echo "9. BBR / 系统优化"; echo "10. 查看状态"; echo "11. 备份 / 恢复"; echo "12. 生成脱敏故障报告"; echo "13. legacy 清理"; echo "14. 卸载"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) show_wg_identity_menu || true ;;
-      2) deployment_overview || true ;;
-      3) deploy_cloud_entry || true ;;
-      4) deploy_leikwan_relay || true ;;
-      5) deploy_landing_server || true ;;
-      6) import_params_file || true ;;
-      7) pbr_menu || true ;;
-      8) link_test_menu || true ;;
-      9) fix_dns_ipv4_first || true ;;
-      10) ipv6_lockdown || true ;;
-      11) show_status || true ;;
-      12) backup_restore_menu || true ;;
-      13) uninstall_menu || true ;;
-      14) install_shortcuts || true ;;
-      15) udp_wg_quality_check || true ;;
-      16) entry_menu || true ;;
-      17) generate_debug_report || true ;;
-      18) bbr_menu || true ;;
-      19) landing_menu || true ;;
-      20) forward_target_menu || true ;;
+      1) easytier_menu ;;
+      2) entries_menu ;;
+      3) forwards_menu ;;
+      4) apply_nft_rules "$(detect_role)" ;;
+      5) pbr_menu ;;
+      6) link_test_menu ;;
+      7) fix_dns_ipv4_first ;;
+      8) ipv6_lockdown ;;
+      9) bbr_menu ;;
+      10) doctor ;;
+      11) backup_restore_menu ;;
+      12) generate_debug_report ;;
+      13) legacy_cleanup_menu ;;
+      14) uninstall_new_mode ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
     esac
   done
 }
 
 main_menu() {
   need_root_unless_dry_run
-  init_log
-  local shortcuts_checked=0 resume_checked=0
+  install_shortcuts || true
+  ensure_tsv_files
+  local choice
   while true; do
-    echo
-    print_banner
-    echo
-    if (( shortcuts_checked == 0 && DRY_RUN == 0 )); then
-      install_shortcuts quiet || true
-      shortcuts_checked=1
-      echo
-    fi
-    if (( resume_checked == 0 && DRY_RUN == 0 )); then
-      maybe_show_resume_prompt || true
-      resume_checked=1
-      echo
-    fi
-    echo "1. 极速部署向导"
-    echo "2. 查看复制参数 / 客户端链接"
-    echo "3. 一键诊断 doctor"
-    echo "4. 高级功能"
-    echo "0. 退出"
+    echo; print_banner; echo
+    echo "1. 极速部署向导"; echo "2. 快速转发"; echo "3. 查看转发入口"; echo "4. 一键诊断 doctor"; echo "5. 高级功能"; echo "0. 退出"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) recommended_wizard_menu || true ;;
-      2) show_copy_params || true ;;
-      3) validate_doctor_concise || true ;;
-      4) advanced_menu || true ;;
-      0) echo "已退出。"; exit 0 ;;
+      1) wizard_menu ;;
+      2) quick_forward_menu ;;
+      3) generate_forward_outputs ;;
+      4) doctor ;;
+      5) advanced_menu ;;
+      0) exit 0 ;;
       "") echo "请输入选项编号。" ;;
-      *) echo "无效选择，请重新输入。" ;;
+      *) echo "无效选择。" ;;
     esac
   done
 }
 
 main() {
-  local role_filter
-  while [[ "${1:-}" == "--dry-run" ]]; do
-    DRY_RUN=1
-    shift
-  done
-
+  while [[ "${1:-}" == "--dry-run" ]]; do DRY_RUN=1; shift; done
   case "${1:-}" in
-    --help|-h)
-      print_help
+    pair)
+      case "${2:-}" in
+        relay-init) quick_generate_network_pairing ;;
+        entry-join) quick_deploy_entry_from_network_pairing "${3:-}" ;;
+        relay-join) quick_deploy_relay_from_entry_pairing "${3:-}" ;;
+        status) pairing_status ;;
+        *) fail "未知 pair 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
       ;;
-    --version|-v)
-      echo "${PROJECT_NAME} ${TOOL_VERSION}"
+    forward)
+      case "${2:-}" in
+        add) add_forward ;;
+        edit) edit_forward "${3:-}" ;;
+        delete) delete_forward "${3:-}" ;;
+        export) export_forward_code_by_name "${3:-}" ;;
+        import) warn "forward import 已降级为高级兼容；默认请在 A 执行 lq entry expose-range，一次性配置入口端口池。"; import_forward_code "${3:-}" ;;
+        list) list_forwards ;;
+        apply-relay) apply_nft_rules "leikwan-relay" ;;
+        *) fail "未知 forward 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
       ;;
-    --validate)
-      validate_all
+    entry)
+      case "${2:-}" in
+        expose-range) shift 2; entry_expose_range "$@" ;;
+        *) fail "未知 entry 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
       ;;
-    --doctor)
-      if [[ "${2:-}" == "--verbose" ]]; then
-        validate_all
-      else
-        validate_doctor_concise
-      fi
-      ;;
-    --show-wg-identity)
-      role_filter="auto"
-      if [[ "${2:-}" == "--role" ]]; then
-        role_filter="${3:-auto}"
-      fi
-      show_wg_identity_cli "$role_filter"
-      ;;
-    --rebuild-outputs)
-      shift
-      parse_rebuild_cli_options "$@"
-      rebuild_outputs
-      ;;
-    --pbr-apply)
-      need_root
-      init_log
-      pbr_apply_saved_rules
-      ;;
-    --pbr-refresh-domains)
-      need_root
-      init_log
-      pbr_refresh_domains
-      ;;
-    --pbr-show)
-      pbr_show
-      ;;
-    --pbr-audit)
-      pbr_audit_existing_rules
-      ;;
-    --pbr-import-existing)
-      init_log
-      pbr_import_existing_rules
-      ;;
-    --refresh-forward-target)
-      need_root_unless_dry_run
-      init_log
-      refresh_forward_target
-      ;;
-    --uninstall)
-      need_root
-      init_log
-      uninstall_menu
-      ;;
-    "")
-      main_menu
-      ;;
-    *)
-      fail "未知参数：$1"
-      print_help
-      exit 1
-      ;;
+    --help|-h) print_help ;;
+    --version|-v) echo "${PROJECT_NAME} ${TOOL_VERSION}" ;;
+    --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
+    --pbr-apply) pbr_apply ;;
+    --uninstall) uninstall_new_mode ;;
+    "") main_menu ;;
+    *) fail "未知参数：$1"; print_help; exit 1 ;;
   esac
 }
 

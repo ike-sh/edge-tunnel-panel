@@ -5,6 +5,11 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 TARGETS=(README.md docs)
+TOOL_VERSION="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' wg-toolkit.sh 2>/dev/null || true)"
+if [[ -n "$TOOL_VERSION" && -d "dist/leikwan-wg-toolkit-${TOOL_VERSION}" ]]; then
+  TARGETS+=("dist/leikwan-wg-toolkit-${TOOL_VERSION}/README.md" "dist/leikwan-wg-toolkit-${TOOL_VERSION}/docs")
+fi
+
 FAILED=0
 
 deny_patterns=(
@@ -16,9 +21,11 @@ deny_patterns=(
   'T4Nwx0To'
   'b6f1ca1c'
   'a58f5425'
-  'mlkem768x25519plus\.native'
-  'vless://b6f1ca1c'
-  'vless://[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+  '(vless|vmess|trojan|ss|hysteria)://'
+  'PrivateKey[[:space:]]*=[[:space:]]*[A-Za-z0-9+/]{40,}={0,2}'
+  'EASYTIER_NETWORK_SECRET=[A-Za-z0-9][A-Za-z0-9._-]{8,}'
+  'REALITY_PRIVATE_KEY[[:space:]]*='
+  'X25519.*private[[:space:]_-]*key'
 )
 
 for pattern in "${deny_patterns[@]}"; do
@@ -28,37 +35,11 @@ for pattern in "${deny_patterns[@]}"; do
   fi
 done
 
-if grep -RIn -- 'leikwan-debug-report' "${TARGETS[@]}" >/dev/null; then
-  required_debug_placeholders=(
-    '<PUBLIC_IP>'
-    '<WG_PUBLIC_KEY>'
-    '<UUID>'
-    '<VLESSENC>'
-    '<CLIENT_LINK>'
-  )
-  for placeholder in "${required_debug_placeholders[@]}"; do
-    if ! grep -RInF -- "$placeholder" "${TARGETS[@]}" >/dev/null; then
-      echo "FAIL: debug report docs must show redacted placeholder ${placeholder}" >&2
-      FAILED=1
-    fi
-  done
-fi
-
-if grep -RInE -- 'ix-qianhai|ix-shanghai|前海 IX|上海 IX' "${TARGETS[@]}" >/dev/null; then
-  for placeholder in '<IX_QIANHAI_ENDPOINT>' '<IX_SHANGHAI_ENDPOINT>'; do
-    if ! grep -RInF -- "$placeholder" "${TARGETS[@]}" >/dev/null; then
-      echo "FAIL: IX docs must use placeholder ${placeholder}, not real IX endpoints" >&2
-      FAILED=1
-    fi
-  done
-fi
-
 is_allowed_ip() {
   local ip="$1"
   local o1 o2 o3 o4
   IFS=. read -r o1 o2 o3 o4 <<<"$ip"
 
-  # Project private/WG/link-local/documentation ranges.
   (( o1 == 0 )) && return 0
   (( o1 == 10 )) && return 0
   (( o1 == 127 )) && return 0
