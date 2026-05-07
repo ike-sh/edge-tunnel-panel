@@ -56,6 +56,28 @@ sudo bash wg-toolkit.sh
 
 ## Release Notes
 
+### 0.2.9-alpha
+
+- 修复多落地机状态语义：添加 landing profile 不再等于切换 Xray 出站，只有“切换当前落地机”会事务化改写 outbound。
+- 切换 landing 会先显示编号列表和确认摘要，再执行 `xray run -test`、`nc`、重启服务；失败自动回滚，不更新 current/outputs。
+- doctor、部署总览和 PBR 默认以利群中转机的 Xray 实际 outbound 为准，并提示 current.env 与实际出站是否一致。
+- 海外落地机输出新增 `LANDING_DIRECT_LINK`，仅用于直连 Reality 测试，不是最终三机链式客户端链接。
+
+### 0.2.7-alpha
+
+- 新增 `BBR / 系统优化`，可查看拥塞控制状态、启用 `bbr + fq`，也可只删除本项目 sysctl 文件恢复默认。
+- 新增多落地机配置管理，支持保存多个 `landing-*.env`、测试、切换 active landing，并在切换失败时回滚 Xray 配置。
+- 公网入口转发目标支持 `direct-leikwan-xray`、`ix-qianhai`、`ix-shanghai` 和自定义目标；IX 示例只使用 `<IX_QIANHAI_ENDPOINT>` / `<IX_SHANGHAI_ENDPOINT>` 占位符。
+- 新增 `--refresh-forward-target`，用于 nftables/iptables 模式下刷新域名转发目标解析。
+
+### 0.2.6-alpha
+
+- 新增 UDP / WireGuard 质量检测，用 30 秒 ping 采样、握手时间和 `wg transfer` 增量判断 UDP 是否稳定。
+- 新增多公网入口机管理，可保存多个 `entry-*.env`、测试入口质量、推荐最佳入口并生成多条客户端链接。
+- 公网入口机支持家宽 DDNS 入口模式，`cloud-entry.env` 会记录 `CLOUD_ENDPOINT_TYPE=ddns`。
+- IPv4 PBR 增加 Reality 落地机出口质量测试，可比较 `main`、`T_9929`、`T_CN2` 和已配置线路组。
+- 新增断点续跑状态 `/etc/leikwan-wg-toolkit/state.json` 和脱敏故障报告 `/root/leikwan-debug-report.txt`。
+
 ### 0.2.4-alpha
 
 - 新增 `lq` / `LQ` 快捷命令，默认托管到 `/usr/local/bin/`，卸载时只清理本项目创建的快捷命令。
@@ -119,7 +141,14 @@ curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/leikwan/leikwan-
 - 海外落地机参数：`/etc/leikwan-wg-toolkit/outputs/landing-server.env`
 - 利群中转机参数：`/etc/leikwan-wg-toolkit/outputs/leikwan-relay.env`
 - 客户端链接：`/etc/leikwan-wg-toolkit/outputs/client-link.txt`
+- 多入口参数目录：`/etc/leikwan-wg-toolkit/entries/`
+- 多入口客户端链接：`/etc/leikwan-wg-toolkit/outputs/client-links.txt`
+- 多落地机目录：`/etc/leikwan-wg-toolkit/landings/`
+- 公网入口转发目标目录：`/etc/leikwan-wg-toolkit/forward-targets/`
+- 断点续跑状态：`/etc/leikwan-wg-toolkit/state.json`
+- 脱敏故障报告：`/root/leikwan-debug-report.txt`
 - 快捷命令：`/usr/local/bin/lq`、`/usr/local/bin/LQ`
+- BBR sysctl：`/etc/sysctl.d/99-leikwan-bbr.conf`
 - 利群 WG Key：`/etc/wireguard/wg0_privatekey`、`/etc/wireguard/wg0_publickey`
 - 公网入口 WG Key：`/etc/wireguard/wg1_privatekey`、`/etc/wireguard/wg1_publickey`
 - IPv4 PBR 静态规则：`/etc/leikwan-wg-toolkit/pbr/static-routes.conf`
@@ -151,7 +180,7 @@ realm 和 Xray 的 GitHub Release 下载按以下顺序 fallback：
   Leikwan WG Toolkit
   利群三机链式代理部署工具
   Author : ike-sh
-  Version: 0.2.4-alpha
+  Version: 0.2.9-alpha
   GitHub : https://github.com/ike-sh/leikwan-wg-toolkit
 --------------------------------------------------
 
@@ -172,6 +201,12 @@ realm 和 Xray 的 GitHub Release 下载按以下顺序 fallback：
 海外落地机部署
 导入参数文件
 IPv4 多出口策略路由
+UDP / WireGuard 质量检测
+多公网入口机管理
+BBR / 系统优化
+多落地机管理
+公网入口转发目标管理
+生成脱敏故障报告
 链路测试
 DNS / IPv4 优先修复
 IPv6 入站安全收口
@@ -274,7 +309,9 @@ sudo bash wg-toolkit.sh --rebuild-outputs \
   --landing-port 30004
 ```
 
-`--rebuild-outputs` 参数优先级：CLI 参数、`/etc/leikwan-wg-toolkit/outputs/*.env`、`/root/leikwan-wg-toolkit-output.txt`、`CLIENT_LINK` 反解析、当前 wg/xray/realm 配置。
+`--rebuild-outputs` 参数优先级：CLI 参数、`/etc/leikwan-wg-toolkit/outputs/*.env`、`/root/leikwan-wg-toolkit-output.txt`、`CLIENT_LINK` 反解析、当前 wg/xray/realm/nftables/iptables 配置。
+
+公网入口机如果 outputs 丢失，`doctor` 会优先尝试从 `wg1`、`wg1.conf`、`realm-leikwan.toml`、nftables/iptables 项目转发配置中无交互重建 `cloud-entry.env`。无法安全重建时才提示手动运行 `--rebuild-outputs`。
 
 ## 参数文件导入
 
@@ -344,6 +381,10 @@ CLOUD_WG_PORT=8301
 CLIENT_ENTRY_PORT=30000
 FORWARD_MODE=nftables
 FORWARD_TARGET=10.198.1.1:30000
+FORWARD_TARGET_MODE=direct-leikwan-xray
+FORWARD_TARGET_ADDRESS=10.198.1.1
+FORWARD_TARGET_PORT=30000
+FORWARD_TARGET_RESOLVED_IP=10.198.1.1
 ```
 
 验收：
@@ -356,6 +397,135 @@ sudo bash wg-toolkit.sh --doctor
 nft list ruleset | grep -A20 leikwan
 iptables -t nat -S | grep 10.198.1.1 || true
 ```
+
+公网入口机部署时 `CLOUD_ENDPOINT` 支持三种来源：
+
+1. 自动检测公网 IPv4。
+2. 手动输入公网 IPv4。
+3. 输入 DDNS 域名。
+
+选择 DDNS 时，`cloud-entry.env` 会写入：
+
+```text
+CLOUD_ENDPOINT_TYPE=ddns
+CLOUD_ENDPOINT=<DDNS_DOMAIN>
+```
+
+doctor 会检查域名 A 记录解析，并提示家宽上行、运营商 UDP QoS 或 NAT 变化可能影响入口质量。
+
+### 公网入口转发目标
+
+默认转发目标仍是：
+
+```text
+direct-leikwan-xray: 10.198.1.1:30000
+```
+
+高级功能里的“公网入口转发目标管理”可以切换为：
+
+- `ix-qianhai`：前海 IX 目标，地址由用户输入，例如 `<IX_QIANHAI_ENDPOINT>`。
+- `ix-shanghai`：上海 IX 目标，地址由用户输入，例如 `<IX_SHANGHAI_ENDPOINT>`。
+- `custom`：自定义 IP/域名 + 端口。
+
+选择 IX 目标会绕过利群本机 `10.198.1.1:30000` Xray 入口，请确认 IX 侧已经提供兼容服务。`nftables` / `iptables` DNAT 只能写 IP，域名目标会先解析 A 记录并保存 `FORWARD_TARGET_RESOLVED_IP`；域名变化后运行：
+
+```bash
+sudo bash wg-toolkit.sh --refresh-forward-target
+```
+
+`realm` 模式可以直接使用域名 remote。
+
+## UDP / WireGuard 质量检测
+
+高级功能里的“UDP / WireGuard 质量检测”用于判断公网入口机到利群中转机的原生 WG UDP 链路是否稳定。它会检查：
+
+- `wg show` 最新握手时间。
+- 对端 WG IP 的 30 秒 ping 采样、丢包率、min/avg/max/mdev。
+- `wg transfer` 计数是否增长。
+- 如果本机已有 `iperf3`，会提示可选压测命令，但不会强制安装。
+
+结论会用 `[OK] UDP 正常`、`[WARN] 疑似 UDP QoS`、`[WARN] 疑似入口机线路差` 或 `疑似利群侧出口问题` 这类提示归类。UoT/Phantun 这类方案虽然可用于某些 UDP QoS 场景，但不适合进入本项目默认跨境主线；本工具只把它作为背景解释，不集成实现。
+
+## 多公网入口机
+
+高级功能里的“多公网入口机管理”把入口参数保存到：
+
+```text
+/etc/leikwan-wg-toolkit/entries/entry-<name>.env
+```
+
+每个入口包含：
+
+```text
+ENTRY_NAME=
+CLOUD_PUBLIC_KEY=
+CLOUD_ENDPOINT=
+CLOUD_WG_PORT=
+CLIENT_ENTRY_PORT=
+FORWARD_MODE=
+LAST_RTT=
+LAST_PACKET_LOSS=
+ENABLED=yes
+```
+
+利群中转机可以添加多个入口 Peer。脚本追加 Peer 时不会覆盖旧 Peer；如果多个入口复用同一个 WG 地址，需要按实际网络规划确认不会冲突。入口管理支持查看、删除、质量测试、推荐最佳入口，并可生成多条 `CLIENT_LINK` 到：
+
+```text
+/etc/leikwan-wg-toolkit/outputs/client-links.txt
+```
+
+## BBR / 系统优化
+
+高级功能里的“BBR / 系统优化”只管理本项目独立文件：
+
+```text
+/etc/sysctl.d/99-leikwan-bbr.conf
+```
+
+普通用户推荐使用“启用 BBR + fq”即可。它写入：
+
+```text
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+```
+
+判断 BBR 是否启用以 sysctl 为准：`net.ipv4.tcp_congestion_control=bbr` 且 `net.core.default_qdisc=fq` 即视为启用。`tcp_bbr` 是否出现在 `lsmod` 只作为 INFO，因为有些内核会内建模块而不在 `lsmod` 中列出。
+
+恢复时只删除 `99-leikwan-bbr.conf` 并执行 `sysctl --system`，不会删除用户已有的其他 BBR/sysctl 文件。如果选择执行利群官方 `optimize.sh`，脚本会要求输入 `YES` 二次确认，下载到 `/root/optimize.sh`，显示 `sha256sum`，并在执行前备份 `sysctl -a`。
+
+## 多落地机管理
+
+高级功能里的“多落地机管理”把每个落地保存为：
+
+```text
+/etc/leikwan-wg-toolkit/landings/landing-<name>.env
+```
+
+添加 landing profile 只保存参数，不会修改利群 Xray outbound，也不会重启 `xray-leikwan`。如果要真正切换出站，必须进入：
+
+```text
+高级功能 -> 多落地机管理 -> 切换当前落地机
+```
+
+当前激活落地是“利群中转机”的状态记录，保存在：
+
+```text
+/etc/leikwan-wg-toolkit/landings/current
+/etc/leikwan-wg-toolkit/landings/current.env
+```
+
+切换 active landing 时，脚本会先展示编号列表和确认摘要，然后备份当前 Xray 配置，生成临时配置并执行 `xray run -test`，再用 `nc` 测试目标 `LANDING_ADDRESS:LANDING_PORT`。全部通过后才覆盖配置、重启 `xray-leikwan`、更新 `current.env`、outputs 和 `client-link.txt`；失败会回滚旧配置。
+
+切换落地不会改变客户端入口的 `ENTRY_UUID` / `VLESSENC_ENCRYPTION`，通常客户端链接不需要变化。菜单里的“查看当前链式客户端链接”会显示：
+
+```text
+ACTIVE_LANDING_NAME=
+ACTIVE_LANDING_ADDRESS=
+ACTIVE_LANDING_PORT=
+CLIENT_LINK=
+```
+
+如果 `current.env` 与 Xray 实际 outbound 不一致，doctor 和部署总览会输出 WARN。可用“切换当前落地机”重新应用目标落地，或用“从 Xray 实际 outbound 修复 current 状态”只修复状态记录，不改 Xray 配置、不重启服务。
 
 ## 海外落地机部署
 
@@ -385,9 +555,10 @@ LANDING_PUBLIC_KEY=...
 LANDING_SHORT_ID=...
 LANDING_SERVER_NAME=www.microsoft.com  # 示例 serverName
 LANDING_FLOW=xtls-rprx-vision
+LANDING_DIRECT_LINK=vless://<LANDING_UUID>@<LANDING_PUBLIC_IP>:30004?type=raw&security=reality&pbk=<LANDING_PUBLIC_KEY>&fp=chrome&sni=www.microsoft.com&sid=<LANDING_SHORT_ID>&flow=xtls-rprx-vision#Landing-Direct-Test
 ```
 
-Reality PrivateKey 只保存在落地机配置中，不输出给利群复制。
+`LANDING_DIRECT_LINK` 是直连落地 Reality 测试链接，不是三机链式代理最终客户端链接。最终 `CLIENT_LINK` 由利群中转机生成，入口是公网入口机地址。Reality PrivateKey 只保存在落地机配置中，不输出给利群复制。
 
 验收：
 
@@ -485,6 +656,14 @@ ip route get <LANDING_PUBLIC_IP>
 ip rule show | grep 15000
 ```
 
+PBR 子菜单里的“一键为当前 Reality 落地机指定出口”默认读取 Xray 实际 outbound。如果 `current.env` 与 Xray outbound 不一致，脚本会提示并默认继续使用真正生效的 Xray outbound，避免给未生效的 landing 写错 PBR。
+
+“测试落地机出口质量”可选择当前 Xray 实际 outbound，也可从 landing profile 列表选择任意落地机。它会对 `<LANDING_PUBLIC_IP>:LANDING_PORT` 分别查看 `main`、`T_9929`、`T_CN2` 和已配置线路组的路由，结合 `nc` 可达性和可选 ping/mtr 输出推荐线路组。确认后可一键把当前 Reality 落地机写入静态 PBR 规则，例如：
+
+```text
+<LANDING_PUBLIC_IP>/32 9929
+```
+
 域名 DDNS 规则只解析 A 记录，不处理 AAAA。自动刷新使用 systemd timer：
 
 ```text
@@ -532,6 +711,20 @@ PBR apply / 卸载只删除项目配置或状态文件记录过的精确规则�
 - 其他 IPv6 入站 DROP
 - 关闭 LLMNR 和 MulticastDNS
 - 持久化到 `/etc/iptables/rules.v6`
+
+## 断点续跑与脱敏故障报告
+
+脚本会在 `/etc/leikwan-wg-toolkit/state.json` 记录当前角色、已完成步骤、缺少字段和下一步建议。再次进入 `lq` 主菜单时，会先从 outputs、`client-link.txt`、Xray outbound 和 PBR 配置重新校验状态；只有确实缺少字段时，才提示继续上次流程、查看状态或忽略。已完成的利群中转机会显示“无需操作，链路已完成”。
+
+如果 PBR 规则当前已生效但 `leikwan-pbr.service` 未安装，doctor 会提示重启后规则可能丢失。修复路径是：`高级功能 -> IPv4 多出口策略路由 -> 安装 / 重启 PBR 开机恢复服务`。
+
+高级功能里的“生成脱敏故障报告”会输出：
+
+```text
+/root/leikwan-debug-report.txt
+```
+
+报告会收集系统信息、地址/路由、`wg show`、leikwan 服务状态、端口监听、nft/iptables 项目规则、Xray 配置测试、`doctor --verbose` 和 outputs 字段完整性。生成前会把敏感内容替换为 `<PUBLIC_IP>`、`<WG_PUBLIC_KEY>`、`<UUID>`、`<VLESSENC>`、`<CLIENT_LINK>` 等占位符，便于发给别人排查而不泄露真实参数。
 
 ## 卸载
 

@@ -32,7 +32,7 @@ sudo bash wg-toolkit.sh
   Leikwan WG Toolkit
   利群三机链式代理部署工具
   Author : ike-sh
-  Version: 0.2.4-alpha
+  Version: 0.2.9-alpha
   GitHub : https://github.com/ike-sh/leikwan-wg-toolkit
 --------------------------------------------------
 
@@ -54,9 +54,9 @@ LQ --version
 
 合格标准：
 
-- `lq --version` 和 `LQ --version` 均输出 `leikwan-wg-toolkit 0.2.4-alpha`。
+- `lq --version` 和 `LQ --version` 均输出 `leikwan-wg-toolkit 0.2.9-alpha`。
 - `lq --show-wg-identity`、`lq --doctor`、`lq --pbr-show` 不输出大 banner。
-- 主菜单和极速部署向导显示虚线框，包含 `Author : ike-sh`、`Version: 0.2.4-alpha`、`GitHub : https://github.com/ike-sh/leikwan-wg-toolkit`。
+- 主菜单和极速部署向导显示虚线框，包含 `Author : ike-sh`、`Version: 0.2.9-alpha`、`GitHub : https://github.com/ike-sh/leikwan-wg-toolkit`。
 
 菜单输入回归：
 
@@ -259,6 +259,7 @@ sudo bash wg-toolkit.sh --doctor
 - `ip rule show` 中能看到 priority `15000` 或 `15005`。
 - `ip route get <LANDING_PUBLIC_IP>` 显示的路由使用指定表对应的出口。
 - `leikwan-pbr.service` 可执行成功。
+- 如果 `leikwan-pbr.service` 未安装但规则已生效，doctor 应提示“当前规则已生效但重启后可能丢失”，并给出安装 / 重启 PBR 开机恢复服务的菜单路径。
 - 如使用域名规则，`leikwan-pbr-ddns.timer` 为 active。
 - 重复执行 `--pbr-apply` 不产生重复 `ip rule`。
 - 未托管 priority `15000` / `15005` 规则不会被删除。
@@ -340,6 +341,17 @@ sudo bash wg-toolkit.sh --doctor --verbose
 
 合格标准：默认 `--doctor` 是简洁摘要，`--doctor --verbose` 是完整报告；不会误报其他角色组件缺失。例如利群中转机不应因 `realm-leikwan`、`8301/udp`、`30004/tcp` 不存在而 WARN。
 
+状态推断回归：
+
+```bash
+test -s /etc/leikwan-wg-toolkit/outputs/leikwan-relay.env
+test -s /etc/leikwan-wg-toolkit/outputs/client-link.txt
+grep '^CLIENT_LINK=' /etc/leikwan-wg-toolkit/outputs/client-link.txt
+sudo bash wg-toolkit.sh --doctor
+```
+
+合格标准：已跑通的利群中转机不再提示缺少 `CLOUD 参数` / `LANDING 参数`；状态机应能从 outputs、`client-link.txt`、Xray outbound 和 PBR 配置推断链路已完成。
+
 ### 7. dry-run
 
 ```bash
@@ -362,7 +374,7 @@ sudo bash wg-toolkit.sh
 head -n 3 /root/leikwan-wg-toolkit-output.txt
 ```
 
-合格标准：菜单和输出始终显示 `0.2.4-alpha`，不会显示 `12 (bookworm)` 或 `13 (trixie)`。
+合格标准：菜单和输出始终显示 `0.2.9-alpha`，不会显示 `12 (bookworm)` 或 `13 (trixie)`。
 
 ### 10. 极速部署向导按角色显示
 
@@ -435,6 +447,20 @@ grep '^VLESSENC_ENCRYPTION=.' /etc/leikwan-wg-toolkit/outputs/client-link.txt
 
 合格标准：自动迁移旧 `/root/leikwan-wg-toolkit-output.txt` 中的 `CLIENT_LINK`，并从 `vless://ENTRY_UUID@host:port?...encryption=...` 反解析回填 `ENTRY_UUID`、`CLOUD_ENDPOINT`、`CLIENT_ENTRY_PORT`、`VLESSENC_ENCRYPTION`。
 
+公网入口机 outputs 缺失时：
+
+```bash
+sudo mkdir -p /root/leikwan-output-bak
+sudo mv /etc/leikwan-wg-toolkit/outputs/cloud-entry.env /root/leikwan-output-bak/ 2>/dev/null || true
+timeout 20 sudo bash wg-toolkit.sh --doctor
+test -s /etc/leikwan-wg-toolkit/outputs/cloud-entry.env
+grep '^CLOUD_PUBLIC_KEY=' /etc/leikwan-wg-toolkit/outputs/cloud-entry.env
+grep '^CLIENT_ENTRY_PORT=' /etc/leikwan-wg-toolkit/outputs/cloud-entry.env
+grep '^FORWARD_TARGET=' /etc/leikwan-wg-toolkit/outputs/cloud-entry.env
+```
+
+合格标准：doctor 不进入交互；如果 `wg1`、`wg1.conf`、realm/nftables/iptables 项目配置足够完整，会自动重建 `cloud-entry.env`。不能重建时只输出修复命令。
+
 ### 12. doctor 不阻塞 outputs 重建
 
 在已运行的利群中转机上临时移开 outputs 后执行：
@@ -506,7 +532,183 @@ scripts/check-redaction.sh
 vless://<ENTRY_UUID>@<CLOUD_PUBLIC_IP>:30000?type=raw&security=none&encryption=<VLESSENC_ENCRYPTION>#Leikwan-WG-Xray-Reality
 ```
 
-### 16. 快捷命令卸载
+### 16. UDP / WireGuard 质量检测
+
+在公网入口机或利群中转机执行：
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> UDP / WireGuard 质量检测
+```
+
+合格标准：
+
+- 输出 `wg show` 握手时间。
+- 执行 30 秒 ping 采样，显示丢包率和 min/avg/max/mdev。
+- 显示 `wg transfer` 是否增长。
+- 如果缺少 `iperf3`，只提示可选安装，不强制安装。
+- 结论使用 `[OK] UDP 正常` 或 `[WARN] 疑似 UDP QoS / 入口机线路差 / 利群侧出口问题`。
+
+### 17. 多公网入口机与 DDNS 入口
+
+在利群中转机执行：
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> 多公网入口机管理
+# 添加入口 entry-test，CLOUD_ENDPOINT 可填 <CLOUD_PUBLIC_IP> 或 <DDNS_DOMAIN>
+ls /etc/leikwan-wg-toolkit/entries/
+sudo bash wg-toolkit.sh
+# 高级功能 -> 多公网入口机管理 -> 查看入口
+```
+
+合格标准：
+
+- 生成 `/etc/leikwan-wg-toolkit/entries/entry-test.env`。
+- 字段包含 `ENTRY_NAME`、`CLOUD_PUBLIC_KEY`、`CLOUD_ENDPOINT`、`CLOUD_WG_PORT`、`CLIENT_ENTRY_PORT`、`FORWARD_MODE`、`ENABLED`。
+- 利群 `wg0.conf` 追加新 Peer，不覆盖原有 Peer。
+- 质量测试后写入 `LAST_RTT` 和 `LAST_PACKET_LOSS`。
+- 生成多个链接时写入 `/etc/leikwan-wg-toolkit/outputs/client-links.txt`。
+
+公网入口机选择 DDNS endpoint 后执行：
+
+```bash
+grep '^CLOUD_ENDPOINT_TYPE=ddns' /etc/leikwan-wg-toolkit/outputs/cloud-entry.env
+sudo bash wg-toolkit.sh --doctor
+```
+
+合格标准：doctor 检查 DDNS A 记录解析，并提示家宽上行可能成为瓶颈。
+
+### 18. PBR 落地机出口质量测试
+
+在利群中转机执行：
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> IPv4 多出口策略路由 -> 测试落地机出口质量
+ip route get <LANDING_PUBLIC_IP>
+```
+
+合格标准：
+
+- 测试 `main`、`T_9929`、`T_CN2` 和已配置线路组。
+- 输出 `ip route get` 结果和 `nc -vz <LANDING_PUBLIC_IP> <LANDING_PORT>` 可达性。
+- 如系统有 `ping` / `mtr`，可以辅助显示；缺失时不报 fatal。
+- 推荐线路组给出原因。
+- 用户确认后只写入 `<LANDING_PUBLIC_IP>/32 线路组`，不接管整机默认路由。
+
+### 19. BBR / 系统优化
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> BBR / 系统优化 -> 查看当前拥塞控制状态
+# 高级功能 -> BBR / 系统优化 -> 启用 BBR + fq
+test -f /etc/sysctl.d/99-leikwan-bbr.conf
+sysctl net.ipv4.tcp_congestion_control
+sysctl net.core.default_qdisc
+# 高级功能 -> BBR / 系统优化 -> 恢复系统默认拥塞控制
+```
+
+合格标准：
+
+- 启用时只写入 `/etc/sysctl.d/99-leikwan-bbr.conf`，不修改用户其他 sysctl 文件。
+- 恢复时只删除本项目文件并执行 `sysctl --system`。
+- BBR 判断以 `sysctl` 为准；`tcp_bbr` 未出现在 `lsmod` 时只显示 INFO，不降级为 WARN。
+- 未启用 BBR 时 doctor 只显示 INFO/WARN，不作为 FAIL。
+- 执行利群官方 `optimize.sh` 必须输入 `YES` 二次确认，并先备份 `sysctl -a`。
+
+### 20. 多落地机管理
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> 多落地机管理 -> 添加落地机
+# 分别添加 us01 / hk01，使用 <LANDING_PUBLIC_IP> 或示例域名占位
+ls /etc/leikwan-wg-toolkit/landings/
+# 高级功能 -> 多落地机管理 -> 切换当前落地机
+cat /etc/leikwan-wg-toolkit/landings/current
+grep '^ACTIVE_LANDING_' /etc/leikwan-wg-toolkit/outputs/leikwan-relay.env
+```
+
+合格标准：
+
+- 每个 landing profile 写入 `landing-<name>.env`。
+- 添加 landing profile 后选择“不立即切换”时，不写 `current/current.env`，不修改 Xray config，不重启 `xray-leikwan`，只生成 `landing-<name>.env`。
+- 添加 landing profile 后选择“立即切换”时，必须复用事务化 `switch_landing_by_name` 流程。
+- 切换当前落地机必须先展示编号列表，再选择编号，再显示确认摘要；空输入取消，非法编号不崩溃。
+- 存在 `landing-HK.env` 和 `landing-old-current.env` 两个 profile 时，进入“切换当前落地机”必须先显示包含 `No. Name Address Port SNI Status Active` 的表格，然后才显示“请选择落地机编号，留空取消：”。
+- 在切换选择处直接回车应取消并返回；输入超出范围的编号应显示“编号不存在”，不崩溃。
+- 如果没有任何 `landing-*.env`，应提示“当前没有落地机 profile”；如果 profile 全部 `ENABLED=no`，应提示“当前没有已启用的落地机 profile”。
+- 测试所有落地机时执行 `nc`；如果当前利群 Xray inbound 参数可读，也生成临时 outbound 配置并执行 `xray run -test`。
+- 切换 active landing 时，`xray run -test` 和 `nc LANDING_ADDRESS LANDING_PORT` 都成功后才 restart `xray-leikwan`。
+- 多落地切换生成的临时 Xray 配置必须位于 `/usr/local/etc/xray/leikwan/`，文件名以 `.json` 结尾，例如 `config.tmp.XXXXXX.json`。
+- 临时配置写入后先执行 `jq empty "$TMP_CONFIG"`，再执行 `xray run -test -config "$TMP_CONFIG"`，确保 Xray 能按 JSON 格式识别。
+- 临时配置测试失败时，不覆盖正式 `config.json`，不重启 `xray-leikwan`，并打印临时配置路径和完整 Xray 输出。
+- 临时配置测试成功后，才覆盖正式 `config.json` 并 restart。
+- `systemctl restart xray-leikwan` 后不能只做一次 `ss grep`；必须等待 `30000/tcp` 监听恢复，超时建议 15 秒。
+- 如果监听等待成功，不回滚；如果等待超时，输出 `ss -lntup`、`systemctl status xray-leikwan --no-pager -l`、`journalctl -u xray-leikwan -n 50 --no-pager` 等 debug 信息，再回滚旧配置。
+- 添加 bad landing 并尝试切换时，失败后回滚旧 Xray 配置，`current.env` 不变，`xray-leikwan` 仍 active。
+- `ENTRY_UUID` / `VLESSENC_ENCRYPTION` 不因切换落地而变化。
+- `current.env` 与 Xray outbound 不一致时，doctor 和部署总览输出 WARN；“从 Xray 实际 outbound 修复 current 状态”只修复状态，不改配置、不重启。
+- PBR 一键指定出口默认读取 Xray 实际 outbound；PBR 质量测试可选择当前 Xray 实际 outbound 或任意 landing profile。
+- 海外落地机部署不写 `landings/current`，输出 `LANDING_DIRECT_LINK`，并明确它不是最终链式 `CLIENT_LINK`。
+
+### 21. IX 转发目标
+
+cloud-entry 默认目标仍为：
+
+```text
+direct-leikwan-xray -> 10.198.1.1:30000
+```
+
+测试 IX target：
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> 公网入口转发目标管理
+# 选择 ix-qianhai，输入 <IX_QIANHAI_ENDPOINT> 和端口 30000
+sudo bash wg-toolkit.sh --refresh-forward-target
+sudo bash wg-toolkit.sh --doctor --verbose
+```
+
+合格标准：
+
+- 选择 IX 目标前有“将绕过 10.198.1.1:30000”的确认提示。
+- `cloud-entry.env` 包含 `FORWARD_TARGET_MODE`、`FORWARD_TARGET_ADDRESS`、`FORWARD_TARGET_PORT`、`FORWARD_TARGET_RESOLVED_IP`。
+- nftables/iptables 模式下域名 target 被解析为 A 记录 IP；`--refresh-forward-target` 能刷新并重载项目转发规则。
+- realm 模式允许域名 remote。
+- docs/README 只出现 `<IX_QIANHAI_ENDPOINT>` / `<IX_SHANGHAI_ENDPOINT>`，不出现真实 IX IP。
+
+### 22. 断点续跑状态
+
+执行任一部署步骤后检查：
+
+```bash
+test -f /etc/leikwan-wg-toolkit/state.json
+sudo bash wg-toolkit.sh
+```
+
+合格标准：
+
+- `state.json` 包含 `ROLE`、`CURRENT_STEP`、`COMPLETED_STEPS`、`MISSING_FIELDS`、`NEXT_ACTION`。
+- 如果缺少关键参数，主菜单前只提示一次未完成部署。
+- 用户可选择继续上次流程、查看状态或忽略。
+
+### 23. 脱敏故障报告
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> 生成脱敏故障报告
+sudo test -f /root/leikwan-debug-report.txt
+sudo grep -E '<PUBLIC_IP>|<WG_PUBLIC_KEY>|<UUID>|<VLESSENC>|<CLIENT_LINK>' /root/leikwan-debug-report.txt
+```
+
+合格标准：
+
+- 报告包含 os-release、地址/路由、`wg show`、leikwan 服务状态、端口监听、nft/iptables 项目规则、Xray test、doctor verbose 和 outputs 字段完整性。
+- 公网 IP、公钥、UUID、VLESSENC、Reality key/shortId、CLIENT_LINK 均被替换为占位符。
+- README/docs 中的故障报告示例同样使用占位符，`scripts/check-redaction.sh` 通过。
+
+### 24. 快捷命令卸载
 
 ```bash
 sudo bash wg-toolkit.sh --uninstall

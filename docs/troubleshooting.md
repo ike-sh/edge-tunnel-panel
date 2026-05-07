@@ -150,7 +150,7 @@ sudo bash wg-toolkit.sh --show-wg-identity --role cloud
 sudo bash wg-toolkit.sh --rebuild-outputs
 ```
 
-脚本会从当前 WireGuard、realm、Xray 配置重建：
+脚本会从当前 WireGuard、realm、nftables、iptables、Xray 配置重建：
 
 ```text
 /etc/leikwan-wg-toolkit/outputs/cloud-entry.env
@@ -161,6 +161,8 @@ sudo bash wg-toolkit.sh --rebuild-outputs
 ```
 
 在利群中转机上，如果 `CLIENT_LINK` 缺失但 Xray 配置存在，`--doctor` 只输出 WARN 和修复命令，不会阻塞式询问。
+
+在公网入口机上，如果 `cloud-entry.env` 缺失但 `wg1`、`wg1.conf`、`realm-leikwan.toml` 或 nftables/iptables 项目配置还在，`--doctor` 会尝试无交互重建 outputs。能重建时会输出 `[OK] outputs 已从 wg/转发配置自动重建`；不能重建时才提示手动运行 `--rebuild-outputs`。
 
 当前版本的 `--doctor` 不会进入交互，也不会要求输入 `VLESSENC_ENCRYPTION`。如果 outputs 缺失，它只会提示修复命令：
 
@@ -586,6 +588,22 @@ T_CN2
 
 删除 `/etc/iproute2/rt_tables` 中本项目追加的 `T_` 表名需要二次确认。
 
+### PBR 开机恢复服务未安装
+
+如果 doctor 提示：
+
+```text
+[WARN] PBR 开机恢复服务未安装，当前规则已生效但重启后可能丢失。
+```
+
+说明当前 `ip rule` 已经在运行中生效，但系统重启后不一定会恢复。进入：
+
+```text
+高级功能 -> IPv4 多出口策略路由 -> 安装 / 重启 PBR 开机恢复服务
+```
+
+安装 `leikwan-pbr.service` 后，开机会执行 `wg-toolkit.sh --pbr-apply`，只应用本项目保存的 PBR 规则。
+
 ### doctor 提示 LANDING_ADDRESS 出口不一致
 
 检查项目配置：
@@ -597,3 +615,169 @@ ip route get LANDING_ADDRESS
 ```
 
 如果系统已有同目标但不同出口的手工规则，菜单“一键为当前 Reality 落地机指定出口”会提示冲突。未确认接管前，脚本不会重复添加冲突规则。
+
+## UDP / WireGuard 质量检测
+
+如果 WG 已握手但客户端体验抖动，可以先运行：
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> UDP / WireGuard 质量检测
+```
+
+重点看三项：
+
+- handshake age 是否持续刷新。
+- 30 秒 ping 丢包率和 mdev 是否明显偏高。
+- `wg transfer` 的 RX/TX 是否增长。
+
+常见判断：
+
+- `[OK] UDP 正常`：WG 基础链路稳定，继续看 Xray、PBR 或落地机。
+- `[WARN] 疑似 UDP QoS`：握手存在但丢包/抖动明显，可能是运营商对 UDP 限速或整形。
+- `[WARN] 疑似入口机线路差`：入口机到利群 WG 对端延迟高或掉包。
+- `[WARN] 疑似利群侧出口问题`：WG 正常，但利群到 Reality 落地机连接差。
+
+UoT/Phantun 确实可用于某些 UDP QoS 场景，但公开说明和实测都不适合进入本项目默认跨境主链路。本项目仍坚持公网入口机到利群中转机只用原生 WireGuard UDP，不集成 FRP、UoT/Phantun、WSS、OpenVPN、gost、udp2raw。
+
+## 多入口和家宽 DDNS
+
+多公网入口机文件在：
+
+```text
+/etc/leikwan-wg-toolkit/entries/
+```
+
+如果某个入口质量差，先执行入口质量测试，再用“推荐最佳入口”生成多条客户端链接。多入口会追加 WG Peer，不覆盖旧 Peer；如果多个入口复用同一个 WG 地址，请先确认网络规划。
+
+家宽 DDNS 入口会在 `cloud-entry.env` 中写入：
+
+```text
+CLOUD_ENDPOINT_TYPE=ddns
+CLOUD_ENDPOINT=<DDNS_DOMAIN>
+```
+
+doctor 会检查 DDNS A 记录。如果 DDNS 可解析但外部仍连不上，重点排查：
+
+- 家宽路由器端口映射。
+- 运营商是否给了公网 IPv4。
+- 家宽上行带宽是否成为瓶颈。
+- UDP / WireGuard 质量检测是否提示 QoS。
+
+## BBR / 系统优化
+
+普通用户建议优先使用：
+
+```text
+高级功能 -> BBR / 系统优化 -> 启用 BBR + fq
+```
+
+它只写入 `/etc/sysctl.d/99-leikwan-bbr.conf`，不会覆盖用户已有 sysctl。验收：
+
+```bash
+sysctl net.ipv4.tcp_congestion_control
+sysctl net.core.default_qdisc
+```
+
+BBR 判断以 sysctl 为准：`net.ipv4.tcp_congestion_control=bbr` 且 `net.core.default_qdisc=fq` 时显示已启用。`tcp_bbr` 未出现在 `lsmod` 不代表失败，可能是内核内建或未列出，doctor 只把它作为 INFO。
+
+如果 doctor 显示未启用 BBR，这不是链路故障，只是可选优化。恢复时选择“恢复系统默认拥塞控制”，脚本只删除本项目文件。利群官方 `optimize.sh` 是高级选项，必须输入 `YES` 才会下载执行，并会先备份 `sysctl -a`。
+
+## 多落地机切换
+
+多落地机配置保存在：
+
+```text
+/etc/leikwan-wg-toolkit/landings/
+```
+
+添加 landing profile 只保存参数，不会改写利群中转机 Xray outbound。只有“切换当前落地机”才会真正切换出站。脚本会先展示编号列表和确认摘要，再做 `xray run -test`、`nc LANDING_ADDRESS LANDING_PORT`，测试失败不会重启服务，并会回滚旧配置。排查时看：
+
+```bash
+cat /etc/leikwan-wg-toolkit/landings/current
+grep '^ACTIVE_LANDING_' /etc/leikwan-wg-toolkit/outputs/leikwan-relay.env
+/usr/local/bin/xray run -test -config /usr/local/etc/xray/leikwan/config.json
+```
+
+切换落地不会改变客户端入口 `ENTRY_UUID` / `VLESSENC_ENCRYPTION`，所以大多数情况下客户端链接不需要重新导入。
+
+如果 doctor 提示：
+
+```text
+[WARN] active landing 与 Xray 实际 outbound 不一致
+```
+
+说明 `current.env` 记录的落地和真正生效的 Xray outbound 已经漂移。修复有两种：
+
+```text
+多落地机管理 -> 切换当前落地机 -> 选择目标 landing 重新应用
+多落地机管理 -> 从 Xray 实际 outbound 修复 current 状态
+```
+
+第二个动作只修复 `current/current.env` 状态记录，不修改 Xray 配置，也不重启服务。
+
+海外落地机部署输出的 `LANDING_DIRECT_LINK` 是直连 Reality 测试链接，不是三机链式代理最终客户端链接。最终 `CLIENT_LINK` 指向公网入口机，由利群中转机生成。
+
+## IX 转发目标
+
+公网入口机默认仍转发到 `10.198.1.1:30000`。如果在“公网入口转发目标管理”里选择 `ix-qianhai` 或 `ix-shanghai`，公网入口机会绕过利群本机 Xray，直接转发到你输入的 IX 目标，例如 `<IX_QIANHAI_ENDPOINT>:30000` 或 `<IX_SHANGHAI_ENDPOINT>:30000`。
+
+`nftables` / `iptables` DNAT 不支持直接写域名，脚本会解析 A 记录并保存 `FORWARD_TARGET_RESOLVED_IP`。域名解析变化后执行：
+
+```bash
+sudo bash wg-toolkit.sh --refresh-forward-target
+sudo bash wg-toolkit.sh --doctor --verbose
+```
+
+如果 doctor 提示 DNAT IP 与当前解析不一致，刷新即可。`realm` 模式允许域名 remote，不需要先解析为 IP。
+
+## PBR 落地机质量测试
+
+利群中转机上可以进入：
+
+```text
+高级功能 -> IPv4 多出口策略路由 -> 测试落地机出口质量
+```
+
+它会比较 `main`、`T_9929`、`T_CN2` 和已配置线路组对 `<LANDING_PUBLIC_IP>:<LANDING_PORT>` 的路由与可达性，并给出推荐线路组。确认应用时，只写入单个落地机 `/32` 规则，不修改整机默认路由。
+
+## 脱敏故障报告
+
+需要把环境发给别人排查时，优先生成：
+
+```bash
+sudo bash wg-toolkit.sh
+# 高级功能 -> 生成脱敏故障报告
+```
+
+输出文件：
+
+```text
+/root/leikwan-debug-report.txt
+```
+
+报告会收集系统、路由、WG、服务、端口、nft/iptables、Xray test、doctor verbose 和 outputs 字段完整性，并替换公网 IP、公钥、UUID、VLESSENC、Reality key/shortId、CLIENT_LINK。发送前仍建议快速看一眼，确认没有手工追加的敏感备注。
+
+## 断点续跑提示
+
+如果三台机器之间复制参数做到一半中断，脚本会记录：
+
+```text
+/etc/leikwan-wg-toolkit/state.json
+```
+
+再次进入 `lq` 主菜单时，会先从 outputs、`client-link.txt`、Xray outbound 和 PBR 配置重新推断状态，再提示已完成、缺少字段和下一步。这个提示不会自动覆盖配置，只是帮助继续流程。
+
+已跑通的利群中转机应显示：
+
+```text
+已完成：LEIKWAN_PUBLIC_KEY / CLOUD 参数 / LANDING 参数 / CLIENT_LINK / PBR
+下一步：无需操作，链路已完成
+```
+
+如果仍然提示缺少 `CLOUD 参数` 或 `LANDING 参数`，先运行：
+
+```bash
+sudo bash wg-toolkit.sh --rebuild-outputs
+sudo bash wg-toolkit.sh --doctor
+```

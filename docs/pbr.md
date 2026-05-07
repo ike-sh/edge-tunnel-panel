@@ -171,7 +171,44 @@ leikwan-pbr-ddns.service
 bash wg-toolkit.sh --pbr-refresh-domains
 ```
 
-## 8. 如何回滚
+## 8. 落地机出口质量测试
+
+子菜单“测试落地机出口质量”用于比较 Reality 落地机从不同 IPv4 出口访问时的表现。它不会修改整机默认路由，只围绕 `LANDING_ADDRESS` 做诊断。
+
+如果已启用“多落地机管理”，一键指定 Reality 落地机出口默认读取 Xray 实际 outbound，而不是盲信 `current.env`。如果 `current.env` 与 Xray outbound 不一致，脚本会提示并默认使用真正生效的 Xray outbound，避免给未切换成功的 landing 写错 PBR。
+
+质量测试可以选择“当前 Xray 实际 outbound”，也可以从 landing profile 列表选择任意 profile。这样可以先比较多个落地的连通性，再只把当前需要的落地 `/32` 写入 `static-routes.conf`。
+
+测试对象包括：
+
+- `main`
+- `T_9929`
+- `T_CN2`
+- 已配置线路组
+
+检测项：
+
+```bash
+ip route get <LANDING_PUBLIC_IP>
+nc -vz <LANDING_PUBLIC_IP> <LANDING_PORT>
+```
+
+如果系统已经安装 `ping` 或 `mtr`，可以辅助判断延迟和丢包；没有这些工具时不强制安装。脚本会根据可达性、延迟和已检测到的线路组给出推荐，例如：
+
+```text
+推荐线路组：9929
+原因：可达、延迟低、连接成功
+```
+
+用户确认后，脚本只把当前落地机写入静态规则：
+
+```text
+<LANDING_PUBLIC_IP>/32 9929
+```
+
+然后执行 PBR apply。它不会删除非本项目规则，也不会接管 main 默认路由。
+
+## 9. 如何回滚
 
 查看当前项目与系统规则：
 

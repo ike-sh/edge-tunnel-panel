@@ -28,6 +28,31 @@ for pattern in "${deny_patterns[@]}"; do
   fi
 done
 
+if grep -RIn -- 'leikwan-debug-report' "${TARGETS[@]}" >/dev/null; then
+  required_debug_placeholders=(
+    '<PUBLIC_IP>'
+    '<WG_PUBLIC_KEY>'
+    '<UUID>'
+    '<VLESSENC>'
+    '<CLIENT_LINK>'
+  )
+  for placeholder in "${required_debug_placeholders[@]}"; do
+    if ! grep -RInF -- "$placeholder" "${TARGETS[@]}" >/dev/null; then
+      echo "FAIL: debug report docs must show redacted placeholder ${placeholder}" >&2
+      FAILED=1
+    fi
+  done
+fi
+
+if grep -RInE -- 'ix-qianhai|ix-shanghai|前海 IX|上海 IX' "${TARGETS[@]}" >/dev/null; then
+  for placeholder in '<IX_QIANHAI_ENDPOINT>' '<IX_SHANGHAI_ENDPOINT>'; do
+    if ! grep -RInF -- "$placeholder" "${TARGETS[@]}" >/dev/null; then
+      echo "FAIL: IX docs must use placeholder ${placeholder}, not real IX endpoints" >&2
+      FAILED=1
+    fi
+  done
+fi
+
 is_allowed_ip() {
   local ip="$1"
   local o1 o2 o3 o4

@@ -59,6 +59,10 @@ CLOUD_WG_PORT
 CLIENT_ENTRY_PORT
 FORWARD_MODE
 FORWARD_TARGET
+FORWARD_TARGET_MODE
+FORWARD_TARGET_ADDRESS
+FORWARD_TARGET_PORT
+FORWARD_TARGET_RESOLVED_IP
 ```
 
 ## 角色二：利群中转机
@@ -190,7 +194,7 @@ lq
   Leikwan WG Toolkit
   利群三机链式代理部署工具
   Author : ike-sh
-  Version: 0.2.4-alpha
+  Version: 0.2.9-alpha
   GitHub : https://github.com/ike-sh/leikwan-wg-toolkit
 --------------------------------------------------
 
@@ -201,7 +205,7 @@ lq
 0. 退出
 ```
 
-高级功能里保留完整手动部署、PBR、DNS、IPv6、备份、卸载、安装 / 修复快捷命令等入口。
+高级功能里保留完整手动部署、PBR、DNS、IPv6、BBR、多入口、多落地、转发目标、故障报告、备份、卸载、安装 / 修复快捷命令等入口。
 
 ### 1. 海外落地机先生成 Reality 参数
 
@@ -344,6 +348,79 @@ sudo bash wg-toolkit.sh --rebuild-outputs
 ```bash
 sudo bash wg-toolkit.sh --rebuild-outputs --vlessenc-encryption '<VLESSENC_ENCRYPTION>'
 ```
+
+## 断点续跑
+
+工具会把当前角色、已完成步骤、缺少字段和下一步建议写入：
+
+```text
+/etc/leikwan-wg-toolkit/state.json
+```
+
+再次进入 `lq` 主菜单时，如果发现流程还没完成，会先显示：
+
+```text
+检测到未完成部署
+```
+
+用户可以选择继续上次流程、查看状态或忽略。这个提示只帮助减少三台机器之间来回复制时的断点遗忘，不会自动改动主链路配置。
+
+## 多入口与 DDNS
+
+公网入口机部署时，`CLOUD_ENDPOINT` 可以选择自动检测公网 IPv4、手动输入公网 IP，或填写 DDNS 域名。选择 DDNS 时会写入：
+
+```text
+CLOUD_ENDPOINT_TYPE=ddns
+CLOUD_ENDPOINT=<DDNS_DOMAIN>
+```
+
+利群中转机的高级功能里可以管理多个公网入口，入口文件保存在：
+
+```text
+/etc/leikwan-wg-toolkit/entries/entry-<name>.env
+```
+
+多入口管理支持添加、删除、查看、测试质量、推荐最佳入口，并生成多条客户端链接。它会向 `wg0.conf` 追加 Peer，不覆盖旧 Peer。
+
+## BBR、落地与转发目标
+
+“BBR / 系统优化”只写入 `/etc/sysctl.d/99-leikwan-bbr.conf`，启用 `net.core.default_qdisc=fq` 和 `net.ipv4.tcp_congestion_control=bbr`。恢复时只删除这个文件，不动用户已有 sysctl。
+
+“多落地机管理”把落地配置保存到：
+
+```text
+/etc/leikwan-wg-toolkit/landings/landing-<name>.env
+/etc/leikwan-wg-toolkit/landings/current
+/etc/leikwan-wg-toolkit/landings/current.env
+```
+
+添加 landing profile 只写 `landing-<name>.env`，不等于切换利群 Xray 出站。真正切换必须选择“切换当前落地机”：脚本会先展示编号列表和确认摘要，再生成临时 Xray 配置、执行 `xray run -test`、用 `nc` 测试落地端口，通过后才重启 `xray-leikwan` 并更新 `current/current.env`、outputs 和 `client-link.txt`；失败会回滚旧配置。
+
+`current.env` 是利群中转机状态，不是海外落地机状态。海外落地机部署只输出 `LANDING_*` 和 `LANDING_DIRECT_LINK`；`LANDING_DIRECT_LINK` 只用于直连 Reality 测试，最终链式 `CLIENT_LINK` 仍由利群中转机生成。客户端入口参数通常不变，但 outputs 会增加 `ACTIVE_LANDING_NAME`、`ACTIVE_LANDING_ADDRESS`、`ACTIVE_LANDING_PORT`。
+
+“公网入口转发目标管理”用于 cloud-entry 角色。默认仍是：
+
+```text
+direct-leikwan-xray -> 10.198.1.1:30000
+```
+
+可选 `ix-qianhai`、`ix-shanghai` 或 `custom`，IX 地址必须由用户输入，例如 `<IX_QIANHAI_ENDPOINT>` 或 `<IX_SHANGHAI_ENDPOINT>`。选择 IX target 会绕过利群本机 Xray 入口，请确认 IX 侧提供兼容服务。`nftables` / `iptables` 模式遇到域名 target 会先解析 A 记录，域名变化后运行：
+
+```bash
+sudo bash wg-toolkit.sh --refresh-forward-target
+```
+
+## 质量检测和故障报告
+
+高级功能里的“UDP / WireGuard 质量检测”会用 30 秒 ping 采样、握手时间和 `wg transfer` 增量判断 WG UDP 链路质量。它只诊断原生 UDP，不引入 UoT/Phantun 或任何 TCP/fake TCP 隧道。
+
+高级功能里的“生成脱敏故障报告”会写入：
+
+```text
+/root/leikwan-debug-report.txt
+```
+
+报告会脱敏公网 IP、公钥、UUID、VLESSENC、Reality key/shortId 和客户端链接，适合发给维护者排查。
 
 ## 角色向导
 
