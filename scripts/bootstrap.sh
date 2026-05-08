@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_GITHUB="https://github.com/ike-sh/leikwan-wg-toolkit"
-RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh"
-INSTALL_PATH="/root/wg-toolkit.sh"
+PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
+RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/leikwan-toolkit.sh"
+RAW_SCRIPT_FALLBACK_URL="https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/wg-toolkit.sh"
+INSTALL_PATH="/root/leikwan-toolkit.sh"
 SHORTCUT_PATH="/usr/local/bin/lq"
 RUN_MENU_MODE="auto"
 DEFAULT_GITHUB_MIRRORS=(
@@ -122,9 +123,18 @@ download_with_fallback() {
 
 install_tool() {
   command -v curl >/dev/null 2>&1 || { fail "缺少 curl，请先安装 curl。"; exit 1; }
-  local tmp
+  local tmp used_fallback=0
   tmp="$(mktemp)"
-  download_with_fallback "$RAW_SCRIPT_URL" "$tmp"
+  if ! download_with_fallback "$RAW_SCRIPT_URL" "$tmp"; then
+    warn "新主脚本下载失败，尝试旧名称兼容入口。"
+    download_with_fallback "$RAW_SCRIPT_FALLBACK_URL" "$tmp"
+    used_fallback=1
+  fi
+  if (( used_fallback == 1 )) && grep -q 'leikwan-toolkit.sh' "$tmp"; then
+    rm -f "$tmp"
+    fail "fallback 下载到的是旧名称兼容 wrapper，无法单独安装；请稍后重试新主脚本地址。"
+    return 1
+  fi
   install -m 755 "$tmp" "$INSTALL_PATH"
   rm -f "$tmp"
   ln -sf "$INSTALL_PATH" "$SHORTCUT_PATH"

@@ -1,206 +1,90 @@
 # 工作流
 
-v0.4 推荐先进入：
+`leikwan-toolkit` 的角色很固定：
 
-```text
-主菜单 -> 快速组网（分步提示）
-```
+- A：公网入口，只管理本机 EasyTier entry 和入口端口池。
+- B：利群主机，管理公网入口列表、后端转发目标、PBR 和 nftables relay 规则。
+- C：后端目标，任意用户自备 TCP 服务。
 
-这个菜单只做分步提示和调用现有功能，不会盲目自动完成复杂部署。
-
-## 0. 利群主机先修复 DNS / IPv4 优先
-
-在利群主机执行：
-
-```text
-主菜单 -> 快速组网（分步提示） -> 1
-```
-
-也可以走：
-
-```text
-高级功能 -> DNS / IPv4 优先修复
-```
-
-部分利群主机 IPv6 / DNS 默认环境可能导致 GitHub、raw.githubusercontent.com、GitHub release 或 EasyTier 包下载失败。先修复 IPv4 优先和 DNS，可以明显减少安装失败。
-
-## 1. 利群主机生成网络码
-
-在利群主机：
+## 新安装
 
 ```bash
-sudo lq pair relay-init
+curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq
 ```
 
-菜单路径：
+主脚本是 `/root/leikwan-toolkit.sh`。旧名称 `wg-toolkit.sh` 只作为兼容 wrapper。
+
+## 快速组网菜单
 
 ```text
-主菜单 -> 快速组网（分步提示） -> 2
+1. 我现在在利群主机：先执行 DNS / IPv4 优先修复
+2. 我现在在利群主机：生成 / 新增公网入口网络码
+3. 我现在在公网入口：粘贴利群网络码，部署本机入口
+4. 我现在在利群主机：粘贴公网入口返回码，完成接入
+5. 我现在在公网入口：配置入口端口池
+6. 我现在在利群主机：添加后端转发目标
+7. IPv4 多出口策略路由 / PBR
+8. 查看完整分步说明
+0. 返回
 ```
 
-输出 `LEIKWAN EASYTIER NETWORK` 配对码，复制整段到公网入口机。
+## 首台公网入口
 
-## 2. entry 部署入口
+1. B 执行第 1 项，修复 DNS / IPv4 优先。
+2. B 执行第 2 项，生成网络码。
+3. A 执行第 3 项，粘贴网络码并部署本机入口。
+4. A 执行第 5 项，配置入口端口池，例如 `10001-10020 -> 10.198.1.1`。
+5. B 执行第 4 项，粘贴 A 返回的 ENTRY 入口码。
+6. B 执行第 6 项，添加后端转发目标。
 
-在公网入口机：
+## 新增第二台公网入口
 
-```bash
-sudo lq pair entry-join
-```
+不要在 B 侧手工添加一行 `entries.tsv` 当作部署流程。正确流程是：
 
-菜单路径：
+1. B 执行第 2 项，脚本读取现有 `entries.tsv`，自动推荐下一个唯一 EasyTier IP 和监听端口。
+2. 新 A 执行第 3 项，粘贴 B 的网络码。默认使用网络码里的 `SUGGESTED_ENTRY_NAME`、`SUGGESTED_ENTRY_ET_IP`、`SUGGESTED_EASYTIER_PORT`。
+3. 新 A 执行第 5 项，配置本机入口端口池。
+4. B 执行第 4 项，粘贴 A 返回码。
+5. B 进入 `利群主机 -> 公网入口列表管理` 查看或测试。
+
+B 侧菜单 `公网入口列表管理` 的“手动添加公网入口（高级）”只适合明确知道 `entries.tsv` 字段含义的用户。
+
+## 后端转发目标
+
+B 侧路径：`利群主机 -> 转发目标管理`
+
+添加目标时：
+
+- 公网入口端口会显示入口端口池范围，并推荐下一个未使用端口。
+- 后端目标端口必须输入，没有旧固定默认值。
+- 如果后端目标是域名，脚本会显示当前解析 IP，并提示每次 `apply-relay` 都会重新解析。
+
+修改、删除、启用/禁用、测试单个转发目标都会先展示列表，支持编号或名称选择，空输入返回上级菜单。
+
+## A 侧和 B 侧菜单区别
+
+主菜单的“公网入口”只表示 A 机器本机管理：
 
 ```text
-主菜单 -> 快速组网（分步提示） -> 3
+1. 粘贴利群网络码，部署本机入口
+2. 配置本机入口端口池
+3. 查看本机公网入口状态
+0. 返回
 ```
 
-粘贴 relay 网络码。脚本会：
-
-- 安装或复用 EasyTier。
-- 创建 `easytier-entry-<name>.service`。
-- 监听 `tcp/8301`。
-- 保存本机入口信息。
-- 输出 `LEIKWAN EASYTIER ENTRY` 入口码。
-
-## 3. 利群主机接入入口
-
-回到利群主机：
-
-```bash
-sudo lq pair relay-join
-```
-
-菜单路径：
+B 侧多个公网入口的列表管理在：
 
 ```text
-主菜单 -> 快速组网（分步提示） -> 4
+利群主机 -> 公网入口列表管理
 ```
 
-粘贴 entry 入口码。脚本会：
+如果在 B 上误进 A 侧公网入口状态，脚本会提示当前机器是利群主机，并引导回 B 侧入口列表管理。
 
-- 写入 `entries.tsv`。
-- 重写并启动 `easytier-relay.service`。
-- 检查 EasyTier peer 和 ping。
-
-## 4. A 配置入口端口池
-
-A 公网入口机只需要配置一次：
-
-```bash
-sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
-```
-
-菜单路径：
+## 输出文件
 
 ```text
-主菜单 -> 快速组网（分步提示） -> 5
+/etc/leikwan-toolkit/entries/entries.tsv
+/etc/leikwan-toolkit/forwards/forwards.tsv
+/etc/leikwan-toolkit/forwards/resolved.tsv
+/etc/leikwan-toolkit/outputs/forward-endpoints.txt
 ```
-
-这会让 A 把 `10001-10020/tcp` 全部 DNAT 到 B 的 EasyTier IP，并保持原端口不变。小白流程建议先用这个较小范围；需要更多端口时再使用 `10000-19999`。
-
-安全组需要放行：
-
-- `tcp/8301`：EasyTier。
-- 你选择的入口端口池，例如 `tcp/10001-10020`。
-
-如果只想暴露少量端口，可以改成：
-
-```bash
-sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
-```
-
-## 5. 如需指定 CN2 / 9929，B 先配置 PBR
-
-如果后端目标需要走指定出口，在 B 利群主机先执行：
-
-```text
-主菜单 -> 快速组网（分步提示） -> 7
-```
-
-如果不需要 PBR，可以跳过本步骤。若你已经先添加了转发目标，后添加 PBR，请重新执行：
-
-```bash
-sudo lq forward apply-relay --auto-fix-route
-```
-
-## 6. B 添加转发目标
-
-推荐使用菜单或 `lq forward` 命令，不要手写 TSV。
-
-B 利群主机：
-
-```bash
-sudo lq forward add
-```
-
-菜单路径：
-
-```text
-主菜单 -> 快速组网（分步提示） -> 6
-```
-
-示例：
-
-```text
-name=service-a
-entry_port=10001
-target_host=203.0.113.30
-target_port=37592
-route_table=T_CN2
-enabled=true
-```
-
-后端目标端口没有默认值，必须输入实际后端 TCP 端口。直接回车会提示“后端目标端口不能为空”。
-
-新增、修改、删除后端都只在 B 上操作：
-
-```bash
-sudo lq forward add
-sudo lq forward edit service-a
-sudo lq forward delete service-a
-sudo lq forward apply-relay
-```
-
-## 7. 两边执行诊断
-
-A 和 B 都执行：
-
-```text
-主菜单 -> 一键诊断
-```
-
-确认：
-
-- EasyTier active
-- ping 对端成功
-- nftables DNAT 存在
-- TCP MSS clamp enabled: 1320
-
-## 8. 应用 nftables
-
-`lq entry expose-range` 会自动应用 A 侧入口端口池。`lq forward add/edit/delete` 会自动应用 B 侧 relay nftables。高级用户也可以手动进入：
-
-```text
-利群主机 -> 转发目标管理 -> 重新应用利群转发规则
-高级功能 -> nftables 规则管理
-```
-
-## 9. 查看入口清单
-
-```bash
-sudo lq
-```
-
-选择：
-
-```text
-利群主机 -> 转发目标管理 -> 生成转发入口输出
-```
-
-生成文件：
-
-```text
-/etc/leikwan-wg-toolkit/outputs/forward-endpoints.txt
-```
-
-只会显示 `public_host:entry_port`，不会生成任何后端协议链接。

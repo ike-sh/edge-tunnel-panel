@@ -5,7 +5,7 @@
 路径：
 
 ```text
-/etc/leikwan-wg-toolkit/forwards/forwards.tsv
+/etc/leikwan-toolkit/forwards/forwards.tsv
 ```
 
 格式是 **8 列 TAB 分隔**，不是空格对齐：
@@ -25,10 +25,10 @@ service-b  10002  target.example  37593                   T_9929       true     
 A 公网入口机先执行一次：
 
 ```bash
-sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
+sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
 ```
 
-这会把 `10000-19999/tcp` 全部 DNAT 到 `10.198.1.1`，保持原端口。
+这会把该端口池全部 DNAT 到 `10.198.1.1`，保持原端口。需要更大范围时可配置 `10001-19999`。
 
 B 利群主机添加后端：
 
@@ -45,6 +45,8 @@ sudo lq forward list
 sudo lq forward apply-relay
 ```
 
+修改、删除、启用/禁用、测试单个目标都会先展示列表，支持编号或名称选择。
+
 菜单入口：
 
 ```text
@@ -56,14 +58,14 @@ sudo lq forward apply-relay
 手写 `forwards.tsv` 只适合高级用户，并且只应该在 B relay 上维护。如果必须命令行写入，请用 `printf` 明确输出 TAB，不要手工用空格排版：
 
 ```bash
-sudo install -d -m 700 /etc/leikwan-wg-toolkit/forwards
+sudo install -d -m 700 /etc/leikwan-toolkit/forwards
 {
   printf '# name\tentry_port\ttarget_host\ttarget_port\tout_iface\troute_table\tenabled\tcomment\n'
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     'service-a' '10001' '203.0.113.30' '37592' 'eth1' 'T_CN2' 'true' 'main-target'
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     'service-b' '10002' 'target.example' '37593' '' 'T_9929' 'true' 'backup-target'
-} | sudo tee /etc/leikwan-wg-toolkit/forwards/forwards.tsv >/dev/null
+} | sudo tee /etc/leikwan-toolkit/forwards/forwards.tsv >/dev/null
 ```
 
 写坏成 `service-a10001203.0.113.3037592truecomment` 这类“粘在一起”的内容时，脚本会停止解析并拒绝应用 nftables，避免生成空转发表。
@@ -84,5 +86,13 @@ sudo install -d -m 700 /etc/leikwan-wg-toolkit/forwards
 域名解析结果写入：
 
 ```text
-/etc/leikwan-wg-toolkit/forwards/resolved.tsv
+/etc/leikwan-toolkit/forwards/resolved.tsv
 ```
+
+`resolved.tsv` 字段：
+
+```text
+name  entry_port  target_host  resolved_ip  target_port  out_iface  route_table  enabled  last_resolved_at  comment
+```
+
+如果 `target_host` 是域名，`apply-relay` 每次都会重新解析。解析失败时，有上次 IP 就继续使用上次 IP；没有上次 IP 则跳过该目标并 WARN。

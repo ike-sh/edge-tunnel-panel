@@ -13,13 +13,13 @@ table inet leikwan_forward
 公网入口机 A 只配置一次入口端口池：
 
 ```bash
-sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
+sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
 ```
 
 生成的核心规则是：
 
 ```text
-tcp dport 10000-19999 dnat ip to 10.198.1.1
+tcp dport 10001-10020 dnat ip to 10.198.1.1
 ```
 
 注意这里不指定 DNAT 目标端口，因此会保持原始端口：
@@ -51,7 +51,7 @@ B 侧根据 `forwards.tsv` 生成每个后端的 DNAT：
 如果 `TARGET_HOST` 是域名，会先解析为 IPv4 并写入：
 
 ```text
-/etc/leikwan-wg-toolkit/forwards/resolved.tsv
+/etc/leikwan-toolkit/forwards/resolved.tsv
 ```
 
 ## TCP MSS clamp
@@ -67,13 +67,13 @@ EasyTier/tun 叠加 A/B 两侧 NAT 时，部分后端 TCP 协议会遇到 MTU/MS
 tcp flags syn tcp option maxseg size set 1320
 ```
 
-该规则位于 `forward` hook，随 `/etc/leikwan-wg-toolkit/nft/leikwan-forward.nft` 和 `leikwan-nft-forward.service` 持久化，不需要手工创建临时 `lq_mss` 表。
+该规则位于 `forward` hook，随 `/etc/leikwan-toolkit/nft/leikwan-forward.nft` 和 `leikwan-nft-forward.service` 持久化，不需要手工创建临时 `lq_mss` 表。
 
 默认 MSS clamp 是 `1320`。如仍不稳定，可降到 `1280` 或故障兜底值 `1200`：
 
 ```bash
-sudo install -d -m 700 /etc/leikwan-wg-toolkit/nft
-printf 'TCP_MSS_CLAMP=1280\nENABLE_MSS_CLAMP=true\n' | sudo tee /etc/leikwan-wg-toolkit/nft/mss.env >/dev/null
+sudo install -d -m 700 /etc/leikwan-toolkit/nft
+printf 'TCP_MSS_CLAMP=1280\nENABLE_MSS_CLAMP=true\n' | sudo tee /etc/leikwan-toolkit/nft/mss.env >/dev/null
 ```
 
 也可以临时用环境变量覆盖：

@@ -20,6 +20,14 @@ sudo lq pair relay-init
 
 也可以复制一行 `LEIKWAN_EASYTIER_NETWORK_BASE64=...`。
 
+生成网络码前，脚本会读取现有 `entries.tsv` 并推荐唯一的公网入口名称、EasyTier IP 和 `8000-9000` 内监听端口。已有第一台入口时，第二台通常推荐：
+
+```text
+SUGGESTED_ENTRY_NAME=home
+SUGGESTED_ENTRY_ET_IP=10.198.1.3
+SUGGESTED_EASYTIER_PORT=8302
+```
+
 ## 2. A 粘贴网络码并部署入口
 
 在 `cloud-entry`：
@@ -28,7 +36,7 @@ sudo lq pair relay-init
 sudo lq pair entry-join
 ```
 
-粘贴 B 的整段网络码。脚本只会询问公网 IP 或域名，可直接回车使用自动探测值。
+粘贴 B 的整段网络码。脚本会把网络码里的 `SUGGESTED_ENTRY_NAME`、`SUGGESTED_ENTRY_ET_IP`、`SUGGESTED_EASYTIER_PORT` 作为默认值，允许修改，但会校验 EasyTier IP 非空、端口位于 `8000-9000`。
 
 完成后复制：
 
@@ -59,6 +67,4 @@ cat /root/entry.env | sudo lq pair relay-join -
 
 ## 端口说明
 
-快速配对默认输出 `SUGGESTED_EASYTIER_PORT=8301`，入口码默认输出 `EASYTIER_PORT=8301`。这是为了让 EasyTier TCP 连接落在利群推荐 `8000-9000` 白名单端口段。
-
-如果导入旧配对码发现端口是 `11010`，脚本会默认建议自动改为 `8301`。
+快速配对会从 `8301` 起自动寻找未使用端口，例如 `8301`、`8302`、`8303`。这是为了让 EasyTier TCP 连接落在利群推荐 `8000-9000` 白名单端口段。

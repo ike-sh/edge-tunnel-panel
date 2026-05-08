@@ -5,9 +5,9 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 TARGETS=(README.md docs)
-TOOL_VERSION="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' wg-toolkit.sh 2>/dev/null || true)"
-if [[ -n "$TOOL_VERSION" && -d "dist/leikwan-wg-toolkit-${TOOL_VERSION}" ]]; then
-  TARGETS+=("dist/leikwan-wg-toolkit-${TOOL_VERSION}/README.md" "dist/leikwan-wg-toolkit-${TOOL_VERSION}/docs")
+TOOL_VERSION="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' leikwan-toolkit.sh 2>/dev/null || true)"
+if [[ -n "$TOOL_VERSION" && -d "dist/leikwan-toolkit-${TOOL_VERSION}" ]]; then
+  TARGETS+=("dist/leikwan-toolkit-${TOOL_VERSION}/README.md" "dist/leikwan-toolkit-${TOOL_VERSION}/docs")
 fi
 
 FAILED=0

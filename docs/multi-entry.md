@@ -1,40 +1,48 @@
 # 多公网入口
 
-多入口用于同时管理多台 `cloud-entry`，例如云厂商入口、家宽入口或备用入口。
+多入口用于同时管理多台 A 公网入口，例如云入口、家宽入口或备用入口。
+
+## 正确流程
+
+不要把“手动添加公网入口”当成部署新 A 的小白流程。新增第二台公网入口时：
+
+1. B 执行 `快速组网 -> 2`，生成新公网入口网络码。
+2. 新 A 执行 `快速组网 -> 3`，粘贴网络码并部署本机入口。
+3. 新 A 执行 `快速组网 -> 5`，配置入口端口池。
+4. B 执行 `快速组网 -> 4`，粘贴 A 返回码。
+5. B 进入 `利群主机 -> 公网入口列表管理` 查看 / 测试。
+
+B 生成网络码时会读取 `entries.tsv` 并自动推荐唯一值：
+
+```text
+第一台：aliyun  10.198.1.2  tcp/8301
+第二台：home    10.198.1.3  tcp/8302
+第三台：entry3  10.198.1.4  tcp/8303
+```
 
 ## entries.tsv
 
 路径：
 
 ```text
-/etc/leikwan-wg-toolkit/entries/entries.tsv
+/etc/leikwan-toolkit/entries/entries.tsv
 ```
 
 格式：
 
 ```text
 entry_name  public_host      et_ip        easytier_protocol  easytier_port  weight  enabled
-aliyun      192.0.2.10       10.198.1.2   tcp                8301          100     true
-tencent     198.51.100.20    10.198.1.3   tcp                8301          50      true
-home        home.example.com 10.198.1.4   tcp                8301          20      false
+aliyun      192.0.2.10       10.198.1.2   tcp                8301           100     true
+home        home.example.com 10.198.1.3   tcp                8302           100     true
+entry3      198.51.100.20    10.198.1.4   tcp                8303           50      false
 ```
 
 要求：
 
 - `entry_name` 唯一。
 - `et_ip` 唯一。
+- `easytier_port` 位于 `8000-9000`，且唯一。
 - `public_host` 可以是 IP 或域名。
-- `enabled=false` 不参与输出和规则生成。
+- `enabled=false` 不参与输出和测试。
 
-## 权重
-
-脚本不会实现复杂代理层负载均衡，只会按 `weight` 生成推荐顺序。用户可以结合客户端、DNS 或外部负载均衡器自行切换。
-
-## 健康检查
-
-检查项：
-
-- `public_host:easytier_port` 是否可达。
-- EasyTier peer 是否可见。
-- EasyTier IP 是否可 ping。
-- 对应 `ENTRY_PORT` 是否已生成输出。
+删除、启用/禁用、修改权重、测试入口都会先展示列表，支持编号或名称选择。

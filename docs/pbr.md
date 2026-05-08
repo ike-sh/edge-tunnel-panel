@@ -1,124 +1,73 @@
 # IPv4 多出口策略路由 / PBR
 
-PBR 用来把指定 IPv4 或 CIDR 目标固定走某个出口线路，例如 `T_CN2` 或 `T_9929`。它只影响你指定的目标，不接管整机默认路由。
+PBR 用来把指定后端 IPv4 固定到某个出口线路，例如 `T_CN2` 或 `T_9929`。它只处理 IPv4，不接管整机默认路由。
 
-## 添加静态规则
-
-推荐使用菜单：
+菜单：
 
 ```text
-高级功能 -> IPv4 多出口策略路由 / PBR -> 添加静态 PBR
-```
-
-快速组网里也可以直接选择：
-
-```text
-快速组网（分步提示） -> 7. IPv4 多出口策略路由 / PBR
-```
-
-需要指定 CN2 / 9929 时，推荐先配置 PBR，再添加后端转发目标。如果先添加了转发目标，后添加 PBR，请重新执行：
-
-```bash
-sudo lq forward apply-relay --auto-fix-route
-```
-
-目标必须是合法 IPv4 或 CIDR：
-
-```text
-203.0.113.30
-203.0.113.0/24
-```
-
-单个 IPv4 会自动转为 `/32`。非法输入会被拒绝，例如：
-
-```text
-123456
-abc
-999.1.1.1
-203.0.113.10/99
-```
-
-线路组使用选择式菜单：
-
-```text
-1. CN2 -> T_CN2
-2. 9929 -> T_9929
-3. 自定义路由表
+IPv4 多出口策略路由 / PBR
+1. 添加静态 PBR
+2. 从现有转发目标添加 PBR
+3. 应用 PBR
+4. 查看 PBR
 0. 返回
 ```
 
-脚本不会让普通用户裸输线路组，避免输错后写入坏规则。
+## 静态 PBR
+
+静态 PBR 只接受 IPv4 或 CIDR：
+
+```text
+203.0.113.10
+203.0.113.0/24
+```
+
+如果输入域名，例如 `tw.example.com`，脚本会提示：
+
+```text
+[WARN] 静态 PBR 只接受 IPv4 或 CIDR。如果要给域名 / DDNS 添加 PBR，请选择“从现有转发目标添加 PBR”。
+```
+
+## 从转发目标添加 PBR
+
+当后端是 DDNS / 域名时，使用第 2 项：
+
+1. 脚本展示 enabled 转发目标列表。
+2. 输入编号或名称。
+3. 如果 `target_host` 是 IP，直接写入 `target_ip/32`。
+4. 如果 `target_host` 是域名，先解析当前 IPv4，再写入 `resolved_ip/32`。
+5. 选择线路组：`CN2 -> T_CN2`、`9929 -> T_9929` 或自定义路由表。
+
+写入规则会记录来源转发名和 `target_host`。以后 `pbr_apply` 会重新解析来源域名；IP 变化时更新对应 PBR 规则。
 
 ## 配置文件
 
-静态规则保存在：
+```text
+/etc/leikwan-toolkit/pbr/static-routes.conf
+```
+
+普通静态规则格式：
 
 ```text
-/etc/leikwan-wg-toolkit/pbr/static-routes.conf
+203.0.113.10/32 CN2
 ```
 
-格式：
+来自转发目标的动态规则格式：
 
 ```text
-203.0.113.30/32 CN2
-198.51.100.20/32 9929
-```
-
-项目使用 priority `15000`。历史配置里如果有坏目标，`--pbr-apply` 会跳过并输出 WARN，不会因为 `ip route` 报错退出。
-
-## 应用规则
-
-```bash
-sudo lq --pbr-apply
-```
-
-如果需要非交互自动修正转发目标出口，可执行：
-
-```bash
-sudo lq forward apply-relay --auto-fix-route
+203.0.113.20/32 CN2 forward Hinet tw.example.com
 ```
 
 ## 与转发目标的关系
 
-B 利群主机执行 `lq forward add` / `lq forward edit` / `lq forward apply-relay` 时，脚本会自动执行：
+`lq forward apply-relay --auto-fix-route` 会同步 `forwards.tsv` 中的 `out_iface` 和 `route_table` 元数据。
+
+- 实际出口接口和配置不一致时，脚本会 WARN，因为 nftables `oifname` 可能不匹配。
+- 出口接口一致但 route_table 元数据不同，只提示 INFO；这通常不会单独导致转发失败。
+
+应用：
 
 ```bash
-ip route get TARGET_IP
-```
-
-并解析实际出口，例如：
-
-```text
-203.0.113.30 via 10.8.0.1 dev eth1 table T_CN2 src 10.8.1.42
-```
-
-此时会推荐写入：
-
-```text
-out_iface=eth1
-route_table=T_CN2
-```
-
-如果 `forwards.tsv` 里误写为 `eth0/-`，但实际路由是 `eth1/T_CN2`，`lq forward apply-relay` 会在应用 nftables 前提示自动修正。这样可以避免 A 端口能到 B，但 B 转后端超时。
-
-## 排错
-
-如果外部访问入口端口无延迟、无响应，先在 B 上检查：
-
-```bash
-ip route get <TARGET_IP>
-nft list table inet leikwan_forward
-sudo lq --doctor
-```
-
-确认 nftables 里的 `oifname` 是否和 `ip route get` 的 `dev` 一致。脚本的 doctor 会输出：
-
-```text
-[OK] 转发目标 hk 出口一致：eth1 / T_CN2
-```
-
-或：
-
-```text
-[WARN] 转发目标 hk 出口不一致：配置 eth0/-，实际 eth1/T_CN2，可能导致节点无延迟/无法连接。
+sudo lq --pbr-apply
+sudo lq forward apply-relay --auto-fix-route
 ```
