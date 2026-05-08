@@ -4,16 +4,17 @@
 
 ## 一键安装
 
-推荐安装快捷命令：
+推荐安全安装快捷命令：
+
+```bash
+curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq
+```
+
+管道安装也支持，但该方式只安装，不会自动进入交互菜单，避免 `curl | bash` 的非 TTY stdin 触发菜单 EOF 循环：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh | bash
-```
-
-官方 GitHub 直接运行：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh)
+lq
 ```
 
 下载到本地再执行：
@@ -28,11 +29,13 @@ Release 包安装：
 curl -fsSL -o /tmp/leikwan-wg-toolkit.tar.gz https://github.com/ike-sh/leikwan-wg-toolkit/releases/latest/download/leikwan-wg-toolkit-0.4.0-alpha.tar.gz && tar -xzf /tmp/leikwan-wg-toolkit.tar.gz -C /root && cp /root/leikwan-wg-toolkit-0.4.0-alpha/wg-toolkit.sh /root/wg-toolkit.sh && chmod +x /root/wg-toolkit.sh && ln -sf /root/wg-toolkit.sh /usr/local/bin/lq && lq
 ```
 
-如果 GitHub 下载慢，可以设置镜像轮询环境变量，脚本仍会优先尝试官方 GitHub，不把第三方镜像作为唯一入口：
+如果 GitHub 下载慢，可以设置镜像轮询环境变量。脚本会按“用户自定义镜像 -> 内置镜像 -> 官方 GitHub”的顺序尝试，不把第三方镜像作为唯一入口：
 
 ```bash
-export LEIKWAN_GITHUB_MIRRORS="https://mirror1.example/https://github.com,https://mirror2.example/https://github.com"
+export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
 ```
+
+EasyTier release 包较大，安装器会下载到 `.part` 临时文件，校验文件大小和压缩包完整性后才安装。如果仍失败，先执行 DNS / IPv4 优先修复，或手动下载 EasyTier zip 后按提示输入本地路径。
 
 ## 推荐小白流程
 

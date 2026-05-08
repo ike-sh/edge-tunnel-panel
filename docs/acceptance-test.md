@@ -26,6 +26,37 @@ scripts/package-release.sh
 
 进入 `快速组网（分步提示）` 后，第一屏必须提示利群主机先执行 DNS / IPv4 优先修复。`利群主机` 菜单只包含 B 侧转发目标、PBR、IPv6 收口和状态检查。`公网入口` 菜单只包含 A 侧入口机管理、端口池和状态检查。`高级功能 -> nftables 规则管理` 在未配置规则文件或 nft table 时应显示 WARN，不应退出脚本。
 
+## bootstrap 非交互输入
+
+```bash
+echo "" | bash scripts/bootstrap.sh
+cat scripts/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh | bash
+```
+
+预期：
+
+- 非 TTY stdin 下只安装，不自动进入 `lq` 菜单。
+- 输出 `[OK] 安装完成。` 和 `请执行：lq`。
+- 不会反复打印 `请输入选项编号。`。
+- `bash scripts/bootstrap.sh --run-menu` 在非 TTY 下提示无法进入交互菜单。
+
+## EasyTier 下载器
+
+```bash
+export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+sudo lq
+```
+
+预期：
+
+- 下载日志只输出到 stderr，不会污染被捕获的 URL。
+- 不再出现 `curl: (3) bad range in URL position 3` 后跟 `[INFO]` 的情况。
+- API JSON 只用于解析 release asset，不会被当作 EasyTier zip。
+- EasyTier 大文件下载使用 `.part` 临时文件。
+- 小于 10MB 或 `unzip -t` / `tar -tzf` 失败的包会被判定失败，并继续尝试下一个镜像。
+- 下载失败时列出已尝试 URL，并提示 DNS / IPv4 修复、`LEIKWAN_GITHUB_MIRRORS` 和本地包 fallback。
+
 ## clean-room 最小流程
 
 ### B：生成网络码

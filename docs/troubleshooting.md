@@ -11,6 +11,24 @@ sudo lq --doctor --verbose
 
 普通模式只输出 `[OK] [WARN] [INFO] [FAIL]`。详细模式会显示配置文件路径等调试信息。
 
+## EasyTier 下载失败
+
+EasyTier release 包较大，GitHub 直连慢时可能出现下载到一半超时。v0.4 安装器会把大文件先写入 `.part` 临时文件，只有在文件大于 10MB 且压缩包校验通过后才安装，不会把半截文件当成成功。
+
+可先设置镜像轮询：
+
+```bash
+export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+```
+
+排查顺序：
+
+1. 执行 `DNS / IPv4 优先修复`。
+2. 重新安装 EasyTier。
+3. 如果仍失败，手动下载 EasyTier zip 后，在脚本提示时输入本地路径。
+
+下载日志如果出现每个候选 URL 都失败，脚本会列出已尝试地址，便于判断是 DNS、GitHub、镜像还是本机出口问题。
+
 ## entry 端口不通
 
 检查：

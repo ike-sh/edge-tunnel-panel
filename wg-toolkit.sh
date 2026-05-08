@@ -6,7 +6,6 @@ PROJECT_NAME="leikwan-wg-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_AUTHOR="ike-sh"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-wg-toolkit"
-PROJECT_RAW_SCRIPT="https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh"
 
 DRY_RUN=0
 VERBOSE_DOCTOR=0
@@ -46,6 +45,12 @@ ENABLE_MSS_CLAMP="true"
 EASYTIER_VERSION="${EASYTIER_VERSION:-v2.4.5}"
 EASYTIER_CORE_BIN="/usr/local/bin/easytier-core"
 EASYTIER_CLI_BIN="/usr/local/bin/easytier-cli"
+DEFAULT_GITHUB_MIRRORS=(
+  "https://gh.llkk.cc/"
+  "https://gh.ddlc.top/"
+  "https://gh-proxy.com/"
+  "https://ghproxy.net/"
+)
 FAST_PORT_RANGE_START="8000"
 FAST_PORT_RANGE_END="9000"
 DEFAULT_EASYTIER_PORT="8301"
@@ -115,7 +120,10 @@ normalize_menu_choice() {
 
 prompt_menu_choice() {
   local prompt="$1" value
-  read -r -p "$prompt" value || value=""
+  if ! read -r -p "$prompt" value; then
+    info "检测到非交互输入结束，已退出菜单。"
+    exit 0
+  fi
   normalize_menu_choice "$value"
 }
 
@@ -277,11 +285,13 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   不部署后端协议，不生成代理客户端链接。
 
 一键安装：
+  curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq
+  # 管道方式只安装，不自动进入菜单：
   curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh | bash
-  bash <(curl -fsSL ${PROJECT_RAW_SCRIPT})
+  lq
 
 如果 GitHub 下载慢，可设置：
-  export LEIKWAN_GITHUB_MIRRORS="https://mirror.example/https://github.com"
+  export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
 EOF
 }
 
@@ -470,7 +480,12 @@ easytier_asset_names() {
   esac
 }
 
-easytier_api_url() {
+dl_info() { printf '[INFO] %s\n' "$*" >&2; }
+dl_warn() { printf '[WARN] %s\n' "$*" >&2; }
+dl_ok() { printf '[OK] %s\n' "$*" >&2; }
+dl_fail() { printf '[FAIL] %s\n' "$*" >&2; }
+
+easytier_api_asset_url() {
   local version="$1" arch="$2" api re tmp result
   api="https://api.github.com/repos/EasyTier/EasyTier/releases/tags/${version}"
   case "$arch" in
@@ -479,15 +494,19 @@ easytier_api_url() {
     *) return 1 ;;
   esac
   tmp="$(mktemp)"
-  if ! download_github_asset "$api" "$tmp"; then
+  dl_info "正在获取 EasyTier release 信息：${api}"
+  if ! curl -fsSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -o "$tmp" "$api"; then
+    dl_warn "无法获取 GitHub release metadata，将使用内置候选 URL。"
     rm -f "$tmp"
     return 1
   fi
+  dl_ok "已获取 release 信息。"
   if ! result="$(jq -r --arg re "$re" '.assets[]? | select(.name | test($re; "i")) | .browser_download_url' "$tmp" | head -n 1)"; then
     rm -f "$tmp"
     return 1
   fi
   rm -f "$tmp"
+  [[ -n "$result" && "$result" != "null" ]] || return 1
   printf '%s\n' "$result"
 }
 
@@ -528,17 +547,29 @@ mirror_url_for() {
 }
 
 github_url_candidates() {
-  local raw_url="$1" mirrors mirror
-  local -a mirror_list=()
-  printf '%s\n' "$raw_url"
+  local raw_url="$1" mirrors mirror candidate seen_line
+  local -a mirror_list=() seen=()
   mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}"
   mirrors="${mirrors//;/,}"
-  IFS=',' read -r -a mirror_list <<<"$mirrors"
+  if [[ -n "$mirrors" ]]; then
+    IFS=',' read -r -a mirror_list <<<"$mirrors"
+  else
+    mirror_list=("${DEFAULT_GITHUB_MIRRORS[@]}")
+  fi
   for mirror in "${mirror_list[@]}"; do
     mirror="$(trim_spaces "$mirror")"
     [[ -n "$mirror" ]] || continue
-    mirror_url_for "$mirror" "$raw_url"
+    candidate="$(mirror_url_for "$mirror" "$raw_url")"
+    for seen_line in "${seen[@]}"; do
+      [[ "$seen_line" == "$candidate" ]] && continue 2
+    done
+    seen+=("$candidate")
+    printf '%s\n' "$candidate"
   done
+  for seen_line in "${seen[@]}"; do
+    [[ "$seen_line" == "$raw_url" ]] && return 0
+  done
+  printf '%s\n' "$raw_url"
 }
 
 download_with_fallback() {
@@ -548,22 +579,62 @@ download_with_fallback() {
   rm -f "$tmp"
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
-    info "正在尝试下载：${candidate}"
+    dl_info "正在尝试下载：${candidate}"
     if curl -fL --retry 1 --connect-timeout "$timeout" --max-time "$timeout" -o "$tmp" "$candidate"; then
       mv -f "$tmp" "$dest_file"
-      ok "下载成功：${candidate}"
+      dl_ok "下载成功：${candidate}"
       return 0
     fi
-    warn "下载失败，尝试下一个镜像"
+    dl_warn "下载失败，尝试下一个地址。"
   done < <(github_url_candidates "$raw_url")
   rm -f "$tmp"
-  warn "全部下载地址均失败：${raw_url}"
+  dl_warn "全部下载地址均失败：${raw_url}"
   return 1
 }
 
 download_github_asset() {
   local raw_url="$1" dest_file="$2"
   download_with_fallback "$raw_url" "$dest_file"
+}
+
+archive_integrity_ok() {
+  local archive="$1"
+  unzip -tqq "$archive" >/dev/null 2>&1 || tar -tzf "$archive" >/dev/null 2>&1
+}
+
+download_large_archive_checked() {
+  local raw_url="$1" dest_file="$2" candidate part size_mb
+  part="${dest_file}.part"
+  rm -f "$part"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    EASYTIER_DOWNLOAD_ATTEMPTS+=("$candidate")
+    dl_info "正在下载 EasyTier：${candidate}"
+    if curl -fL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 3 --retry-connrefused -C - -o "$part" "$candidate"; then
+      if [[ ! -s "$part" ]]; then
+        dl_warn "下载结果为空，继续尝试下一个地址。"
+        rm -f "$part"
+        continue
+      fi
+      if (( $(wc -c <"$part") < 10485760 )); then
+        dl_warn "下载文件小于 10MB，判定为坏包，继续尝试下一个地址。"
+        rm -f "$part"
+        continue
+      fi
+      if ! archive_integrity_ok "$part"; then
+        dl_warn "压缩包完整性校验失败，继续尝试下一个地址。"
+        rm -f "$part"
+        continue
+      fi
+      mv -f "$part" "$dest_file"
+      size_mb="$(du -m "$dest_file" | awk '{print $1}')"
+      dl_ok "EasyTier 下载成功：${dest_file}，大小 ${size_mb} MB"
+      return 0
+    fi
+    dl_warn "下载失败，尝试下一个地址。"
+  done < <(github_url_candidates "$raw_url")
+  rm -f "$part"
+  return 1
 }
 
 choose_local_easytier_archive() {
@@ -581,36 +652,63 @@ choose_local_easytier_archive() {
     echo "0. 手动输入其它路径 / 取消"
     choice="$(prompt_menu_choice "请选择：")"
     if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#files[@]} )); then
-      cp -a "${files[$((choice - 1))]}" "$dest"
+      path="${files[$((choice - 1))]}"
+      if (( $(wc -c <"$path") < 10485760 )); then
+        fail "本地 EasyTier 包小于 10MB，疑似半截文件：${path}"
+        return 1
+      fi
+      if ! archive_integrity_ok "$path"; then
+        fail "本地 EasyTier 包完整性校验失败：${path}"
+        return 1
+      fi
+      cp -a "$path" "$dest"
       return 0
     fi
   fi
   path="$(prompt_value "请输入本地 EasyTier zip/tar.gz 路径，留空取消" "")"
   [[ -n "$path" && -f "$path" ]] || return 1
+  if (( $(wc -c <"$path") < 10485760 )); then
+    fail "本地 EasyTier 包小于 10MB，疑似半截文件：${path}"
+    return 1
+  fi
+  if ! archive_integrity_ok "$path"; then
+    fail "本地 EasyTier 包完整性校验失败：${path}"
+    return 1
+  fi
   cp -a "$path" "$dest"
 }
 
 download_easytier_archive() {
-  local dest="$1" version="$EASYTIER_VERSION" arch api_url release_base name url candidate
-  local urls=() attempted=()
+  local dest="$1" version="$EASYTIER_VERSION" arch api_url release_base name url seen_url
+  local urls=()
+  EASYTIER_DOWNLOAD_ATTEMPTS=()
   arch="$(easytier_arch_family)" || return 1
   release_base="https://github.com/EasyTier/EasyTier/releases/download/${version}"
-  api_url="$(easytier_api_url "$version" "$arch" || true)"
+  api_url="$(easytier_api_asset_url "$version" "$arch" || true)"
   [[ -n "$api_url" && "$api_url" != "null" ]] && urls+=("$api_url")
   while IFS= read -r name; do
-    [[ -n "$name" ]] && urls+=("${release_base}/${name}")
+    [[ -n "$name" ]] || continue
+    url="${release_base}/${name}"
+    for seen_url in "${urls[@]}"; do
+      [[ "$seen_url" == "$url" ]] && continue 2
+    done
+    urls+=("$url")
   done < <(easytier_asset_names "$version" "$arch")
   for url in "${urls[@]}"; do
-    while IFS= read -r candidate; do
-      attempted+=("$candidate")
-    done < <(github_url_candidates "$url")
-    if download_github_asset "$url" "$dest"; then
-      ok "EasyTier 下载成功。"
+    if download_large_archive_checked "$url" "$dest"; then
+      dl_ok "EasyTier 下载和校验完成。"
       return 0
     fi
   done
-  warn "EasyTier 自动下载失败，已尝试以下 URL："
-  printf '  %s\n' "${attempted[@]}" >&2
+  dl_fail "EasyTier 自动下载失败。"
+  if ((${#EASYTIER_DOWNLOAD_ATTEMPTS[@]} > 0)); then
+    printf '已尝试：\n' >&2
+    printf '  %s\n' "${EASYTIER_DOWNLOAD_ATTEMPTS[@]}" >&2
+  fi
+  printf '%s\n' "解决方式：" >&2
+  printf '%s\n' "- 先执行 DNS / IPv4 优先修复" >&2
+  printf '%s\n' "- 设置 LEIKWAN_GITHUB_MIRRORS" >&2
+  printf '%s\n' "- 手动下载 EasyTier zip 后输入本地路径" >&2
   choose_local_easytier_archive "$dest" || { fail "未提供可用 EasyTier 安装包。"; return 1; }
 }
 
@@ -627,7 +725,7 @@ archive_listing() {
   local archive="$1"
   case "$archive" in
     *.zip) unzip -l "$archive" 2>/dev/null | sed -n '1,50p' ;;
-    *) tar -tzf "$archive" 2>/dev/null | sed -n '1,50p' ;;
+    *) tar -tzf "$archive" 2>/dev/null | sed -n '1,50p' || unzip -l "$archive" 2>/dev/null | sed -n '1,50p' ;;
   esac
 }
 
@@ -640,7 +738,7 @@ install_easytier_binary() {
   fi
   install_packages curl jq ca-certificates tar unzip
   local tmpdir archive core cli list
-  confirm_summary "EasyTier 安装摘要" "版本：${EASYTIER_VERSION}\n目标：${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}\n下载：官方 GitHub + LEIKWAN_GITHUB_MIRRORS 镜像轮询 + 本地包 fallback" || return 0
+  confirm_summary "EasyTier 安装摘要" "版本：${EASYTIER_VERSION}\n目标：${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}\n下载：LEIKWAN_GITHUB_MIRRORS / 内置镜像 / 官方 GitHub 轮询 + 本地包 fallback" || return 0
   (( DRY_RUN == 1 )) && return 0
   tmpdir="$(mktemp -d)"
   archive="${tmpdir}/easytier.pkg"
@@ -2241,7 +2339,13 @@ doctor_cloud() {
   local entry_ip port iface service_name relay_ip start end
   local _public_host _et_ip _proto _port _weight
   entry_ip="$(current_entry_et_ip)"
-  if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then report OK "EasyTier binary 存在"; else report WARN "EasyTier binary 不存在"; fi
+  if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then
+    report OK "EasyTier binary 存在"
+    report INFO "easytier-core: ${EASYTIER_CORE_BIN}"
+    report INFO "easytier-cli: ${EASYTIER_CLI_BIN}"
+  else
+    report WARN "EasyTier binary 不存在，请先安装 EasyTier"
+  fi
   while IFS=$'\t' read -r name _public_host _et_ip _proto _port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
     service_name="$(entry_service_name "$name")"
@@ -2282,7 +2386,13 @@ doctor_relay() {
   report OK "角色：leikwan-relay"
   local iface entries forwards name public_host et_ip proto port _weight enabled peer_text target_ip target_port
   local entry_port target_host out_iface route_table comment
-  if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then report OK "EasyTier binary 存在"; else report WARN "EasyTier binary 不存在"; fi
+  if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then
+    report OK "EasyTier binary 存在"
+    report INFO "easytier-core: ${EASYTIER_CORE_BIN}"
+    report INFO "easytier-cli: ${EASYTIER_CLI_BIN}"
+  else
+    report WARN "EasyTier binary 不存在，请先安装 EasyTier"
+  fi
   if systemctl is-active --quiet "${EASYTIER_RELAY_SERVICE_NAME}.service"; then report OK "easytier-relay.service active"; else report WARN "easytier-relay.service 未运行"; fi
   iface="$(et_iface_by_ip "$RELAY_ET_IP")"
   if [[ -n "$iface" ]]; then report OK "Relay EasyTier IP ${RELAY_ET_IP} 在接口 ${iface}"; else report WARN "未检测到 Relay EasyTier IP：${RELAY_ET_IP}"; fi
@@ -2542,6 +2652,110 @@ legacy_cleanup_menu() {
   done
 }
 
+safe_stop_disable_service() {
+  local svc="$1"
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl disable --now "$svc" 2>/dev/null || true
+}
+
+safe_rm_file() {
+  local path
+  for path in "$@"; do
+    rm -f "$path" 2>/dev/null || true
+  done
+}
+
+safe_rm_dir() {
+  local path
+  for path in "$@"; do
+    rm -rf "$path" 2>/dev/null || true
+  done
+}
+
+cleanup_easytier_entry_units() {
+  local svc unit
+  if command -v systemctl >/dev/null 2>&1; then
+    while IFS= read -r svc; do
+      [[ -n "$svc" ]] || continue
+      safe_stop_disable_service "$svc"
+      safe_rm_file "/etc/systemd/system/${svc}"
+    done < <(systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | awk '{print $1}' || true)
+  fi
+  for unit in /etc/systemd/system/easytier-entry-*.service; do
+    [[ -e "$unit" ]] || continue
+    svc="$(basename "$unit")"
+    safe_stop_disable_service "$svc"
+    safe_rm_file "$unit"
+  done
+}
+
+cleanup_leikwan_policy_routes() {
+  local table table_id pref tmp
+  for table in T_CN2 T_9929; do
+    if command -v ip >/dev/null 2>&1; then
+      ip route flush table "$table" 2>/dev/null || true
+      table_id=""
+      if [[ -f "$PBR_RT_TABLES" ]]; then
+        table_id="$(awk -v t="$table" '$2==t {print $1; exit}' "$PBR_RT_TABLES" 2>/dev/null || true)"
+      fi
+      [[ -n "$table_id" ]] && ip route flush table "$table_id" 2>/dev/null || true
+      while IFS= read -r pref; do
+        [[ -n "$pref" ]] || continue
+        ip rule del pref "$pref" table "$table" 2>/dev/null || true
+        [[ -n "$table_id" ]] && ip rule del pref "$pref" table "$table_id" 2>/dev/null || true
+      done < <(ip rule show 2>/dev/null | awk -v t="$table" '$0 ~ ("lookup " t) {gsub(":","",$1); print $1}' || true)
+      if [[ -n "$table_id" ]]; then
+        while IFS= read -r pref; do
+          [[ -n "$pref" ]] || continue
+          ip rule del pref "$pref" table "$table_id" 2>/dev/null || true
+        done < <(ip rule show 2>/dev/null | awk -v t="$table_id" '$0 ~ ("lookup " t "($| )") {gsub(":","",$1); print $1}' || true)
+      fi
+    fi
+  done
+  if [[ -f "$PBR_RT_TABLES" ]]; then
+    tmp="$(mktemp)"
+    awk '$2!="T_CN2" && $2!="T_9929" {print}' "$PBR_RT_TABLES" >"$tmp" 2>/dev/null || true
+    if [[ -s "$tmp" ]]; then
+      cat "$tmp" >"$PBR_RT_TABLES" 2>/dev/null || true
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+}
+
+uninstall_check_line() {
+  local label="$1" kind="$2" value="$3"
+  case "$kind" in
+    file)
+      if [[ ! -e "$value" ]]; then
+        ok "${label}：已清理"
+      else
+        warn "${label}：仍存在 ${value}"
+      fi
+      ;;
+    dir)
+      if [[ ! -e "$value" ]]; then
+        ok "${label}：已清理"
+      else
+        warn "${label}：仍存在 ${value}"
+      fi
+      ;;
+    service)
+      if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files --type=service --no-legend "$value" 2>/dev/null | grep -q .; then
+        warn "${label}：服务文件仍存在 ${value}"
+      else
+        ok "${label}：已清理"
+      fi
+      ;;
+    nft)
+      if command -v nft >/dev/null 2>&1 && nft list table inet "$value" >/dev/null 2>&1; then
+        warn "${label}：nft table 仍存在 inet ${value}"
+      else
+        ok "${label}：已清理"
+      fi
+      ;;
+  esac
+}
+
 uninstall_new_mode() {
   need_root
   echo
@@ -2555,23 +2769,47 @@ uninstall_new_mode() {
   echo "- ${NFT_RULE_FILE} / ${NFT_SERVICE}"
   prompt_yes_no "第一次确认：继续卸载全部？" "N" || return 0
   prompt_yes_no "第二次确认：确实删除本脚本生成的组件？" "N" || return 0
+
+  set +e
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl disable --now "$EASYTIER_RELAY_SERVICE_NAME" "$NFT_SERVICE_NAME" 2>/dev/null || true
-    systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | awk '{print $1}' | while read -r svc; do
-      systemctl disable --now "$svc" 2>/dev/null || true
-      rm -f "/etc/systemd/system/${svc}"
-    done
+    safe_stop_disable_service "$EASYTIER_RELAY_SERVICE_NAME"
+    safe_stop_disable_service "$NFT_SERVICE_NAME"
+    safe_stop_disable_service "leikwan-mss-clamp.service"
+    cleanup_easytier_entry_units
   else
     warn "未找到 systemctl，跳过 systemd 服务停止。"
   fi
-  rm -f "$EASYTIER_RELAY_SERVICE" "$NFT_SERVICE"
+  safe_rm_file "$EASYTIER_RELAY_SERVICE" "$NFT_SERVICE" "/etc/systemd/system/leikwan-mss-clamp.service"
   if command -v nft >/dev/null 2>&1; then
     nft delete table inet leikwan_forward 2>/dev/null || true
+    nft delete table inet lq_mss 2>/dev/null || true
   fi
-  rm -f "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN" "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER"
-  rm -rf "$STATE_DIR"
+  cleanup_leikwan_policy_routes
+  safe_rm_file "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN" "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER" \
+    "/root/wg-toolkit.sh" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF" "$LOG_FILE"
+  safe_rm_dir "$STATE_DIR" "$BACKUP_DIR"
   command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
-  ok "卸载完成。"
+  set -e
+
+  echo
+  echo "${BOLD}卸载检查结果${RESET}"
+  uninstall_check_line "nftables 转发表" nft leikwan_forward
+  uninstall_check_line "旧 MSS 临时表" nft lq_mss
+  uninstall_check_line "EasyTier relay 服务" service "${EASYTIER_RELAY_SERVICE_NAME}.service"
+  uninstall_check_line "nft 持久化服务" service "${NFT_SERVICE_NAME}.service"
+  uninstall_check_line "MSS clamp 旧服务" service "leikwan-mss-clamp.service"
+  uninstall_check_line "EasyTier core" file "$EASYTIER_CORE_BIN"
+  uninstall_check_line "EasyTier cli" file "$EASYTIER_CLI_BIN"
+  uninstall_check_line "快捷命令 lq" file "$SHORTCUT_LQ"
+  uninstall_check_line "快捷命令 LQ" file "$SHORTCUT_LQ_UPPER"
+  uninstall_check_line "主脚本" file "/root/wg-toolkit.sh"
+  uninstall_check_line "配置目录" dir "$STATE_DIR"
+  uninstall_check_line "备份目录" dir "$BACKUP_DIR"
+  uninstall_check_line "日志文件" file "$LOG_FILE"
+  uninstall_check_line "IPv4 转发 sysctl" file "$FORWARD_SYSCTL"
+  uninstall_check_line "BBR sysctl" file "$BBR_SYSCTL_CONF"
+  uninstall_check_line "DNS resolved 配置" file "$DNS_RESOLVED_CONF"
+  ok "卸载流程已完成；如上方有 WARN，表示对应对象仍存在，需要按提示手动检查。"
 }
 
 backup_snapshot() {

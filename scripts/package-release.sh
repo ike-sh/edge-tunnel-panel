@@ -44,11 +44,12 @@ fi
 echo "Package: ${PACKAGE_PATH}"
 echo "SHA256:  ${SHA_PATH}"
 echo
-echo "官方 GitHub 一键运行："
-echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh)"
+echo "安全一键安装："
+echo "curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq"
 echo
-echo "安装快捷命令："
+echo "管道安装（只安装，不自动进菜单）："
 echo "curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh | bash"
+echo "lq"
 echo
 echo "下载到本地再执行："
 echo "curl -fsSL -o /root/wg-toolkit.sh https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh && chmod +x /root/wg-toolkit.sh && ln -sf /root/wg-toolkit.sh /usr/local/bin/lq && lq"

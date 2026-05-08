@@ -5,11 +5,39 @@ PROJECT_GITHUB="https://github.com/ike-sh/leikwan-wg-toolkit"
 RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh"
 INSTALL_PATH="/root/wg-toolkit.sh"
 SHORTCUT_PATH="/usr/local/bin/lq"
+RUN_MENU_MODE="auto"
+DEFAULT_GITHUB_MIRRORS=(
+  "https://gh.llkk.cc/"
+  "https://gh.ddlc.top/"
+  "https://gh-proxy.com/"
+  "https://ghproxy.net/"
+)
 
 ok() { echo "[OK] $*"; }
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 fail() { echo "[FAIL] $*" >&2; }
+
+usage() {
+  cat <<'EOF'
+Usage: bash bootstrap.sh [--run-menu|--no-run-menu]
+
+--run-menu     安装后进入 lq 菜单；仅在 stdin 是 TTY 时生效
+--no-run-menu  只安装，不进入菜单
+EOF
+}
+
+parse_args() {
+  while (($# > 0)); do
+    case "$1" in
+      --run-menu) RUN_MENU_MODE="run" ;;
+      --no-run-menu) RUN_MENU_MODE="no-run" ;;
+      --help|-h) usage; exit 0 ;;
+      *) fail "未知参数：$1"; usage; exit 1 ;;
+    esac
+    shift
+  done
+}
 
 trim_spaces() {
   local value="$1"
@@ -48,44 +76,51 @@ mirror_url_for() {
 }
 
 github_url_candidates() {
-  local raw_url="$1" mirrors mirror
-  local -a mirror_list=()
-  printf '%s\n' "$raw_url"
+  local raw_url="$1" mirrors mirror candidate seen_line
+  local -a mirror_list=() seen=()
   mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}"
   mirrors="${mirrors//;/,}"
-  IFS=',' read -r -a mirror_list <<<"$mirrors"
+  if [[ -n "$mirrors" ]]; then
+    IFS=',' read -r -a mirror_list <<<"$mirrors"
+  else
+    mirror_list=("${DEFAULT_GITHUB_MIRRORS[@]}")
+  fi
   for mirror in "${mirror_list[@]}"; do
     mirror="$(trim_spaces "$mirror")"
     [[ -n "$mirror" ]] || continue
-    mirror_url_for "$mirror" "$raw_url"
+    candidate="$(mirror_url_for "$mirror" "$raw_url")"
+    for seen_line in "${seen[@]}"; do
+      [[ "$seen_line" == "$candidate" ]] && continue 2
+    done
+    seen+=("$candidate")
+    printf '%s\n' "$candidate"
   done
+  for seen_line in "${seen[@]}"; do
+    [[ "$seen_line" == "$raw_url" ]] && return 0
+  done
+  printf '%s\n' "$raw_url"
 }
 
 download_with_fallback() {
-  local raw_url="$1" dest_file="$2" candidate tmp timeout
-  timeout="${LEIKWAN_DOWNLOAD_TIMEOUT:-15}"
+  local raw_url="$1" dest_file="$2" candidate tmp
   tmp="${dest_file}.tmp.$$"
   rm -f "$tmp"
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
     info "正在尝试下载：${candidate}"
-    if curl -fL --retry 1 --connect-timeout "$timeout" --max-time "$timeout" -o "$tmp" "$candidate"; then
+    if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 120 -o "$tmp" "$candidate"; then
       mv -f "$tmp" "$dest_file"
       ok "下载成功：${candidate}"
       return 0
     fi
-    warn "下载失败，尝试下一个镜像"
+    warn "下载失败，尝试下一个地址。"
   done < <(github_url_candidates "$raw_url")
   rm -f "$tmp"
   fail "全部下载地址均失败：${raw_url}"
   return 1
 }
 
-main() {
-  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-    fail "请使用 root 运行，例如：curl -fsSL ${PROJECT_GITHUB}/raw/main/scripts/bootstrap.sh | sudo bash"
-    exit 1
-  fi
+install_tool() {
   command -v curl >/dev/null 2>&1 || { fail "缺少 curl，请先安装 curl。"; exit 1; }
   local tmp
   tmp="$(mktemp)"
@@ -93,10 +128,38 @@ main() {
   install -m 755 "$tmp" "$INSTALL_PATH"
   rm -f "$tmp"
   ln -sf "$INSTALL_PATH" "$SHORTCUT_PATH"
-  ok "已安装：${INSTALL_PATH}"
+  ok "安装完成。"
+  ok "脚本：${INSTALL_PATH}"
   ok "快捷命令：${SHORTCUT_PATH}"
-  info "现在进入 Leikwan Toolkit 菜单。"
-  exec bash "$INSTALL_PATH" "$@"
+}
+
+maybe_run_menu() {
+  case "$RUN_MENU_MODE" in
+    no-run)
+      echo "请执行：lq"
+      return 0
+      ;;
+    run)
+      if [[ -t 0 ]]; then
+        exec bash "$INSTALL_PATH"
+      fi
+      warn "当前不是交互终端，无法进入菜单，请手动执行：lq"
+      return 0
+      ;;
+    auto)
+      echo "请执行：lq"
+      ;;
+  esac
+}
+
+main() {
+  parse_args "$@"
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    fail "请使用 root 运行，例如：curl -fsSL ${PROJECT_GITHUB}/raw/main/scripts/bootstrap.sh | sudo bash"
+    exit 1
+  fi
+  install_tool
+  maybe_run_menu
 }
 
 main "$@"
