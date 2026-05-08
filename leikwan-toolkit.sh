@@ -1393,7 +1393,7 @@ select_entry_name() {
 
 display_forwards() {
   local only_enabled="${1:-all}" resolved_source="/dev/null"
-  ensure_tsv_files
+  ensure_tsv_files >/dev/null
   resolve_forwards >/dev/null 2>&1 || true
   [[ -f "$RESOLVED_TSV" ]] && resolved_source="$RESOLVED_TSV"
   printf '%s\n' "编号  名称        入口端口  后端目标                                      当前解析 IP        出口接口  路由表     启用       备注"
@@ -1412,22 +1412,34 @@ display_forwards() {
   ' "$resolved_source" "$FORWARDS_TSV"
 }
 
+display_forward_selection_list() {
+  local only_enabled="${1:-all}" title="${2:-当前转发目标：}"
+  echo
+  echo "$title"
+  display_forwards "$only_enabled"
+  echo
+}
+
 select_forward_name() {
-  local only_enabled="${1:-all}" choice name count
-  ensure_tsv_files
+  local only_enabled="${1:-all}" title="${2:-当前转发目标：}" choice name count
+  ensure_tsv_files >/dev/null
   count="$(forwards_rows | awk -F'\t' -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} {c++} END{print c+0}')"
   if (( count == 0 )); then
-    warn "当前没有转发目标。"
+    if [[ "$only_enabled" == "enabled" ]]; then
+      warn "当前没有启用的转发目标，请先添加或启用转发目标。" >&2
+    else
+      warn "当前没有转发目标。" >&2
+    fi
     return 1
   fi
-  display_forwards "$only_enabled"
+  display_forward_selection_list "$only_enabled" "$title" >&2
   while true; do
     choice="$(prompt_value "请输入编号或名称，直接回车返回")"
     [[ -z "$choice" ]] && return 1
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
       name="$(forwards_rows | awk -F'\t' -v idx="$choice" -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} {i++} i==idx {print $1; exit}')"
       if [[ -z "$name" ]]; then
-        warn "编号无效，请重新选择。"
+        warn "编号无效，请重新选择。" >&2
         continue
       fi
     else
@@ -1437,7 +1449,7 @@ select_forward_name() {
       printf '%s' "$name"
       return 0
     fi
-    warn "转发不存在：${choice}"
+    warn "转发不存在：${choice}" >&2
   done
 }
 
@@ -3148,11 +3160,9 @@ pbr_add_static() {
 
 pbr_add_from_forward() {
   need_root_unless_dry_run
-  ensure_tsv_files
+  ensure_tsv_files >/dev/null
   local name row target_host target_ip group cidr
-  echo
-  echo "可用于 PBR 的转发目标（仅 enabled）："
-  name="$(select_forward_name enabled)" || return 0
+  name="$(select_forward_name enabled "可用于 PBR 的转发目标：")" || return 0
   row="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print; exit}')"
   [[ -n "$row" ]] || { warn "转发目标不存在：${name}"; return 0; }
   target_host="$(awk -F'\t' '{print $3}' <<<"$row")"
@@ -3945,7 +3955,7 @@ forwards_menu() {
       4) list_forwards ;;
       5) set_forward_enabled ;;
       6) apply_nft_rules "leikwan-relay" || warn "利群转发 nftables 规则未应用成功。" ;;
-      7) display_forwards enabled; resolve_forwards ;;
+      7) display_forward_selection_list all "当前转发目标："; resolve_forwards ;;
       8) test_forward ;;
       9) import_forwards_tsv ;;
       10) export_forwards_tsv ;;
