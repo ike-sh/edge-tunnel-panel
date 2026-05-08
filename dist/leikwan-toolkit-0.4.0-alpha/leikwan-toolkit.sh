@@ -1318,11 +1318,35 @@ entries_rows_sorted() {
 
 forwards_rows() {
   [[ -f "$FORWARDS_TSV" ]] || return 0
-  awk -F'\t' 'NF && $1 !~ /^#/ {print}' "$FORWARDS_TSV"
+  # Normalize forwards.tsv rows:
+  # - tolerate CRLF / trailing spaces
+  # - tolerate missing comment (NF>=7)
+  # - tolerate extra columns (NF>8)
+  # - always output 8 tab-separated fields
+  awk -F'\t' '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    { gsub(/\r/, "") }
+    NF == 0 { next }
+    $1 ~ /^#/ { next }
+    {
+      name=trim($1)
+      entry_port=trim($2)
+      target_host=trim($3)
+      target_port=trim($4)
+      out_iface=trim($5)
+      route_table=trim($6)
+      enabled=trim($7)
+      comment=""
+      if (NF >= 8) comment=$8
+      comment=trim(comment)
+      if (name=="" || entry_port=="" || target_host=="" || target_port=="" || enabled=="") next
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", name, entry_port, target_host, target_port, out_iface, route_table, enabled, comment
+    }
+  ' "$FORWARDS_TSV"
 }
 
 forwards_rows_usv() {
-  forwards_rows | awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} NF>=8 {print $1,$2,$3,$4,$5,$6,$7,$8}'
+  forwards_rows | awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} NF>=7 {print $1,$2,$3,$4,$5,$6,$7,$8}'
 }
 
 last_resolved_ip_for_forward() {
@@ -1372,20 +1396,18 @@ display_forwards() {
   ensure_tsv_files
   resolve_forwards >/dev/null 2>&1 || true
   [[ -f "$RESOLVED_TSV" ]] && resolved_source="$RESOLVED_TSV"
-  printf '%s\n' "编号  名称        入口端口  后端目标                                      出口接口  路由表     启用       备注"
+  printf '%s\n' "编号  名称        入口端口  后端目标                                      当前解析 IP        出口接口  路由表     启用       备注"
   awk -F'\t' -v only="$only_enabled" '
     NR==FNR {
       if ($1 !~ /^#/ && NF >= 4) ip[$1]=$4
       next
     }
-    $1 ~ /^#/ || NF < 8 {next}
+    $1 ~ /^#/ || NF < 7 {next}
     only=="enabled" && $7!="true" {next}
     {
-      target=$3
-      if (ip[$1] != "" && ip[$1] != $3) {
-        target=sprintf("%s(%s)", $3, ip[$1])
-      }
-      printf "%d) %-10s %-8s -> %-43s %-8s %-8s %-9s %s\n", ++i, $1, $2, target ":" $4, ($5!="" ? $5 : "-"), ($6!="" ? $6 : "-"), ($7=="true" ? "enabled" : "disabled"), $8
+      resolved=(ip[$1] != "" ? ip[$1] : "-")
+      comment=(NF>=8 && $8!="" ? $8 : "-")
+      printf "%d) %-10s %-8s -> %-43s %-16s %-8s %-8s %-9s %s\n", ++i, $1, $2, $3 ":" $4, resolved, ($5!="" ? $5 : "-"), ($6!="" ? $6 : "-"), ($7=="true" ? "enabled" : "disabled"), comment
     }
   ' "$resolved_source" "$FORWARDS_TSV"
 }
@@ -1404,6 +1426,10 @@ select_forward_name() {
     [[ -z "$choice" ]] && return 1
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
       name="$(forwards_rows | awk -F'\t' -v idx="$choice" -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} {i++} i==idx {print $1; exit}')"
+      if [[ -z "$name" ]]; then
+        warn "编号无效，请重新选择。"
+        continue
+      fi
     else
       name="$(forwards_rows | awk -F'\t' -v n="$choice" -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} $1==n {print $1; exit}')"
     fi
@@ -1411,7 +1437,7 @@ select_forward_name() {
       printf '%s' "$name"
       return 0
     fi
-    warn "转发目标不存在或编号无效：${choice}"
+    warn "转发不存在：${choice}"
   done
 }
 
@@ -1480,8 +1506,8 @@ validate_forwards_tsv() {
     line="${line%$'\r'}"
     [[ -z "$line" || "$line" == \#* ]] && continue
     nf="$(awk -F'\t' '{print NF}' <<<"$line")"
-    if [[ "$nf" != "8" ]]; then
-      fail "第 ${line_no} 行字段数错误：期望 8 列，实际 ${nf} 列。"
+    if (( nf < 7 )); then
+      fail "第 ${line_no} 行字段数错误：至少 7 列（备注可为空），实际 ${nf} 列。"
       echo "当前行内容：${line}" >&2
       echo "请使用 TAB 分隔字段；建议通过菜单 添加转发目标 生成，不要用空格对齐。" >&2
       bad=1
@@ -1492,6 +1518,8 @@ validate_forwards_tsv() {
     target_host="$(awk -F'\t' '{print $3}' <<<"$line")"
     target_port="$(awk -F'\t' '{print $4}' <<<"$line")"
     enabled="$(awk -F'\t' '{print $7}' <<<"$line")"
+    name="$(normalize_menu_choice "$name")"
+    enabled="$(normalize_menu_choice "$enabled")"
     if [[ -z "$name" || -z "$entry_port" || -z "$target_host" || -z "$target_port" || -z "$enabled" ]]; then
       fail "第 ${line_no} 行存在必填字段为空。"
       echo "当前行内容：${line}" >&2
@@ -2389,7 +2417,12 @@ delete_forward() {
   awk -F'\t' -v n="$name" '$1==n {next} {print}' "$FORWARDS_TSV" >"$tmp"
   write_file "$FORWARDS_TSV" "$(cat "$tmp")" 600
   rm -f "$tmp"
-  apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
+  ok "已删除转发目标：${name}"
+  if apply_nft_rules "leikwan-relay"; then
+    ok "已重新应用转发规则"
+  else
+    warn "重新应用转发规则失败；你可以稍后执行：lq forward apply-relay"
+  fi
 }
 
 set_forward_enabled() {
@@ -2402,7 +2435,12 @@ set_forward_enabled() {
   row="$(forwards_rows | awk -F'\t' -v n="$name" -v e="$enabled" 'BEGIN{OFS="\t"} $1==n {$7=e; print; found=1} END{exit !found}')"
   [[ -n "$row" ]] || { warn "转发不存在。"; return 0; }
   replace_forward_row "$row"
-  apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
+  ok "已更新转发目标：${name} enabled=${enabled}"
+  if apply_nft_rules "leikwan-relay"; then
+    ok "已重新应用转发规则"
+  else
+    warn "重新应用转发规则失败；你可以稍后执行：lq forward apply-relay"
+  fi
 }
 
 edit_forward() {
@@ -2430,12 +2468,19 @@ edit_forward() {
   new_row="${old_name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
   confirm_summary "修改转发目标摘要" "name=${old_name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
   replace_forward_row "$new_row"
-  apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
+  ok "已修改转发目标：${old_name}"
+  if apply_nft_rules "leikwan-relay"; then
+    ok "已重新应用转发规则"
+  else
+    warn "重新应用转发规则失败；你可以稍后执行：lq forward apply-relay"
+  fi
 }
 
 test_forward() {
-  local name row _entry_port target_host target_ip target_port _out_iface _route_table enabled _last_resolved_at _comment
-  name="$(select_forward_name)" || return 0
+  local name="${1:-}" row _entry_port target_host target_ip target_port _out_iface _route_table enabled _last_resolved_at _comment
+  [[ -n "$name" ]] || name="$(select_forward_name)" || return 0
+  name="$(safe_name "$name")"
+  forward_exists "$name" || { warn "转发不存在：${name}"; return 0; }
   resolve_forwards || return 1
   row="$(resolved_rows | awk -F'\t' -v n="$name" '$1==n {print; found=1} END{exit !found}')"
   [[ -n "$row" ]] || { warn "转发不存在。"; return 0; }
@@ -2532,7 +2577,7 @@ resolve_forwards() {
 
 resolved_rows() {
   [[ -f "$RESOLVED_TSV" ]] || return 0
-  awk -F'\t' 'NF && $1 !~ /^#/ {print}' "$RESOLVED_TSV"
+  awk -F'\t' '{gsub(/\r/, "")} NF && $1 !~ /^#/ {print}' "$RESOLVED_TSV"
 }
 
 resolved_rows_usv() {
@@ -3105,6 +3150,8 @@ pbr_add_from_forward() {
   need_root_unless_dry_run
   ensure_tsv_files
   local name row target_host target_ip group cidr
+  echo
+  echo "可用于 PBR 的转发目标（仅 enabled）："
   name="$(select_forward_name enabled)" || return 0
   row="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print; exit}')"
   [[ -n "$row" ]] || { warn "转发目标不存在：${name}"; return 0; }
@@ -3898,7 +3945,7 @@ forwards_menu() {
       4) list_forwards ;;
       5) set_forward_enabled ;;
       6) apply_nft_rules "leikwan-relay" || warn "利群转发 nftables 规则未应用成功。" ;;
-      7) resolve_forwards ;;
+      7) display_forwards enabled; resolve_forwards ;;
       8) test_forward ;;
       9) import_forwards_tsv ;;
       10) export_forwards_tsv ;;
@@ -3922,10 +3969,33 @@ pbr_menu() {
       1) pbr_add_static ;;
       2) pbr_add_from_forward ;;
       3) pbr_apply ;;
-      4) [[ -f "$PBR_STATIC_CONF" ]] && cat "$PBR_STATIC_CONF" || true; ip rule show | grep "$PBR_PRIORITY" || true ;;
+      4) pbr_show ;;
       0) return 0 ;;
     esac
   done
+}
+
+pbr_show() {
+  echo
+  if [[ ! -s "$PBR_STATIC_CONF" ]]; then
+    info "当前没有 PBR 规则。"
+    return 0
+  fi
+  printf '%s\n' "目标网段                 路由表      来源"
+  awk '
+    function pad(s, n) { return sprintf("%-" n "s", s) }
+    NF==0 {next}
+    $1 ~ /^#/ {next}
+    {
+      cidr=$1
+      group=$2
+      src="static"
+      if (NF >= 5 && $3 == "forward") {
+        src="forward: " $4
+      }
+      printf "%-24s %-10s %s\n", cidr, "T_" group, src
+    }
+  ' "$PBR_STATIC_CONF"
 }
 
 install_shortcuts() {
