@@ -33,7 +33,7 @@ A 不需要读取 `target_host`，也不需要为每个后端重复导入转发�
 
 ## leikwan-relay
 
-B 利群中转机负责所有后端目标：
+B 利群主机负责所有后端目标：
 
 ```bash
 sudo lq forward add

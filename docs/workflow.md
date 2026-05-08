@@ -87,7 +87,7 @@ sudo lq pair relay-join
 A 公网入口机只需要配置一次：
 
 ```bash
-sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
+sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
 ```
 
 菜单路径：
@@ -96,12 +96,12 @@ sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
 主菜单 -> 快速组网（分步提示） -> 5
 ```
 
-这会让 A 把 `10000-19999/tcp` 全部 DNAT 到 B 的 EasyTier IP，并保持原端口不变。
+这会让 A 把 `10001-10020/tcp` 全部 DNAT 到 B 的 EasyTier IP，并保持原端口不变。小白流程建议先用这个较小范围；需要更多端口时再使用 `10000-19999`。
 
 安全组需要放行：
 
 - `tcp/8301`：EasyTier。
-- `tcp/10000-19999`：入口端口池。
+- 你选择的入口端口池，例如 `tcp/10001-10020`。
 
 如果只想暴露少量端口，可以改成：
 
@@ -109,7 +109,21 @@ sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
 sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
 ```
 
-## 5. B 添加转发目标
+## 5. 如需指定 CN2 / 9929，B 先配置 PBR
+
+如果后端目标需要走指定出口，在 B 利群主机先执行：
+
+```text
+主菜单 -> 快速组网（分步提示） -> 7
+```
+
+如果不需要 PBR，可以跳过本步骤。若你已经先添加了转发目标，后添加 PBR，请重新执行：
+
+```bash
+sudo lq forward apply-relay --auto-fix-route
+```
+
+## 6. B 添加转发目标
 
 推荐使用菜单或 `lq forward` 命令，不要手写 TSV。
 
@@ -131,10 +145,12 @@ sudo lq forward add
 name=service-a
 entry_port=10001
 target_host=203.0.113.30
-target_port=30004
+target_port=37592
 route_table=T_CN2
 enabled=true
 ```
+
+后端目标端口没有默认值，必须输入实际后端 TCP 端口。直接回车会提示“后端目标端口不能为空”。
 
 新增、修改、删除后端都只在 B 上操作：
 
@@ -145,7 +161,7 @@ sudo lq forward delete service-a
 sudo lq forward apply-relay
 ```
 
-## 6. 两边执行诊断
+## 7. 两边执行诊断
 
 A 和 B 都执行：
 
@@ -160,7 +176,7 @@ A 和 B 都执行：
 - nftables DNAT 存在
 - TCP MSS clamp enabled: 1320
 
-## 7. 应用 nftables
+## 8. 应用 nftables
 
 `lq entry expose-range` 会自动应用 A 侧入口端口池。`lq forward add/edit/delete` 会自动应用 B 侧 relay nftables。高级用户也可以手动进入：
 
@@ -169,7 +185,7 @@ A 和 B 都执行：
 高级功能 -> nftables 规则管理
 ```
 
-## 8. 查看入口清单
+## 9. 查看入口清单
 
 ```bash
 sudo lq

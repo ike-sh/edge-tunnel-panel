@@ -1,6 +1,6 @@
 # EasyTier 组网
 
-v0.4 使用 EasyTier 作为 A 公网入口机和 B 利群中转机之间的虚拟网络。脚本只管理 EasyTier 组网和 nftables 四层 TCP 转发，不部署后端代理协议。
+v0.4 使用 EasyTier 作为 A 公网入口机和 B 利群主机之间的虚拟网络。脚本只管理 EasyTier 组网和 nftables 四层 TCP 转发，不部署后端代理协议。
 
 默认地址：
 

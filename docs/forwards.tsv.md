@@ -12,14 +12,14 @@
 
 ```text
 name  entry_port  target_host     target_port  out_iface  route_table  enabled  comment
-service-a  10001  203.0.113.30    30004        eth1       T_CN2        true     main-target
-service-b  10002  target.example  30004                   T_9929       true     backup-target
+service-a  10001  203.0.113.30    37592        eth1       T_CN2        true     main-target
+service-b  10002  target.example  37593                   T_9929       true     backup-target
 ```
 
 默认推荐用菜单或 `lq forward` 命令，不要手写 TSV。v0.4 的新转发模型是：
 
 - A 公网入口机只配置一次入口端口池。
-- B 利群中转机负责所有后端目标的新增 / 修改 / 删除 / 应用。
+- B 利群主机负责所有后端目标的新增 / 修改 / 删除 / 应用。
 - A 不需要知道每个 `target_host` / `target_port`。
 
 A 公网入口机先执行一次：
@@ -30,7 +30,7 @@ sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
 
 这会把 `10000-19999/tcp` 全部 DNAT 到 `10.198.1.1`，保持原端口。
 
-B 利群中转机添加后端：
+B 利群主机添加后端：
 
 ```bash
 sudo lq forward add
@@ -60,13 +60,13 @@ sudo install -d -m 700 /etc/leikwan-wg-toolkit/forwards
 {
   printf '# name\tentry_port\ttarget_host\ttarget_port\tout_iface\troute_table\tenabled\tcomment\n'
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    'service-a' '10001' '203.0.113.30' '30004' 'eth1' 'T_CN2' 'true' 'main-target'
+    'service-a' '10001' '203.0.113.30' '37592' 'eth1' 'T_CN2' 'true' 'main-target'
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    'service-b' '10002' 'target.example' '30004' '' 'T_9929' 'true' 'backup-target'
+    'service-b' '10002' 'target.example' '37593' '' 'T_9929' 'true' 'backup-target'
 } | sudo tee /etc/leikwan-wg-toolkit/forwards/forwards.tsv >/dev/null
 ```
 
-写坏成 `service-a10001203.0.113.3030004truecomment` 这类“粘在一起”的内容时，脚本会停止解析并拒绝应用 nftables，避免生成空转发表。
+写坏成 `service-a10001203.0.113.3037592truecomment` 这类“粘在一起”的内容时，脚本会停止解析并拒绝应用 nftables，避免生成空转发表。
 
 字段说明：
 

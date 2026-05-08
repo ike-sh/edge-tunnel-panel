@@ -5,7 +5,7 @@ v0.4 是 breaking change。主流程只保留 EasyTier 组网和 nftables 四层
 ## 角色
 
 - `cloud-entry`：有公网地址的入口机，暴露 `ENTRY_PORT`。
-- `leikwan-relay`：利群中转机，连接入口机并转发到后端目标。
+- `leikwan-relay`：利群主机，连接入口机并转发到后端目标。
 - `target/upstream`：用户自备任意 TCP 服务，脚本不部署、不校验协议。
 
 ## 链路

@@ -1,11 +1,11 @@
 # Leikwan Toolkit
 
-`leikwan-wg-toolkit` v0.4.0-alpha 是面向“公网入口机 A + 利群中转机 B”的快速组网与四层 TCP 转发工具。仓库名沿用历史名称，但 v0.4 主线已经改为 **EasyTier + nftables**。
+`leikwan-wg-toolkit` v0.4.0-alpha 是面向“公网入口 A + 利群主机 B”的快速组网与四层 TCP 转发工具。仓库名沿用历史名称，但 v0.4 主线已经改为 **EasyTier + nftables**。
 
 脚本只管理 A/B：
 
 - A：公网入口机，暴露入口端口池。
-- B：利群中转机，管理后端 TCP 转发目标和多出口策略。
+- B：利群主机，管理后端 TCP 转发目标和多出口策略。
 - C：任意后端 TCP 服务，由用户自备，脚本不部署、不识别、不生成任何代理协议配置。
 
 不部署 Xray / VLESS / Reality / FRP / WireGuard / Phantun / realm 主流程，也不生成代理客户端链接。
@@ -33,9 +33,37 @@ export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://
 
 EasyTier 包较大，安装器会下载到 `.part` 临时文件，校验文件大小和压缩包完整性后才安装。失败时会列出已尝试 URL，并允许输入本地 EasyTier zip/tar.gz。
 
+## 启动横幅
+
+启动菜单会显示：
+
+```text
+╔════════════════════════════════════════════════════════════════════╗
+║ Leikwan Toolkit                                                   ║
+║ 利群快速组网工具                                                  ║
+║ Author : ike-sh                                                   ║
+║ Version: 0.4.0-alpha                                              ║
+║ GitHub : https://github.com/ike-sh/leikwan-wg-toolkit             ║
+╚════════════════════════════════════════════════════════════════════╝
+```
+
 ## 推荐流程
 
-在 B 利群中转机：
+快速组网菜单编号：
+
+```text
+1. 我现在在利群主机：先执行 DNS / IPv4 优先修复
+2. 我现在在利群主机：生成给公网入口的 EasyTier 网络码
+3. 我现在在公网入口：粘贴利群网络码，部署公网入口
+4. 我现在在利群主机：粘贴公网入口码，完成组网
+5. 我现在在公网入口：配置入口端口池
+6. 我现在在利群主机：添加后端转发目标
+7. IPv4 多出口策略路由 / PBR
+8. 查看完整分步说明
+0. 返回
+```
+
+在 B 利群主机：
 
 ```bash
 sudo lq pair relay-init
@@ -51,7 +79,7 @@ sudo lq pair entry-join
 
 粘贴网络码，部署 EasyTier entry，复制入口码回 B。
 
-在 B 利群中转机：
+在 B 利群主机：
 
 ```bash
 sudo lq pair relay-join
@@ -62,7 +90,16 @@ sudo lq pair relay-join
 在 A 只配置一次入口端口池：
 
 ```bash
-sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
+sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
+```
+
+常用小白流程建议先开放 `10001-10020`。如果需要更大端口池，再使用默认推荐范围 `10000-19999`。
+
+如果后端目标需要固定走 CN2 / 9929 等出口，先在 B 配置 PBR，再添加后端转发目标：
+
+```bash
+sudo lq
+# 快速组网 -> 7. IPv4 多出口策略路由 / PBR
 ```
 
 以后新增、修改、删除后端只在 B 操作：
@@ -111,7 +148,7 @@ tcp dport 10000-19999 dnat ip to 10.198.1.1
 B 侧后端规则示例：
 
 ```text
-iifname "tun0" tcp dport 10001 dnat ip to 203.0.113.30:30004
+iifname "tun0" tcp dport 10001 dnat ip to 203.0.113.30:37592
 ```
 
 EasyTier/tun 转发默认启用 MSS clamp：
@@ -156,6 +193,12 @@ sudo lq forward apply-relay --auto-fix-route
 ## PBR
 
 PBR 目标必须是合法 IPv4 或 CIDR。单个 IP 自动转为 `/32`，非法值会被拒绝，不写入配置。
+
+快速组网菜单中 PBR 是第 7 项。需要指定 CN2 / 9929 时，推荐先配置 PBR，再执行第 6 项添加后端转发目标。如果先添加了转发目标，后添加 PBR，请重新执行：
+
+```bash
+sudo lq forward apply-relay --auto-fix-route
+```
 
 线路组使用菜单选择：
 

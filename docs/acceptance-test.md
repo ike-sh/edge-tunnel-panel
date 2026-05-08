@@ -12,6 +12,18 @@ scripts/package-release.sh
 
 ## 菜单检查
 
+主 banner 应显示专业框线样式，至少包含：
+
+```text
+╔════════════════════════════════════════════════════════════════════╗
+║ Leikwan Toolkit
+║ 利群快速组网工具
+║ Author : ike-sh
+║ Version: 0.4.0-alpha
+║ GitHub : https://github.com/ike-sh/leikwan-wg-toolkit
+╚════════════════════════════════════════════════════════════════════╝
+```
+
 主菜单应显示：
 
 ```text
@@ -24,7 +36,21 @@ scripts/package-release.sh
 0. 退出
 ```
 
-进入 `快速组网（分步提示）` 后，第一屏必须提示利群主机先执行 DNS / IPv4 优先修复。`利群主机` 菜单只包含 B 侧转发目标、PBR、IPv6 收口和状态检查。`公网入口` 菜单只包含 A 侧入口机管理、端口池和状态检查。`高级功能 -> nftables 规则管理` 在未配置规则文件或 nft table 时应显示 WARN，不应退出脚本。
+进入 `快速组网（分步提示）` 后，第一屏必须提示利群主机先执行 DNS / IPv4 优先修复，并显示：
+
+```text
+1. 我现在在利群主机：先执行 DNS / IPv4 优先修复
+2. 我现在在利群主机：生成给公网入口的 EasyTier 网络码
+3. 我现在在公网入口：粘贴利群网络码，部署公网入口
+4. 我现在在利群主机：粘贴公网入口码，完成组网
+5. 我现在在公网入口：配置入口端口池
+6. 我现在在利群主机：添加后端转发目标
+7. IPv4 多出口策略路由 / PBR
+8. 查看完整分步说明
+0. 返回
+```
+
+`利群主机` 菜单只包含 B 侧转发目标、PBR、IPv6 收口和状态检查。`公网入口` 菜单只包含 A 侧入口机管理、端口池和状态检查。`高级功能 -> nftables 规则管理` 在未配置规则文件或 nft table 时应显示 WARN，不应退出脚本。
 
 ## bootstrap 非交互输入
 
@@ -142,7 +168,7 @@ sudo lq forward add
 name=service-a
 entry_port=10001
 target_host=203.0.113.30
-target_port=30004
+target_port=37592
 ```
 
 脚本应自动写入 B 的 `forwards.tsv`，并应用 B relay nftables。A 不需要导入转发码。
@@ -150,7 +176,7 @@ target_port=30004
 合格标准：
 
 - `nft list table inet leikwan_forward` 存在。
-- B 侧有 `tcp dport 10001 dnat ip to <resolved-target>:30004`。
+- B 侧有 `tcp dport 10001 dnat ip to <resolved-target>:37592`。
 - B 侧有 `tcp flags syn tcp option maxseg size set 1320`。
 - B doctor 显示 `service-a relay DNAT 正常`。
 - B doctor 显示 `[OK] TCP MSS clamp enabled: 1320`。
@@ -169,7 +195,7 @@ sudo lq forward add
 ```text
 A expose-range: 10001-10020 -> 10.198.1.1
 B forward: 10001 -> 203.0.113.30:37592
-B forward: 10002 -> 198.51.100.20:30004
+B forward: 10002 -> 198.51.100.20:37593
 ```
 
 外部验收：
@@ -214,7 +240,7 @@ sudo lq forward delete service-a
 
 ```text
 # nameentry_porttarget_hosttarget_portout_ifaceroute_tableenabledcomment
-service-a10001203.0.113.3030004truecomment
+service-a10001203.0.113.3037592truecomment
 ```
 
 合格标准：
@@ -265,6 +291,22 @@ sudo lq --doctor --verbose
 - 不出现 `nc: command not found`。
 - 交互模式提示是否安装 `netcat-openbsd`。
 - 非交互模式提示 `apt-get install -y netcat-openbsd` 并跳过当前 TCP 测试。
+
+## 后端目标端口必填
+
+执行：
+
+```bash
+sudo lq forward add
+```
+
+在 `后端目标端口` 处直接回车。
+
+合格标准：
+
+- 不显示 `[30004]` 默认值。
+- 输出 `后端目标端口不能为空，请输入 1-65535。`
+- 非法端口会重新提示，不崩溃。
 
 ## PBR 非法输入
 

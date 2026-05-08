@@ -10,6 +10,18 @@ PBR 用来把指定 IPv4 或 CIDR 目标固定走某个出口线路，例如 `T_
 高级功能 -> IPv4 多出口策略路由 / PBR -> 添加静态 PBR
 ```
 
+快速组网里也可以直接选择：
+
+```text
+快速组网（分步提示） -> 7. IPv4 多出口策略路由 / PBR
+```
+
+需要指定 CN2 / 9929 时，推荐先配置 PBR，再添加后端转发目标。如果先添加了转发目标，后添加 PBR，请重新执行：
+
+```bash
+sudo lq forward apply-relay --auto-fix-route
+```
+
 目标必须是合法 IPv4 或 CIDR：
 
 ```text
@@ -68,7 +80,7 @@ sudo lq forward apply-relay --auto-fix-route
 
 ## 与转发目标的关系
 
-B 利群中转机执行 `lq forward add` / `lq forward edit` / `lq forward apply-relay` 时，脚本会自动执行：
+B 利群主机执行 `lq forward add` / `lq forward edit` / `lq forward apply-relay` 时，脚本会自动执行：
 
 ```bash
 ip route get TARGET_IP

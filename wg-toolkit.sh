@@ -172,6 +172,23 @@ prompt_port() {
   done
 }
 
+prompt_required_port() {
+  local prompt="$1" value
+  while true; do
+    if ! read -r -p "${prompt}: " value; then
+      info "检测到非交互输入结束，已退出。"
+      exit 0
+    fi
+    value="$(normalize_menu_choice "$value")"
+    if [[ -z "$value" ]]; then
+      echo "[WARN] 后端目标端口不能为空，请输入 1-65535。" >&2
+      continue
+    fi
+    is_port "$value" && printf '%s' "$value" && return 0
+    echo "[WARN] 端口必须是 1-65535。" >&2
+  done
+}
+
 is_ipv4() {
   local ip="$1" a b c d
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
@@ -265,13 +282,13 @@ confirm_summary() {
 
 print_banner() {
   cat <<EOF
---------------------------------------------------
-  Leikwan Toolkit
-  ${PROJECT_TITLE}
-  Author : ${PROJECT_AUTHOR}
-  Version: ${TOOL_VERSION}
-  GitHub : ${PROJECT_GITHUB}
---------------------------------------------------
+╔════════════════════════════════════════════════════════════════════╗
+║ Leikwan Toolkit                                                   ║
+║ ${PROJECT_TITLE}                                                  ║
+║ Author : ${PROJECT_AUTHOR}                                                   ║
+║ Version: ${TOOL_VERSION}                                              ║
+║ GitHub : ${PROJECT_GITHUB}             ║
+╚════════════════════════════════════════════════════════════════════╝
 EOF
 }
 
@@ -1081,8 +1098,8 @@ machine_has_entry_service() {
 
 guard_entry_join_role() {
   if machine_has_relay_network; then
-    warn "当前机器看起来是 B 中转机，不应该执行 A 公网入口部署。"
-    warn "正确操作是选择：3. B 中转机：粘贴入口码并完成接入。"
+    warn "当前机器看起来是 B 利群主机，不应该执行 A 公网入口部署。"
+    warn "正确操作是选择：4. B 利群主机：粘贴入口码，完成组网。"
     prompt_yes_no "是否仍然继续？" "N" || return 1
   fi
 }
@@ -1090,7 +1107,7 @@ guard_entry_join_role() {
 guard_relay_join_role() {
   if machine_has_entry_service; then
     warn "当前机器看起来是 A 公网入口，不应该执行 B 接入。"
-    warn "正确操作是在 B 中转机执行该步骤。"
+    warn "正确操作是在 B 利群主机执行该步骤。"
     prompt_yes_no "是否仍然继续？" "N" || return 1
   fi
 }
@@ -1271,7 +1288,7 @@ SUGGESTED_EASYTIER_PORT=${suggested_port}" 600
     "-----END LEIKWAN EASYTIER NETWORK-----" \
     "$NETWORK_PAIRING_FILE" \
     "LEIKWAN_EASYTIER_NETWORK_BASE64"
-  info "下一步：去 A 公网入口机，执行第 2 项，粘贴上面的网络码。"
+  info '下一步：去 A 公网入口机，进入"快速组网（分步提示）"，选择第 3 项，粘贴上面的网络码。'
 }
 
 quick_deploy_entry_from_network_pairing() {
@@ -1280,11 +1297,11 @@ quick_deploy_entry_from_network_pairing() {
   guard_entry_join_role || return 0
   local source="${1:-}" tmp role network_name network_secret relay_ip name et_ip proto port public_host detected service service_name
   tmp="$(mktemp)"
-  read_pairing_code "$tmp" "B 中转机" "-----END LEIKWAN EASYTIER NETWORK-----" "LEIKWAN_EASYTIER_NETWORK_BASE64" "$source" || { rm -f "$tmp"; return 1; }
+  read_pairing_code "$tmp" "B 利群主机" "-----END LEIKWAN EASYTIER NETWORK-----" "LEIKWAN_EASYTIER_NETWORK_BASE64" "$source" || { rm -f "$tmp"; return 1; }
   role="$(env_file_get "$tmp" ROLE)"
   case "$role" in
     leikwan-relay) ;;
-    cloud-entry) fail "你粘贴的是入口码，需要在 B 机器选择第 3 项。"; rm -f "$tmp"; return 1 ;;
+    cloud-entry) fail "你粘贴的是入口码，需要在 B 利群主机选择第 4 项。"; rm -f "$tmp"; return 1 ;;
     *) fail "这不是 EasyTier 网络码，请确认粘贴的是 B 生成的那段。"; rm -f "$tmp"; return 1 ;;
   esac
   require_pairing_fields "$tmp" PAIRING_VERSION ROLE EASYTIER_NETWORK_NAME EASYTIER_NETWORK_SECRET RELAY_ET_IP SUGGESTED_ENTRY_NAME SUGGESTED_ENTRY_ET_IP SUGGESTED_EASYTIER_PROTOCOL SUGGESTED_EASYTIER_PORT || { rm -f "$tmp"; return 1; }
@@ -1326,12 +1343,12 @@ EASYTIER_PORT=${port}
 WEIGHT=100
 ENABLED=true" 600
   rm -f "$tmp"
-  print_pairing_code "复制下面整段回 B 中转机" \
+  print_pairing_code "复制下面整段回 B 利群主机" \
     "-----BEGIN LEIKWAN EASYTIER ENTRY-----" \
     "-----END LEIKWAN EASYTIER ENTRY-----" \
     "$ENTRY_PAIRING_FILE" \
     "LEIKWAN_EASYTIER_ENTRY_BASE64"
-  info "下一步：回到 B 中转机，执行第 3 项，粘贴上面的入口码。"
+  info '下一步：回到 B 利群主机，进入"快速组网（分步提示）"，选择第 4 项，粘贴上面的入口码。'
 }
 
 quick_deploy_relay_from_entry_pairing() {
@@ -1345,7 +1362,7 @@ quick_deploy_relay_from_entry_pairing() {
   role="$(env_file_get "$tmp" ROLE)"
   case "$role" in
     cloud-entry) ;;
-    leikwan-relay) fail "你粘贴的是网络码，需要在 A 机器选择第 2 项。"; rm -f "$tmp"; return 1 ;;
+    leikwan-relay) fail "你粘贴的是网络码，需要在 A 公网入口选择第 3 项。"; rm -f "$tmp"; return 1 ;;
     *) fail "这不是 EasyTier 入口码，请确认粘贴的是 A 生成的那段。"; rm -f "$tmp"; return 1 ;;
   esac
   require_pairing_fields "$tmp" PAIRING_VERSION ROLE ENTRY_NAME ENTRY_PUBLIC_HOST ENTRY_ET_IP EASYTIER_PROTOCOL EASYTIER_PORT || { rm -f "$tmp"; return 1; }
@@ -1372,7 +1389,7 @@ quick_deploy_relay_from_entry_pairing() {
   esac
   if ping -c 2 "$et_ip" >/dev/null 2>&1; then ok "EasyTier ping ${et_ip} 成功"; else warn "EasyTier peer 可能已连接，但 ping ${et_ip} 暂不通。"; fi
   ok "已接入入口 ${name}。"
-  info "下一步：添加转发目标并应用 nftables。"
+  info "下一步：在 A 公网入口配置端口池后，回到 B 利群主机添加后端转发目标。"
   rm -f "$tmp"
 }
 
@@ -1576,6 +1593,9 @@ prompt_forward_route_choice() {
     echo "- 出口接口：${actual_dev}" >&2
     echo "- 源地址：${actual_src:-未知}" >&2
     [[ -n "$actual_via" ]] && echo "- 网关：${actual_via}" >&2
+    if route_table_same "" "$actual_table"; then
+      echo "[INFO] 已检测到实际出口 ${actual_dev}。如你希望固定走 CN2 / 9929，请先配置 PBR，再重新应用转发规则。" >&2
+    fi
     if prompt_yes_no "是否使用该出口配置？" "Y"; then
       printf '%s\t%s\n' "$actual_dev" "$actual_table"
       return 0
@@ -1735,7 +1755,7 @@ read_forward_code() {
       printf '%s\n' "$source" >"$raw"
     fi
   else
-    echo "请粘贴从 B 中转机复制的整段 FORWARD 转发码。"
+    echo "请粘贴从 B 利群主机复制的整段 FORWARD 转发码。"
     echo "看到 END 行会自动继续；如果只粘贴 KEY=VALUE 内容，请用空行结束。"
     while IFS= read -r line; do
       line="$(normalize_menu_choice "$line")"
@@ -1781,7 +1801,7 @@ add_forward() {
   fi
   warn_if_forward_port_outside_expose "$entry_port"
   target_host="$(prompt_host "后端目标地址")"
-  target_port="$(prompt_port "后端目标端口" "30004")"
+  target_port="$(prompt_required_port "后端目标端口")"
   route_defaults="$(prompt_forward_route_choice "$target_host")"
   IFS=$'\t' read -r out_iface route_table <<<"$route_defaults"
   enabled="$(prompt_value "是否启用 true/false" "true")"
@@ -1806,9 +1826,10 @@ add_forward() {
     prompt_yes_no "确认覆盖 / 更新？" "N" || return 0
   fi
   row="${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
-  confirm_summary "添加转发目标摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=${route_table:-none}\nenabled=${enabled}" || return 0
+  confirm_summary "添加转发目标摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
   replace_forward_row "$row"
   apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
+  info '下一步：A/B 两边执行"一键诊断"，并从外部机器测试公网入口端口。'
 }
 
 list_forwards() {
@@ -1864,7 +1885,7 @@ edit_forward() {
   enabled="$(prompt_value "是否启用 true/false" "$old_enabled")"
   comment="$(prompt_value "备注" "$old_comment")"
   new_row="${old_name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
-  confirm_summary "修改转发目标摘要" "name=${old_name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=${route_table:-none}\nenabled=${enabled}" || return 0
+  confirm_summary "修改转发目标摘要" "name=${old_name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
   replace_forward_row "$new_row"
   apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
 }
@@ -2219,6 +2240,7 @@ ENABLED=true" 600
   if [[ "$apply" != "no" ]]; then
     apply_nft_rules "cloud-entry" || warn "公网入口 nftables 未应用成功，请检查后重试。"
   fi
+  info "下一步：回到 B 利群主机，如果需要指定 CN2 / 9929 出口，请先选择第 7 项配置 PBR，再选择第 6 项添加后端转发目标。"
 }
 
 apply_nft_rules() {
@@ -2483,6 +2505,7 @@ pbr_add_static() {
   mkdir -p "$PBR_DIR"
   grep -qxF "${cidr} ${group#T_}" "$PBR_STATIC_CONF" 2>/dev/null || echo "${cidr} ${group#T_}" >>"$PBR_STATIC_CONF"
   pbr_apply
+  info "如果这个目标已经存在转发规则，请执行：lq forward apply-relay --auto-fix-route"
 }
 
 generate_forward_outputs() {
@@ -3218,18 +3241,32 @@ print_quick_networking_steps() {
 步骤 4：公网入口配置端口池
 在 A 公网入口机执行：
 主菜单 -> 快速组网（分步提示） -> 5
-例如：
+小白常用范围可以先填：
 10001-10020 -> 10.198.1.1
 
-步骤 5：利群主机添加后端转发
+默认范围仍可使用：
+10000-19999 -> 10.198.1.1
+
+步骤 5：如需指定 CN2 / 9929 出口，利群主机先配置 PBR
+在 B 利群主机执行：
+主菜单 -> 快速组网（分步提示） -> 7
+如果不需要 PBR，本步骤可以跳过。
+
+步骤 6：利群主机添加后端转发目标
 在 B 利群主机执行：
 主菜单 -> 快速组网（分步提示） -> 6
 例如：
 10001 -> 后端IP:后端端口
 
-步骤 6：两边执行诊断
+如果先添加了转发目标，后添加 PBR，需要重新执行：
+lq forward apply-relay --auto-fix-route
+
+步骤 7：A/B 两边执行一键诊断
 A 和 B 都执行：
 主菜单 -> 一键诊断
+
+步骤 8：外部机器测试公网入口端口
+nc -vz -w 5 A_PUBLIC_IP 10001
 
 确认：
 - EasyTier active
@@ -3269,8 +3306,12 @@ quick_networking_menu() {
     echo "4. 我现在在利群主机：粘贴公网入口码，完成组网"
     echo "5. 我现在在公网入口：配置入口端口池"
     echo "6. 我现在在利群主机：添加后端转发目标"
-    echo "7. 查看完整分步说明"
+    echo "7. IPv4 多出口策略路由 / PBR"
+    echo "8. 查看完整分步说明"
     echo "0. 返回"
+    echo
+    echo "提示：如果后端目标需要走 CN2 / 9929 等指定出口，请先执行第 7 项添加 PBR，再执行第 6 项添加后端转发目标。"
+    echo "如果已经先执行第 6 项添加了后端转发，之后又添加 PBR，请重新执行：lq forward apply-relay --auto-fix-route"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
@@ -3279,7 +3320,8 @@ quick_networking_menu() {
       4) quick_deploy_relay_from_entry_pairing || warn "利群主机接入未完成，请查看上方提示后重试。" ;;
       5) entry_expose_range || warn "公网入口端口池配置未完成，请查看上方提示后重试。" ;;
       6) add_forward || warn "后端转发目标添加未完成，请查看上方提示后重试。" ;;
-      7) echo; print_quick_networking_steps ;;
+      7) pbr_menu ;;
+      8) echo; print_quick_networking_steps ;;
       0) return 0 ;;
       "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
