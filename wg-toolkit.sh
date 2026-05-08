@@ -154,6 +154,10 @@ prompt_yes_no() {
   done
 }
 
+is_interactive() {
+  [[ -t 0 && -t 1 ]]
+}
+
 is_port() {
   local p="$1"
   [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 ))
@@ -173,6 +177,23 @@ is_ipv4() {
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
   IFS=. read -r a b c d <<<"$ip"
   for x in "$a" "$b" "$c" "$d"; do (( x >= 0 && x <= 255 )) || return 1; done
+}
+
+normalize_ipv4_cidr() {
+  local value="$1" ip prefix
+  value="$(normalize_menu_choice "$value")"
+  [[ -n "$value" ]] || return 1
+  if [[ "$value" == */* ]]; then
+    ip="${value%/*}"
+    prefix="${value#*/}"
+    is_ipv4 "$ip" || return 1
+    [[ "$prefix" =~ ^[0-9]+$ ]] || return 1
+    (( prefix >= 0 && prefix <= 32 )) || return 1
+    printf '%s/%s' "$ip" "$prefix"
+  else
+    is_ipv4 "$value" || return 1
+    printf '%s/32' "$value"
+  fi
 }
 
 prompt_host() {
@@ -272,6 +293,7 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash wg-toolkit.sh forward delete [name]
   sudo bash wg-toolkit.sh forward list
   sudo bash wg-toolkit.sh forward apply-relay
+  sudo bash wg-toolkit.sh forward apply-relay --auto-fix-route
   sudo bash wg-toolkit.sh --pbr-apply
   sudo bash wg-toolkit.sh --uninstall
   bash wg-toolkit.sh --help
@@ -357,6 +379,7 @@ detect_public_ipv4() {
 
 env_file_get() {
   local file="$1" key="$2"
+  [[ -f "$file" ]] || return 0
   awk -F= -v k="$key" '
     $1 == k {
       sub(/^[^=]*=/, "")
@@ -364,13 +387,33 @@ env_file_get() {
       print
       exit
     }
-  ' "$file" 2>/dev/null
+  ' "$file" 2>/dev/null || true
+}
+
+ensure_nc_for_test() {
+  command -v nc >/dev/null 2>&1 && return 0
+  if is_interactive; then
+    warn "未找到 nc，链路测试需要 netcat-openbsd。"
+    if prompt_yes_no "是否现在安装 netcat-openbsd？" "Y"; then
+      install_packages netcat-openbsd || true
+      command -v nc >/dev/null 2>&1 && return 0
+    fi
+  else
+    warn "未找到 nc，请执行：apt-get install -y netcat-openbsd"
+  fi
+  return 1
 }
 
 tcp_reachable() {
   local host="$1" port="$2"
   command -v nc >/dev/null 2>&1 || return 2
   nc -vz -w 3 "$host" "$port" >/dev/null 2>&1
+}
+
+tcp_reachable_status() {
+  local rc=0
+  tcp_reachable "$@" || rc=$?
+  printf '%s' "$rc"
 }
 
 is_fast_port() {
@@ -1322,7 +1365,11 @@ quick_deploy_relay_from_entry_pairing() {
   write_file "$EASYTIER_RELAY_SERVICE" "$service" 644
   start_service_file "$EASYTIER_RELAY_SERVICE_NAME"
   wait_et_ip "$RELAY_ET_IP" 15 || warn "15 秒内未检测到 Relay EasyTier IP：${RELAY_ET_IP}"
-  if tcp_reachable "$public_host" "$port"; then ok "入口 EasyTier TCP 可达：${public_host}:${port}"; else warn "入口 EasyTier TCP 不可达：${public_host}:${port}"; fi
+  case "$(tcp_reachable_status "$public_host" "$port")" in
+    0) ok "入口 EasyTier TCP 可达：${public_host}:${port}" ;;
+    2) warn "未找到 nc，无法测试入口 EasyTier TCP；请安装 netcat-openbsd" ;;
+    *) warn "入口 EasyTier TCP 不可达：${public_host}:${port}" ;;
+  esac
   if ping -c 2 "$et_ip" >/dev/null 2>&1; then ok "EasyTier ping ${et_ip} 成功"; else warn "EasyTier peer 可能已连接，但 ping ${et_ip} 暂不通。"; fi
   ok "已接入入口 ${name}。"
   info "下一步：添加转发目标并应用 nftables。"
@@ -1422,11 +1469,11 @@ test_entries() {
     [[ "$enabled" == "true" ]] || continue
     echo
     echo "入口：${name}"
-    if tcp_reachable "$public_host" "$port"; then
-      ok "${proto} ${public_host}:${port} 可达"
-    else
-      warn "${proto} ${public_host}:${port} 不可达"
-    fi
+    case "$(tcp_reachable_status "$public_host" "$port")" in
+      0) ok "${proto} ${public_host}:${port} 可达" ;;
+      2) warn "未找到 nc，无法测试 ${proto} ${public_host}:${port}；请安装 netcat-openbsd" ;;
+      *) warn "${proto} ${public_host}:${port} 不可达" ;;
+    esac
     ping -c 2 "$et_ip" || true
   done < <(entries_rows)
 }
@@ -1465,21 +1512,159 @@ route_table_name_from_id() {
   local table="$1"
   [[ -n "$table" ]] || return 1
   if [[ "$table" =~ ^[0-9]+$ && -f "$PBR_RT_TABLES" ]]; then
-    awk -v id="$table" '$1==id {print $2; exit}' "$PBR_RT_TABLES"
+    awk -v id="$table" '$1==id {print $2; found=1; exit} END{exit !found}' "$PBR_RT_TABLES" 2>/dev/null || printf '%s' "$table"
   else
     printf '%s' "$table"
   fi
 }
 
-detect_forward_route_defaults() {
-  local host="$1" target_ip route_line dev table
+route_table_display() {
+  local table="$1"
+  case "$table" in
+    ""|main|254) printf '%s' "-" ;;
+    *) printf '%s' "$table" ;;
+  esac
+}
+
+route_table_same() {
+  local configured="$1" actual="$2"
+  configured="$(normalize_menu_choice "$configured")"
+  actual="$(normalize_menu_choice "$actual")"
+  [[ "$configured" == "-" ]] && configured=""
+  [[ "$actual" == "-" ]] && actual=""
+  [[ "$configured" == "254" ]] && configured="main"
+  [[ "$actual" == "254" ]] && actual="main"
+  [[ -z "$configured" && ( -z "$actual" || "$actual" == "main" ) ]] && return 0
+  [[ "$configured" == "$actual" ]]
+}
+
+detect_target_route() {
+  local host="$1" preferred_table="${2:-}" target_ip route_line dev table src via
   target_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
   [[ -n "$target_ip" ]] || target_ip="$host"
-  route_line="$(ip route get "$target_ip" 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$preferred_table" && "$preferred_table" != "-" && "$preferred_table" != "main" ]]; then
+    route_line="$(ip route get "$target_ip" table "$preferred_table" 2>/dev/null | head -n 1 || true)"
+  else
+    route_line=""
+  fi
+  [[ -n "$route_line" ]] || route_line="$(ip route get "$target_ip" 2>/dev/null | head -n 1 || true)"
+  [[ -n "$route_line" ]] || return 1
   dev="$(awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}' <<<"$route_line")"
   table="$(awk '{for (i=1; i<=NF; i++) if ($i=="table") {print $(i+1); exit}}' <<<"$route_line")"
   table="$(route_table_name_from_id "$table" 2>/dev/null || true)"
+  src="$(awk '{for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}' <<<"$route_line")"
+  via="$(awk '{for (i=1; i<=NF; i++) if ($i=="via") {print $(i+1); exit}}' <<<"$route_line")"
+  printf '%s\034%s\034%s\034%s\034%s\034%s\n' "$target_ip" "$dev" "$table" "$src" "$via" "$route_line"
+}
+
+detect_forward_route_defaults() {
+  local host="$1" route_info target_ip dev table _src _via _line
+  route_info="$(detect_target_route "$host" 2>/dev/null || true)"
+  IFS=$'\034' read -r target_ip dev table _src _via _line <<<"$route_info"
   printf '%s\t%s\n' "$dev" "$table"
+}
+
+prompt_forward_route_choice() {
+  local target_host="$1" current_iface="${2:-}" current_table="${3:-}" route_info target_ip actual_dev actual_table actual_src actual_via route_line
+  route_info="$(detect_target_route "$target_host" "$current_table" 2>/dev/null || true)"
+  IFS=$'\034' read -r target_ip actual_dev actual_table actual_src actual_via route_line <<<"$route_info"
+  if [[ -n "$actual_dev" ]]; then
+    echo >&2
+    echo "检测到后端目标 ${target_host} 的实际出口：" >&2
+    echo "- 目标 IPv4：${target_ip}" >&2
+    echo "- 路由表：$(route_table_display "$actual_table")" >&2
+    echo "- 出口接口：${actual_dev}" >&2
+    echo "- 源地址：${actual_src:-未知}" >&2
+    [[ -n "$actual_via" ]] && echo "- 网关：${actual_via}" >&2
+    if prompt_yes_no "是否使用该出口配置？" "Y"; then
+      printf '%s\t%s\n' "$actual_dev" "$actual_table"
+      return 0
+    fi
+  else
+    printf '[WARN] 无法通过 ip route get 自动识别 %s 的出口，将进入高级手动输入。\n' "$target_host" >&2
+  fi
+  local manual_iface manual_table
+  manual_iface="$(prompt_value "出口接口 out_iface" "$current_iface")"
+  manual_table="$(prompt_value "出口路由表 route_table，留空表示 main/自动" "$current_table")"
+  if [[ -n "$manual_table" && "$manual_table" != "-" ]]; then
+    route_info="$(detect_target_route "$target_host" "$manual_table" 2>/dev/null || true)"
+    IFS=$'\034' read -r _target_ip actual_dev actual_table _actual_src _actual_via _route_line <<<"$route_info"
+    if [[ -n "$actual_dev" && "$actual_dev" != "$manual_iface" ]]; then
+      printf '[WARN] 路由表 %s 下实际出口接口是 %s，将自动同步 out_iface。\n' "$manual_table" "$actual_dev" >&2
+      manual_iface="$actual_dev"
+      manual_table="$actual_table"
+    fi
+  fi
+  printf '%s\t%s\n' "$manual_iface" "$manual_table"
+}
+
+forward_route_mismatch_text() {
+  local name="$1" target_host="$2" configured_iface="$3" configured_table="$4" actual_dev="$5" actual_table="$6"
+  cat <<EOF
+转发目标 ${name} 出口配置可能错误：
+配置 out_iface=${configured_iface:-"-"} route_table=$(route_table_display "$configured_table")
+实际路由 dev=${actual_dev:-"-"} table=$(route_table_display "$actual_table")
+这可能导致 A 入口端口可以到 B，但无法转发到后端。
+EOF
+}
+
+report_forward_route_consistency() {
+  local name="$1" target_host="$2" configured_iface="$3" configured_table="$4"
+  local route_info target_ip actual_dev actual_table actual_src actual_via route_line mismatch=0
+  route_info="$(detect_target_route "$target_host" 2>/dev/null || true)"
+  IFS=$'\034' read -r target_ip actual_dev actual_table actual_src actual_via route_line <<<"$route_info"
+  if [[ -z "$actual_dev" ]]; then
+    report WARN "转发目标 ${name} 出口无法识别：${target_host}"
+    return 0
+  fi
+  [[ -n "$configured_iface" && "$configured_iface" == "$actual_dev" ]] || mismatch=1
+  route_table_same "$configured_table" "$actual_table" || mismatch=1
+  if (( mismatch == 0 )); then
+    report OK "转发目标 ${name} 出口一致：${actual_dev} / $(route_table_display "$actual_table")"
+  else
+    report WARN "转发目标 ${name} 出口不一致：配置 ${configured_iface:-"-"}/$(route_table_display "$configured_table")，实际 ${actual_dev}/$(route_table_display "$actual_table")，可能导致节点无延迟/无法连接。"
+  fi
+}
+
+sync_forward_routes_if_needed() {
+  local auto_fix="${1:-0}" row name entry_port target_host target_port out_iface route_table enabled comment
+  local route_info target_ip actual_dev actual_table actual_src actual_via route_line mismatch fixed=0 tmp content
+  validate_forwards_tsv || return 1
+  content=$'# name\tentry_port\ttarget_host\ttarget_port\tout_iface\troute_table\tenabled\tcomment'
+  while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
+    mismatch=0
+    if [[ "$enabled" == "true" ]]; then
+      route_info="$(detect_target_route "$target_host" 2>/dev/null || true)"
+      IFS=$'\034' read -r target_ip actual_dev actual_table actual_src actual_via route_line <<<"$route_info"
+      if [[ -n "$actual_dev" ]]; then
+        [[ -n "$out_iface" && "$out_iface" == "$actual_dev" ]] || mismatch=1
+        route_table_same "$route_table" "$actual_table" || mismatch=1
+        if (( mismatch == 1 )); then
+          warn "$(forward_route_mismatch_text "$name" "$target_host" "$out_iface" "$route_table" "$actual_dev" "$actual_table")"
+          if (( auto_fix == 1 )) || { is_interactive && prompt_yes_no "是否自动修正为 out_iface=${actual_dev} route_table=$(route_table_display "$actual_table")？" "Y"; }; then
+            out_iface="$actual_dev"
+            route_table="$actual_table"
+            fixed=1
+          else
+            warn "未自动修正 ${name}。可执行：lq forward edit ${name}，或 lq forward apply-relay --auto-fix-route"
+          fi
+        else
+          ok "转发目标 ${name} 出口一致：${actual_dev} / $(route_table_display "$actual_table")"
+        fi
+      else
+        warn "无法识别转发目标 ${name} 的实际出口：${target_host}"
+      fi
+    fi
+    row="${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
+    content="${content}"$'\n'"${row}"
+  done < <(forwards_rows_usv)
+  if (( fixed == 1 )); then
+    tmp="$(mktemp)"
+    printf '%s\n' "$content" >"$tmp"
+    write_file "$FORWARDS_TSV" "$(cat "$tmp")" 600
+    rm -f "$tmp"
+    ok "已自动修正 forwards.tsv 中的出口配置。"
+  fi
 }
 
 forward_code_path() {
@@ -1587,7 +1772,7 @@ add_forward() {
   need_root_unless_dry_run
   install_packages iproute2 netcat-openbsd
   ensure_tsv_files
-  local name entry_port target_host target_port out_iface route_table enabled comment row target_ip route_defaults existing_name existing_port
+  local name entry_port target_host target_port out_iface route_table enabled comment row target_ip route_defaults existing_name existing_port tcp_rc
   name="$(safe_name "$(prompt_value "转发名称" "service-a")")"
   entry_port="$(prompt_port "公网入口端口" "10001")"
   if reserved_entry_port "$entry_port"; then
@@ -1597,20 +1782,20 @@ add_forward() {
   warn_if_forward_port_outside_expose "$entry_port"
   target_host="$(prompt_host "后端目标地址")"
   target_port="$(prompt_port "后端目标端口" "30004")"
-  route_defaults="$(detect_forward_route_defaults "$target_host")"
+  route_defaults="$(prompt_forward_route_choice "$target_host")"
   IFS=$'\t' read -r out_iface route_table <<<"$route_defaults"
-  out_iface="$(prompt_value "出口网卡" "$out_iface")"
-  route_table="$(prompt_value "路由表" "$route_table")"
   enabled="$(prompt_value "是否启用 true/false" "true")"
   [[ "$enabled" == "true" || "$enabled" == "false" ]] || { fail "enabled 必须是 true 或 false。"; return 1; }
   comment="$(prompt_value "备注" "${name}-target")"
   target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
   if [[ -n "$target_ip" ]]; then
-    if tcp_reachable "$target_ip" "$target_port"; then
-      ok "后端 TCP 可达：${target_ip}:${target_port}"
-    else
-      warn "后端 TCP 暂不可达：${target_ip}:${target_port}。你仍可继续写入规则。"
-    fi
+    ensure_nc_for_test || true
+    tcp_rc="$(tcp_reachable_status "$target_ip" "$target_port")"
+    case "$tcp_rc" in
+      0) ok "后端 TCP 可达：${target_ip}:${target_port}" ;;
+      2) warn "未找到 nc，已跳过后端 TCP 测试。你仍可继续写入规则。" ;;
+      *) warn "后端 TCP 暂不可达：${target_ip}:${target_port}。你仍可继续写入规则。" ;;
+    esac
   else
     warn "后端地址暂未解析：${target_host}。你仍可继续写入规则。"
   fi
@@ -1659,7 +1844,7 @@ set_forward_enabled() {
 edit_forward() {
   need_root_unless_dry_run
   local name row old_name old_port old_host old_tport old_iface old_route old_enabled old_comment
-  local entry_port target_host target_port out_iface route_table enabled comment new_row
+  local entry_port target_host target_port out_iface route_table enabled comment new_row route_defaults
   name="${1:-}"
   [[ -n "$name" ]] || name="$(prompt_value "转发名称")"
   name="$(safe_name "$name")"
@@ -1674,8 +1859,8 @@ edit_forward() {
   fi
   target_host="$(prompt_host "后端 TARGET_HOST" "$old_host")"
   target_port="$(prompt_port "后端 TARGET_PORT" "$old_tport")"
-  out_iface="$(prompt_value "出口接口 out_iface，留空自动" "$old_iface")"
-  route_table="$(prompt_value "出口路由表 route_table，留空不指定" "$old_route")"
+  route_defaults="$(prompt_forward_route_choice "$target_host" "$old_iface" "$old_route")"
+  IFS=$'\t' read -r out_iface route_table <<<"$route_defaults"
   enabled="$(prompt_value "是否启用 true/false" "$old_enabled")"
   comment="$(prompt_value "备注" "$old_comment")"
   new_row="${old_name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
@@ -1693,11 +1878,12 @@ test_forward() {
   IFS=$'\034' read -r name _entry_port target_host target_ip target_port _out_iface _route_table enabled _comment <<<"$(awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} {print $1,$2,$3,$4,$5,$6,$7,$8,$9}' <<<"$row")"
   [[ "$enabled" == "true" ]] || warn "该转发当前 disabled，仅执行后端可达性测试。"
   [[ -n "$target_ip" ]] || { warn "目标未解析：${target_host}"; return 0; }
-  if tcp_reachable "$target_ip" "$target_port"; then
-    ok "${target_ip}:${target_port} 可达"
-  else
-    warn "${target_ip}:${target_port} 不可达"
-  fi
+  ensure_nc_for_test || true
+  case "$(tcp_reachable_status "$target_ip" "$target_port")" in
+    0) ok "${target_ip}:${target_port} 可达" ;;
+    2) warn "未找到 nc，无法测试 ${target_ip}:${target_port}；请安装 netcat-openbsd" ;;
+    *) warn "${target_ip}:${target_port} 不可达" ;;
+  esac
 }
 
 import_forwards_tsv() {
@@ -2036,7 +2222,7 @@ ENABLED=true" 600
 }
 
 apply_nft_rules() {
-  local role="$1" content tmp old enabled_count=-1 relay_ip start end
+  local role="$1" auto_fix_route="${2:-0}" content tmp old enabled_count=-1 relay_ip start end
   need_root_unless_dry_run
   install_packages nftables iproute2 || return 1
   configure_forward_sysctl || warn "IPv4 转发 sysctl 写入失败，请稍后手动检查。"
@@ -2055,13 +2241,14 @@ apply_nft_rules() {
         return 1
       fi
       ;;
-    leikwan-relay)
-      enabled_count="$(enabled_forwards_count)" || return 1
+	    leikwan-relay)
+	      enabled_count="$(enabled_forwards_count)" || return 1
       if (( enabled_count == 0 )); then
         warn "当前没有任何启用的转发目标。"
         prompt_yes_no "当前没有任何启用的转发目标，是否仍然应用空规则？" "N" || return 0
       fi
-      resolve_forwards || return 1
+	      sync_forward_routes_if_needed "$auto_fix_route" || warn "转发出口一致性检查未完成，将继续尝试应用规则。"
+	      resolve_forwards || return 1
       if (( enabled_count > 0 )) && ! resolved_rows | awk -F'\t' '$8=="true" && $4!="" {found=1} END{exit !found}'; then
         fail "没有可用的 resolved 转发规则，已停止应用 nftables。"
         return 1
@@ -2222,27 +2409,77 @@ pbr_apply() {
   need_root_unless_dry_run
   pbr_init_rt_tables
   [[ -f "$PBR_STATIC_CONF" ]] || { warn "暂无 PBR 静态规则。"; return 0; }
-  local cidr group table_id gw table_name
+  local cidr group table_id gw table_name normalized
   while read -r cidr group; do
     [[ -n "$cidr" && "$cidr" != \#* ]] || continue
+    normalized="$(normalize_ipv4_cidr "$cidr" 2>/dev/null || true)"
+    if [[ -z "$normalized" ]]; then
+      warn "跳过无效 PBR 目标：${cidr}"
+      continue
+    fi
+    cidr="$normalized"
     group="${group#T_}"
     table_name="T_${group}"
-    table_id="$(pbr_table_id "$group")" || { warn "未知线路组：${group}"; continue; }
-    gw="$(pbr_group_gateway "$group")" || { warn "未知网关：${group}"; continue; }
-    grep -qE "^[[:space:]]*${table_id}[[:space:]]+${table_name}$" "$PBR_RT_TABLES" || echo "${table_id} ${table_name}" >>"$PBR_RT_TABLES"
-    ip route replace default via "$gw" table "$table_id" || true
+    table_id="$(pbr_table_id "$group" 2>/dev/null || true)"
+    if [[ -z "$table_id" ]]; then
+      table_id="$(awk -v t="$table_name" '$2==t {print $1; exit}' "$PBR_RT_TABLES" 2>/dev/null || true)"
+      [[ -n "$table_id" ]] || table_id="$table_name"
+    fi
+    gw="$(pbr_group_gateway "$group" 2>/dev/null || true)"
+    if [[ "$table_id" =~ ^[0-9]+$ ]]; then
+      grep -qE "^[[:space:]]*${table_id}[[:space:]]+${table_name}$" "$PBR_RT_TABLES" 2>/dev/null || echo "${table_id} ${table_name}" >>"$PBR_RT_TABLES"
+    fi
+    if [[ -n "$gw" ]]; then
+      if ! ip route replace default via "$gw" table "$table_id" 2>/dev/null; then
+        fail "PBR 路由表 ${table_name} 默认路由写入失败：via ${gw}"
+        continue
+      fi
+    fi
     ip rule del to "$cidr" table "$table_id" priority "$PBR_PRIORITY" 2>/dev/null || true
-    ip rule add to "$cidr" table "$table_id" priority "$PBR_PRIORITY"
+    if ! ip rule add to "$cidr" table "$table_id" priority "$PBR_PRIORITY" 2>/dev/null; then
+      fail "PBR 应用失败：${cidr} -> ${table_name}"
+      continue
+    fi
     ok "PBR：${cidr} -> ${table_name}"
   done <"$PBR_STATIC_CONF"
 }
 
+pbr_select_group() {
+  local choice custom
+  while true; do
+    echo >&2
+    echo "请选择线路组：" >&2
+    echo "1. CN2 -> T_CN2" >&2
+    echo "2. 9929 -> T_9929" >&2
+    echo "3. 自定义路由表" >&2
+    echo "0. 返回" >&2
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) printf '%s' "CN2"; return 0 ;;
+      2) printf '%s' "9929"; return 0 ;;
+      3)
+        custom="$(prompt_value "请输入自定义 route_table，例如 T_HKSDWAN")"
+        custom="${custom#T_}"
+        [[ -n "$custom" ]] || { warn "route_table 不能为空。"; continue; }
+        printf '%s' "$custom"
+        return 0
+        ;;
+      0|"") return 1 ;;
+      *) echo "无效选择，请重新输入。" >&2 ;;
+    esac
+  done
+}
+
 pbr_add_static() {
   need_root_unless_dry_run
-  local cidr group
-  cidr="$(prompt_value "目标 IP/CIDR")"
-  [[ "$cidr" == */* ]] || cidr="${cidr}/32"
-  group="$(prompt_value "线路组，例如 9929 / CN2 / HKSDWAN" "9929")"
+  local cidr group input
+  while true; do
+    input="$(prompt_value "目标 IP/CIDR")"
+    cidr="$(normalize_ipv4_cidr "$input" 2>/dev/null || true)"
+    [[ -n "$cidr" ]] && break
+    warn "目标 IP/CIDR 无效，请重新输入。"
+  done
+  group="$(pbr_select_group)" || return 0
   mkdir -p "$PBR_DIR"
   grep -qxF "${cidr} ${group#T_}" "$PBR_STATIC_CONF" 2>/dev/null || echo "${cidr} ${group#T_}" >>"$PBR_STATIC_CONF"
   pbr_apply
@@ -2358,7 +2595,7 @@ doctor_cloud() {
   port="${port:-$EASYTIER_PORT_DEFAULT}"
   if is_fast_port "$port"; then report OK "EasyTier 监听端口：tcp/${port}，位于白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; else report WARN "EasyTier 监听端口：tcp/${port}，不在白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; fi
   if ss -lntH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then report OK "EasyTier TCP ${port} 已监听"; else report WARN "EasyTier TCP ${port} 未监听"; fi
-  report_ping_quality "$RELAY_ET_IP" "ping relay ${RELAY_ET_IP}"
+  report_ping_quality "$RELAY_ET_IP" "ping relay ${RELAY_ET_IP}" || true
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
     report OK "nftables table inet leikwan_forward 存在"
     if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; fi
@@ -2403,12 +2640,12 @@ doctor_relay() {
     if grep -q "$et_ip" <<<"$peer_text"; then report OK "入口 ${name} peer 可见：${et_ip}"; else report WARN "入口 ${name} peer 暂未在 easytier-cli 中出现"; fi
     report INFO "入口 ${name} peer 目标：${proto}://${public_host}:${port}"
     if is_fast_port "$port"; then report OK "入口 ${name} EasyTier 端口 ${port} 位于白名单"; else report WARN "入口 ${name} EasyTier 端口 ${port} 不在白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; fi
-    report_ping_quality "$et_ip" "ping ${name} ${et_ip}"
-    if tcp_reachable "$public_host" "$port"; then
-      report OK "入口 ${name} TCP 可达：${public_host}:${port}"
-    else
-      report WARN "入口 ${name} TCP 不可达：${public_host}:${port}"
-    fi
+    report_ping_quality "$et_ip" "ping ${name} ${et_ip}" || true
+    case "$(tcp_reachable_status "$public_host" "$port")" in
+      0) report OK "入口 ${name} TCP 可达：${public_host}:${port}" ;;
+      2) report WARN "未找到 nc，无法测试入口 ${name} TCP；请安装 netcat-openbsd" ;;
+      *) report WARN "入口 ${name} TCP 不可达：${public_host}:${port}" ;;
+    esac
   done < <(entries_rows)
   if sysctl -n net.ipv4.ip_forward 2>/dev/null | grep -qx 1; then report OK "net.ipv4.ip_forward=1"; else report WARN "net.ipv4.ip_forward 未启用"; fi
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
@@ -2437,11 +2674,12 @@ doctor_relay() {
         report WARN "${name} target 未解析"
       fi
       if [[ -n "$target_ip" ]]; then
-        if tcp_reachable "$target_ip" "$target_port"; then
-          report OK "${name} target TCP 可达"
-        else
-          report WARN "${name} target TCP 不可达"
-        fi
+        report_forward_route_consistency "$name" "$target_host" "$out_iface" "$route_table"
+        case "$(tcp_reachable_status "$target_ip" "$target_port")" in
+          0) report OK "${name} target TCP 可达" ;;
+          2) report WARN "未找到 nc，无法测试 ${name} target TCP；请安装 netcat-openbsd" ;;
+          *) report WARN "${name} target TCP 不可达" ;;
+        esac
       fi
       if [[ -n "$target_ip" ]]; then
         if nft_has_relay_dnat "$entry_port" "$target_ip" "$target_port"; then
@@ -2544,8 +2782,14 @@ link_test_menu() {
     case "$choice" in
       1) ping -c 4 "$RELAY_ET_IP" || true ;;
       2) entries_rows | while IFS=$'\t' read -r _n _h ip _proto _port _w e; do [[ "$e" == "true" ]] && ping -c 2 "$ip" || true; done ;;
-      3) entries_rows | while IFS=$'\t' read -r _n h _ip _proto port _w e; do [[ "$e" == "true" ]] && nc -vz -w 3 "$h" "$port" || true; done ;;
-      4) resolved_rows | while IFS=$'\t' read -r _n _ep _th ti tp _oi _rt en _c; do [[ "$en" == "true" && -n "$ti" ]] && nc -vz -w 3 "$ti" "$tp" || true; done ;;
+      3)
+        ensure_nc_for_test || continue
+        entries_rows | while IFS=$'\t' read -r _n h _ip _proto port _w e; do [[ "$e" == "true" ]] && nc -vz -w 3 "$h" "$port" || true; done
+        ;;
+      4)
+        ensure_nc_for_test || continue
+        resolved_rows | while IFS=$'\t' read -r _n _ep _th ti tp _oi _rt en _c; do [[ "$en" == "true" && -n "$ti" ]] && nc -vz -w 3 "$ti" "$tp" || true; done
+        ;;
       0) return 0 ;;
     esac
   done
@@ -3168,7 +3412,13 @@ main() {
         export) export_forward_code_by_name "${3:-}" ;;
         import) warn "forward import 已降级为高级兼容；默认请在 A 执行 lq entry expose-range，一次性配置入口端口池。"; import_forward_code "${3:-}" ;;
         list) list_forwards ;;
-        apply-relay) apply_nft_rules "leikwan-relay" ;;
+        apply-relay)
+          if [[ "${3:-}" == "--auto-fix-route" ]]; then
+            apply_nft_rules "leikwan-relay" 1
+          else
+            apply_nft_rules "leikwan-relay"
+          fi
+          ;;
         *) fail "未知 forward 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;

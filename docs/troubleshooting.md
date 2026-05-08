@@ -1,6 +1,6 @@
-# 排错
+# 排错说明
 
-v0.4 的排错边界：EasyTier 负责 A/B 虚拟网络，nftables 负责 TCP 四层转发。后端目标协议由用户自行排查。
+v0.4 主线是 EasyTier 组网加 nftables 四层 TCP 转发。脚本不部署后端协议，只负责把 A 公网入口端口转到 B，再由 B 转到用户自备的 TCP 后端。
 
 ## doctor
 
@@ -9,118 +9,128 @@ sudo lq --doctor
 sudo lq --doctor --verbose
 ```
 
-普通模式只输出 `[OK] [WARN] [INFO] [FAIL]`。详细模式会显示配置文件路径等调试信息。
+doctor 只输出 `[OK] [WARN] [INFO] [FAIL]`。检查命令失败只会变成 WARN 或 FAIL，不应因为 `grep`、`nft`、`ping`、`nc`、`ip route get`、`easytier-cli` 等命令失败直接退出脚本。
 
 ## EasyTier 下载失败
 
-EasyTier release 包较大，GitHub 直连慢时可能出现下载到一半超时。v0.4 安装器会把大文件先写入 `.part` 临时文件，只有在文件大于 10MB 且压缩包校验通过后才安装，不会把半截文件当成成功。
+EasyTier release 包较大，GitHub 慢时容易下载中断。安装器会轮询自定义镜像、内置镜像和官方 GitHub，并先写入 `.part` 临时文件，只有文件大小和压缩包校验通过后才安装。
 
-可先设置镜像轮询：
+可设置镜像：
 
 ```bash
 export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
 ```
 
-排查顺序：
+仍失败时：
 
-1. 执行 `DNS / IPv4 优先修复`。
-2. 重新安装 EasyTier。
-3. 如果仍失败，手动下载 EasyTier zip 后，在脚本提示时输入本地路径。
+1. 先执行 `DNS / IPv4 优先修复`。
+2. 再运行 EasyTier 安装。
+3. 仍不通时，手动下载 EasyTier zip 或 tar.gz，按提示输入本地路径。
 
-下载日志如果出现每个候选 URL 都失败，脚本会列出已尝试地址，便于判断是 DNS、GitHub、镜像还是本机出口问题。
+## A 公网入口端口不通
 
-## entry 端口不通
-
-检查：
+在 A 上检查：
 
 ```bash
 systemctl status easytier-entry-aliyun --no-pager
 ss -lntup | grep 8301
-```
-
-常见原因：
-
-- 云安全组没有放行 TCP `8301`。
-- EasyTier binary 安装失败。
-- 配对码中的公网地址填错。
-
-## relay 看不到入口
-
-检查：
-
-```bash
-systemctl status easytier-relay --no-pager
-easytier-cli peer
-cat /etc/leikwan-wg-toolkit/entries/entries.tsv
-```
-
-如果 `entries.tsv` 已登记但 peer 不可见，先确认 relay 能访问 `ENTRY_PUBLIC_HOST:8301`。
-
-## EasyTier IP 不存在
-
-```bash
-ip -br addr
-```
-
-doctor 会通过本机 EasyTier IP 查找虚拟接口。如果服务 active 但 IP 不存在，通常是 EasyTier 参数不兼容或 network secret 不一致。
-
-## nftables 未生效
-
-检查项目表：
-
-```bash
 nft list table inet leikwan_forward
 ```
 
-脚本只管理这个表。应用规则前会执行 `nft -c -f`，失败会尝试回滚。
+安全组需要放行：
 
-如果 `enabled forwards` 大于 0，但表里没有 `dnat` 规则，说明入口或 relay 侧规则没有正确生成。重新执行：
+- EasyTier TCP `8301`
+- 入口端口池，例如 `10000-19999` 或 `10001-10020`
+
+A 侧端口池 DNAT 应类似：
+
+```text
+tcp dport 10001-10020 dnat ip to 10.198.1.1
+```
+
+## B 到后端超时
+
+如果 A 能连到 B 的 EasyTier IP，但外部访问入口端口超时，常见原因是 B 的后端出口接口或 PBR 路由表不一致。
+
+在 B 上检查：
 
 ```bash
-sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1  # 在 A entry 上，仅需一次
-sudo lq forward add                                                    # 在 B relay 上
+ip route get <TARGET_IP>
+nft list table inet leikwan_forward
+sudo lq --doctor
 ```
 
-cloud-entry 侧不直接转发到后端目标，只生成端口池 DNAT：
+如果 `ip route get` 显示：
 
 ```text
-tcp dport 10000-19999 dnat ip to 10.198.1.1
+dev eth1 table T_CN2
 ```
 
-relay 侧才会生成：
+但 nftables 里是：
 
 ```text
-tcp dport ENTRY_PORT dnat ip to TARGET_IP:TARGET_PORT
+oifname "eth0"
 ```
 
-## 有延迟但应用层连不上
+就会出现 A 已经到 B，但 B 转后端超时。执行：
 
-如果后端直连成功，但经 A -> EasyTier -> B 转发后连接失败，优先检查 TCP MSS clamp。
+```bash
+sudo lq forward apply-relay
+```
 
-典型场景：
+交互模式会询问是否自动修正。非交互可使用：
+
+```bash
+sudo lq forward apply-relay --auto-fix-route
+```
+
+`lq forward add` 和 `lq forward edit` 会自动通过 `ip route get TARGET_IP` 推荐实际 `out_iface` 和 `route_table`，普通用户不用手动猜 `eth0` / `eth1`。
+
+## 缺少 nc
+
+链路测试和后端 TCP 测试依赖 `nc`。干净系统缺少时，脚本会提示安装 `netcat-openbsd`，不会直接报 `nc: command not found`。
+
+手动安装：
+
+```bash
+sudo apt-get install -y netcat-openbsd
+```
+
+## PBR 输入非法
+
+PBR 目标必须是合法 IPv4 或 CIDR：
 
 ```text
-直连后端 TCP 服务成功
-A_PUBLIC_HOST:ENTRY_PORT -> A -> EasyTier/tun -> B -> TARGET_HOST:TARGET_PORT 失败
+203.0.113.30
+203.0.113.0/24
 ```
 
-A 和 B 的项目 nftables 表都应该包含：
+这些输入会被拒绝：
+
+```text
+123456
+abc
+999.1.1.1
+203.0.113.10/99
+```
+
+非法输入不会写入 `static-routes.conf`，也不会执行 `ip route add`。
+
+## MSS clamp
+
+EasyTier/tun 双 NAT 转发部分 TCP 后端时，可能出现“能 ping、有延迟，但 TCP 业务连不上”。项目默认在 A/B 的项目 nftables 规则中加入：
 
 ```text
 tcp flags syn tcp option maxseg size set 1320
 ```
 
-修复：
+doctor 应显示：
 
-```bash
-sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1  # A
-sudo lq forward apply-relay                                           # B
-sudo lq --doctor
+```text
+[OK] TCP MSS clamp enabled: 1320
 ```
 
-doctor 显示 `TCP MSS clamp enabled: 1320` 即为启用。
-
-默认值 `1320` 是当前验证的最高稳定值。如果仍然出现“有延迟但无法连接”，建议依次降到 `1280`、`1200`：
+如果仍不稳定，可以降到 `1280` 或 `1200`：
 
 ```bash
 sudo install -d -m 700 /etc/leikwan-wg-toolkit/nft
@@ -129,22 +139,27 @@ sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
 sudo lq forward apply-relay
 ```
 
-`forwards.tsv` 必须是 8 列 TAB 分隔。默认请使用 `lq forward add/edit/delete`，不要手写空格对齐。
+## forwards.tsv
 
-v0.4 默认不再推荐 `lq forward import`。A 只需要配置入口端口池，B 负责所有 `forward add/edit/delete`。
-
-## target 不通
-
-在 relay 上测试：
+默认不要手写 TSV，推荐：
 
 ```bash
-nc -vz -w 3 <TARGET_HOST> <TARGET_PORT>
-ip route get <TARGET_IP>
+sudo lq forward add
+sudo lq forward edit <name>
+sudo lq forward delete <name>
 ```
 
-如果使用 PBR，确认 `route_table` 与 `ip rule` 已生效。
+高级用户手写时必须使用 TAB 分隔 8 列：
+
+```text
+name    entry_port    target_host    target_port    out_iface    route_table    enabled    comment
+```
+
+如果字段数不对，脚本会明确提示行号、实际字段数和当前行内容，并停止应用空 nftables 规则。
 
 ## 生成脱敏报告
+
+菜单路径：
 
 ```text
 高级功能 -> 生成脱敏故障报告
@@ -156,4 +171,4 @@ ip route get <TARGET_IP>
 /root/leikwan-debug-report.txt
 ```
 
-报告会脱敏 EasyTier network secret、历史私钥字段和常见代理链接格式。
+报告会脱敏 EasyTier network secret 和历史敏感字段。

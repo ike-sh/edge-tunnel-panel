@@ -241,6 +241,7 @@ service-a10001203.0.113.3030004truecomment
 
 ```bash
 sudo lq --doctor
+sudo lq --doctor --verbose
 ```
 
 合格标准：
@@ -248,6 +249,105 @@ sudo lq --doctor
 - cloud-entry 检查 EasyTier entry、监听端口、nftables。
 - relay 检查 EasyTier relay、entries、forwards、target、PBR。
 - 主流程诊断不出现旧 0.2/0.3 组件字段。
+- A/B 在 DNAT 检查、MSS 检查、ping RTT 解析、EasyTier peer 获取、target TCP 检查失败时只能输出 WARN/FAIL，不能崩溃退出。
+- 菜单路径 `主菜单 -> 一键诊断`、`利群主机 -> 查看利群主机状态`、`公网入口 -> 查看公网入口状态`、`高级功能 -> 查看全部状态` 都不能在 DNAT 检查后退出。
+
+## nc 缺失
+
+在没有 `nc` 的干净系统上进入：
+
+```text
+高级功能 -> 链路测试
+```
+
+合格标准：
+
+- 不出现 `nc: command not found`。
+- 交互模式提示是否安装 `netcat-openbsd`。
+- 非交互模式提示 `apt-get install -y netcat-openbsd` 并跳过当前 TCP 测试。
+
+## PBR 非法输入
+
+菜单：
+
+```text
+利群主机 -> IPv4 多出口策略路由 / PBR -> 添加静态 PBR
+```
+
+输入：
+
+```text
+123456
+```
+
+合格标准：
+
+- 输出目标 IP/CIDR 无效。
+- 不写入 `static-routes.conf`。
+- 不执行 `ip rule add`。
+- 不崩溃。
+
+线路组选择：
+
+```text
+1. CN2 -> T_CN2
+2. 9929 -> T_9929
+3. 自定义路由表
+0. 返回
+```
+
+合格标准：
+
+- 选择 CN2 后写入 `CN2` / 应用到 `T_CN2`。
+- 选择 9929 后写入 `9929` / 应用到 `T_9929`。
+- 非法选择重新提示。
+
+## forward 出口自动识别
+
+在 B 上添加后端：
+
+```text
+target_host=203.0.113.30
+target_port=37592
+```
+
+如果：
+
+```bash
+ip route get 203.0.113.30
+```
+
+显示：
+
+```text
+dev eth1 table T_CN2
+```
+
+合格标准：
+
+- `lq forward add` 显示检测到实际出口。
+- 默认推荐 `out_iface=eth1`、`route_table=T_CN2`。
+- 不再默认写 `eth0`。
+
+人为把 `forwards.tsv` 改坏：
+
+```text
+out_iface=eth0
+route_table=
+```
+
+执行：
+
+```bash
+sudo lq forward apply-relay
+```
+
+合格标准：
+
+- 交互模式 WARN 配置和实际路由不一致。
+- 选择自动修正后，`forwards.tsv` 改为实际 `dev/table`。
+- nftables 规则使用实际 `oifname "eth1"`。
+- 非交互可执行 `sudo lq forward apply-relay --auto-fix-route`。
 
 ## 脱敏
 
