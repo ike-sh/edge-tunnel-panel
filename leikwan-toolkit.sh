@@ -18,6 +18,7 @@ BACKUP_DIR="/var/backups/leikwan-toolkit"
 OLD_LOG_FILE="/var/log/leikwan-wg-toolkit.log"
 OLD_STATE_DIR="/etc/leikwan-wg-toolkit"
 OLD_BACKUP_DIR="/var/backups/leikwan-wg-toolkit"
+OLD_ROOT_SCRIPT="/root/wg-${PROJECT_NAME#leikwan-}.sh"
 OUTPUT_DIR="${STATE_DIR}/outputs"
 NFT_DIR="${STATE_DIR}/nft"
 ENTRY_DIR="${STATE_DIR}/entry"
@@ -3336,6 +3337,12 @@ cleanup_easytier_entry_units() {
 
 cleanup_leikwan_policy_routes() {
   local table table_id pref tmp
+  if command -v ip >/dev/null 2>&1; then
+    while IFS= read -r pref; do
+      [[ -n "$pref" ]] || continue
+      ip rule del pref "$pref" 2>/dev/null || true
+    done < <(ip rule show 2>/dev/null | awk -v p="$PBR_PRIORITY" '$1 ~ "^"p":" {gsub(":","",$1); print $1}' || true)
+  fi
   for table in T_CN2 T_9929; do
     if command -v ip >/dev/null 2>&1; then
       ip route flush table "$table" 2>/dev/null || true
@@ -3364,6 +3371,21 @@ cleanup_leikwan_policy_routes() {
       cat "$tmp" >"$PBR_RT_TABLES" 2>/dev/null || true
     fi
     rm -f "$tmp" 2>/dev/null || true
+  fi
+}
+
+systemd_reload_reset_failed() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl reset-failed 2>/dev/null || true
+}
+
+uninstall_check_command_absent() {
+  local label="$1" command_name="$2"
+  if command -v "$command_name" >/dev/null 2>&1; then
+    warn "${label}：仍可执行 $(command -v "$command_name" 2>/dev/null)"
+  else
+    ok "${label}：已清理"
   fi
 }
 
@@ -3409,7 +3431,7 @@ uninstall_new_mode() {
   echo "不会删除系统本身，也不会删除用户手动部署的业务。"
   echo "将处理的路径："
   echo "- ${STATE_DIR}"
-  echo "- ${OLD_STATE_DIR}（旧名称兼容清理）"
+  echo "- ${OLD_STATE_DIR}（历史路径清理）"
   echo "- ${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}"
   echo "- ${SHORTCUT_LQ} / ${SHORTCUT_LQ_UPPER}"
   echo "- ${NFT_RULE_FILE} / ${NFT_SERVICE}"
@@ -3432,9 +3454,9 @@ uninstall_new_mode() {
   fi
   cleanup_leikwan_policy_routes
   safe_rm_file "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN" "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER" \
-    "/root/leikwan-toolkit.sh" "/root/wg-toolkit.sh" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF" "$LOG_FILE" "$OLD_LOG_FILE"
+    "/root/leikwan-toolkit.sh" "$OLD_ROOT_SCRIPT" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF" "$LOG_FILE" "$OLD_LOG_FILE"
   safe_rm_dir "$STATE_DIR" "$OLD_STATE_DIR" "$BACKUP_DIR" "$OLD_BACKUP_DIR"
-  command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
+  systemd_reload_reset_failed
   set -e
 
   echo
@@ -3448,8 +3470,10 @@ uninstall_new_mode() {
   uninstall_check_line "EasyTier cli" file "$EASYTIER_CLI_BIN"
   uninstall_check_line "快捷命令 lq" file "$SHORTCUT_LQ"
   uninstall_check_line "快捷命令 LQ" file "$SHORTCUT_LQ_UPPER"
+  uninstall_check_command_absent "command -v lq" lq
+  uninstall_check_command_absent "command -v LQ" LQ
   uninstall_check_line "主脚本" file "/root/leikwan-toolkit.sh"
-  uninstall_check_line "旧主脚本兼容入口" file "/root/wg-toolkit.sh"
+  uninstall_check_line "历史主脚本路径" file "$OLD_ROOT_SCRIPT"
   uninstall_check_line "配置目录" dir "$STATE_DIR"
   uninstall_check_line "旧配置目录" dir "$OLD_STATE_DIR"
   uninstall_check_line "备份目录" dir "$BACKUP_DIR"
@@ -3605,9 +3629,6 @@ install_shortcuts() {
   need_root_unless_dry_run
   local script_path content
   script_path="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
-  if [[ "$(basename "$script_path")" == "wg-toolkit.sh" && -f "$(dirname "$script_path")/leikwan-toolkit.sh" ]]; then
-    script_path="$(dirname "$script_path")/leikwan-toolkit.sh"
-  fi
   content="#!/usr/bin/env bash
 # Managed by leikwan-toolkit
 exec bash ${script_path@Q} \"\$@\""

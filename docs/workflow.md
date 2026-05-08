@@ -12,7 +12,7 @@
 curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq
 ```
 
-主脚本是 `/root/leikwan-toolkit.sh`。旧名称 `wg-toolkit.sh` 只作为兼容 wrapper。
+唯一主脚本是 `/root/leikwan-toolkit.sh`，`lq` 和 `LQ` 都指向它。
 
 ## 快速组网菜单
 

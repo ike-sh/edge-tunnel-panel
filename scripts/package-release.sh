@@ -16,14 +16,14 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   exit 1
 fi
 
-shellcheck leikwan-toolkit.sh wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
+shellcheck leikwan-toolkit.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
 bash scripts/check-redaction.sh
 
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 mkdir -p "$STAGING_DIR"
 
-cp leikwan-toolkit.sh wg-toolkit.sh uninstall.sh README.md "$STAGING_DIR/"
+cp leikwan-toolkit.sh README.md "$STAGING_DIR/"
 cp -R docs "$STAGING_DIR/docs"
 mkdir -p "$STAGING_DIR/scripts"
 cp scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh "$STAGING_DIR/scripts/"
@@ -52,7 +52,7 @@ echo "curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/s
 echo "lq"
 echo
 echo "下载到本地再执行："
-echo "curl -fsSL -o /root/leikwan-toolkit.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && lq"
+echo "curl -fsSL -o /root/leikwan-toolkit.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/LQ && lq"
 echo
 echo "Release 包安装："
-echo "curl -fsSL -o /tmp/leikwan-toolkit.tar.gz https://github.com/ike-sh/leikwan-toolkit/releases/latest/download/leikwan-toolkit-${PACKAGE_VERSION}.tar.gz && tar -xzf /tmp/leikwan-toolkit.tar.gz -C /root && cp /root/leikwan-toolkit-${PACKAGE_VERSION}/leikwan-toolkit.sh /root/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && lq"
+echo "curl -fsSL -o /tmp/leikwan-toolkit.tar.gz https://github.com/ike-sh/leikwan-toolkit/releases/latest/download/leikwan-toolkit-${PACKAGE_VERSION}.tar.gz && tar -xzf /tmp/leikwan-toolkit.tar.gz -C /root && cp /root/leikwan-toolkit-${PACKAGE_VERSION}/leikwan-toolkit.sh /root/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/LQ && lq"

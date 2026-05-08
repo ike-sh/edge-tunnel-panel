@@ -19,6 +19,7 @@ curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leik
 ```text
 /root/leikwan-toolkit.sh
 /usr/local/bin/lq -> /root/leikwan-toolkit.sh
+/usr/local/bin/LQ -> /root/leikwan-toolkit.sh
 ```
 
 GitHub 慢时设置：

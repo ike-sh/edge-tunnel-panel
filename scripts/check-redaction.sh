@@ -4,10 +4,16 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TARGETS=(README.md docs)
+TARGETS=(leikwan-toolkit.sh scripts/bootstrap.sh scripts/package-release.sh README.md docs)
 TOOL_VERSION="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' leikwan-toolkit.sh 2>/dev/null || true)"
 if [[ -n "$TOOL_VERSION" && -d "dist/leikwan-toolkit-${TOOL_VERSION}" ]]; then
-  TARGETS+=("dist/leikwan-toolkit-${TOOL_VERSION}/README.md" "dist/leikwan-toolkit-${TOOL_VERSION}/docs")
+  TARGETS+=(
+    "dist/leikwan-toolkit-${TOOL_VERSION}/leikwan-toolkit.sh"
+    "dist/leikwan-toolkit-${TOOL_VERSION}/scripts/bootstrap.sh"
+    "dist/leikwan-toolkit-${TOOL_VERSION}/scripts/package-release.sh"
+    "dist/leikwan-toolkit-${TOOL_VERSION}/README.md"
+    "dist/leikwan-toolkit-${TOOL_VERSION}/docs"
+  )
 fi
 
 FAILED=0
@@ -38,6 +44,9 @@ done
 is_allowed_ip() {
   local ip="$1"
   local o1 o2 o3 o4
+  case "$ip" in
+    1.1.1.1|8.8.8.8|8.8.4.4|9.9.9.9|223.5.5.5) return 0 ;;
+  esac
   IFS=. read -r o1 o2 o3 o4 <<<"$ip"
 
   (( o1 == 0 )) && return 0

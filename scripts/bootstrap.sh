@@ -3,9 +3,9 @@ set -Eeuo pipefail
 
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
 RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/leikwan-toolkit.sh"
-RAW_SCRIPT_FALLBACK_URL="https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/wg-toolkit.sh"
 INSTALL_PATH="/root/leikwan-toolkit.sh"
 SHORTCUT_PATH="/usr/local/bin/lq"
+SHORTCUT_PATH_UPPER="/usr/local/bin/LQ"
 RUN_MENU_MODE="auto"
 DEFAULT_GITHUB_MIRRORS=(
   "https://gh.llkk.cc/"
@@ -123,24 +123,17 @@ download_with_fallback() {
 
 install_tool() {
   command -v curl >/dev/null 2>&1 || { fail "缺少 curl，请先安装 curl。"; exit 1; }
-  local tmp used_fallback=0
+  local tmp
   tmp="$(mktemp)"
-  if ! download_with_fallback "$RAW_SCRIPT_URL" "$tmp"; then
-    warn "新主脚本下载失败，尝试旧名称兼容入口。"
-    download_with_fallback "$RAW_SCRIPT_FALLBACK_URL" "$tmp"
-    used_fallback=1
-  fi
-  if (( used_fallback == 1 )) && grep -q 'leikwan-toolkit.sh' "$tmp"; then
-    rm -f "$tmp"
-    fail "fallback 下载到的是旧名称兼容 wrapper，无法单独安装；请稍后重试新主脚本地址。"
-    return 1
-  fi
+  download_with_fallback "$RAW_SCRIPT_URL" "$tmp"
   install -m 755 "$tmp" "$INSTALL_PATH"
   rm -f "$tmp"
   ln -sf "$INSTALL_PATH" "$SHORTCUT_PATH"
+  ln -sf "$INSTALL_PATH" "$SHORTCUT_PATH_UPPER"
   ok "安装完成。"
   ok "脚本：${INSTALL_PATH}"
   ok "快捷命令：${SHORTCUT_PATH}"
+  ok "快捷命令：${SHORTCUT_PATH_UPPER}"
 }
 
 maybe_run_menu() {

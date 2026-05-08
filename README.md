@@ -5,7 +5,7 @@
 - 传输层：EasyTier
 - 转发层：nftables
 - 策略路由：IPv4 PBR
-- 运维能力：MSS clamp、doctor 诊断、一键卸载、旧名称兼容迁移
+- 运维能力：MSS clamp、doctor 诊断、一键卸载、旧路径迁移/清理
 
 仓库地址：[https://github.com/ike-sh/leikwan-toolkit](https://github.com/ike-sh/leikwan-toolkit)
 
@@ -17,20 +17,13 @@
 curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq
 ```
 
-管道安装只安装，不自动进入菜单：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh | bash
-lq
-```
-
 GitHub 慢时可启用镜像轮询：
 
 ```bash
 export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
 ```
 
-主脚本安装到 `/root/leikwan-toolkit.sh`，快捷命令 `/usr/local/bin/lq` 指向它。`wg-toolkit.sh` 仅作为旧名称兼容入口保留。
+唯一主脚本安装到 `/root/leikwan-toolkit.sh`，快捷命令 `/usr/local/bin/lq` 和 `/usr/local/bin/LQ` 都指向它。
 
 Release 包名：
 
@@ -111,6 +104,23 @@ DDNS / 域名后端是支持的。`apply-relay` 每次都会重新解析域名�
 ```
 
 如果检测到旧名称目录，新目录不存在时会自动迁移；新旧都存在时优先使用新目录，并提示旧目录可清理。
+
+## 卸载
+
+交互卸载：
+
+```text
+lq
+主菜单 -> 卸载全部
+```
+
+CLI 卸载：
+
+```bash
+bash /root/leikwan-toolkit.sh --uninstall
+```
+
+卸载逻辑内置在主脚本中，会清理本工具创建的 EasyTier 服务、nftables 转发表、快捷命令、状态目录、备份目录、日志、PBR 规则和历史路径。
 
 ## GitHub About 建议
 

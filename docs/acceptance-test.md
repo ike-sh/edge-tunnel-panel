@@ -5,8 +5,8 @@
 ## 静态检查
 
 ```bash
-bash -n leikwan-toolkit.sh wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
-shellcheck leikwan-toolkit.sh wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
+bash -n leikwan-toolkit.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
+shellcheck leikwan-toolkit.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
 git diff --check
 scripts/check-redaction.sh
 scripts/package-release.sh
@@ -22,12 +22,12 @@ dist/leikwan-toolkit-0.4.0-alpha.tar.gz
 
 ```text
 leikwan-toolkit.sh
-wg-toolkit.sh
-uninstall.sh
 scripts/bootstrap.sh
 docs/
 README.md
 ```
+
+包内不包含独立卸载脚本或旧入口脚本。
 
 ## 命名
 
@@ -47,7 +47,14 @@ GitHub : https://github.com/ike-sh/leikwan-toolkit
 curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq
 ```
 
-主脚本安装为 `/root/leikwan-toolkit.sh`，`wg-toolkit.sh` 是旧名称兼容 wrapper。
+唯一主脚本安装为 `/root/leikwan-toolkit.sh`，`lq` 和 `LQ` 都指向它。
+
+卸载入口：
+
+```text
+lq -> 主菜单 -> 卸载全部
+bash /root/leikwan-toolkit.sh --uninstall
+```
 
 ## 快速组网菜单
 
@@ -124,4 +131,4 @@ Hinet 10002 -> tw.example.com(203.0.113.20):52936 eth1 - enabled
 
 ## 旧名称检查
 
-旧仓库 URL、旧英文标题和旧后端端口提示不应命中主线内容；旧名称只允许出现在兼容 wrapper、迁移说明和卸载兼容清理中。
+旧入口脚本文件名、独立卸载脚本文件名、旧仓库 URL、旧英文标题都不应命中主线内容。`leikwan-wg-toolkit` 只允许出现在旧路径迁移/清理说明里。
