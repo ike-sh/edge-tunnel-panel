@@ -32,7 +32,7 @@ sudo lq --pbr-apply
 菜单：
 
 ```text
-高级功能 -> IPv4 多出口策略路由
+利群主机 -> IPv4 多出口策略路由
 ```
 
 ## 与 forwards.tsv 的关系

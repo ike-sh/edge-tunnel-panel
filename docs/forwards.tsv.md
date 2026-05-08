@@ -12,11 +12,11 @@
 
 ```text
 name  entry_port  target_host     target_port  out_iface  route_table  enabled  comment
-hk    10001       203.0.113.30    30004        eth1       T_CN2        true     hk-target
-jp    10002       target.example  30004                   T_9929       true     jp-target
+service-a  10001  203.0.113.30    30004        eth1       T_CN2        true     main-target
+service-b  10002  target.example  30004                   T_9929       true     backup-target
 ```
 
-默认推荐用快速转发，不要手写 TSV。v0.4 的新转发模型是：
+默认推荐用菜单或 `lq forward` 命令，不要手写 TSV。v0.4 的新转发模型是：
 
 - A 公网入口机只配置一次入口端口池。
 - B 利群中转机负责所有后端目标的新增 / 修改 / 删除 / 应用。
@@ -39,8 +39,8 @@ sudo lq forward add
 以后只在 B 上管理：
 
 ```bash
-sudo lq forward edit hk
-sudo lq forward delete hk
+sudo lq forward edit service-a
+sudo lq forward delete service-a
 sudo lq forward list
 sudo lq forward apply-relay
 ```
@@ -48,7 +48,7 @@ sudo lq forward apply-relay
 菜单入口：
 
 ```text
-主菜单 -> 快速转发
+利群主机 -> 转发目标管理
 ```
 
 `forward import` 只保留为 legacy / 高级兼容，不再是默认流程。
@@ -60,13 +60,13 @@ sudo install -d -m 700 /etc/leikwan-wg-toolkit/forwards
 {
   printf '# name\tentry_port\ttarget_host\ttarget_port\tout_iface\troute_table\tenabled\tcomment\n'
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    'hk' '10001' '203.0.113.30' '30004' 'eth1' 'T_CN2' 'true' 'hk-target'
+    'service-a' '10001' '203.0.113.30' '30004' 'eth1' 'T_CN2' 'true' 'main-target'
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    'jp' '10002' 'target.example' '30004' '' 'T_9929' 'true' 'jp-target'
+    'service-b' '10002' 'target.example' '30004' '' 'T_9929' 'true' 'backup-target'
 } | sudo tee /etc/leikwan-wg-toolkit/forwards/forwards.tsv >/dev/null
 ```
 
-写坏成 `hk10001203.0.113.3030004truehk-target` 这类“粘在一起”的内容时，脚本会停止解析并拒绝应用 nftables，避免生成空转发表。
+写坏成 `service-a10001203.0.113.3030004truecomment` 这类“粘在一起”的内容时，脚本会停止解析并拒绝应用 nftables，避免生成空转发表。
 
 字段说明：
 

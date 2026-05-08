@@ -39,8 +39,16 @@ EasyTier 服务：
 
 1. GitHub API release asset。
 2. 确定性 Release URL。
-3. ghfast / ghproxy 镜像。
+3. `LEIKWAN_GITHUB_MIRRORS` 或 `LEIKWAN_GITHUB_MIRROR` 配置的镜像前缀轮询。
 4. `/root/easytier*.tar.gz`、`/root/easytier*.zip` 或当前目录本地包。
+
+脚本始终先尝试官方 GitHub 地址。镜像只作为下载慢或失败时的 fallback，不会硬编码依赖单个第三方代理。
+
+示例：
+
+```bash
+export LEIKWAN_GITHUB_MIRRORS="https://mirror1.example/https://github.com,https://mirror2.example/https://github.com"
+```
 
 解包后通过 `find` 查找 `easytier-core` 和 `easytier-cli`，不假设目录结构。
 

@@ -16,7 +16,7 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   exit 1
 fi
 
-shellcheck wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh
+shellcheck wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
 bash scripts/check-redaction.sh
 
 rm -rf "$DIST_DIR"
@@ -26,7 +26,7 @@ mkdir -p "$STAGING_DIR"
 cp wg-toolkit.sh uninstall.sh README.md "$STAGING_DIR/"
 cp -R docs "$STAGING_DIR/docs"
 mkdir -p "$STAGING_DIR/scripts"
-cp scripts/package-release.sh scripts/check-redaction.sh "$STAGING_DIR/scripts/"
+cp scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh "$STAGING_DIR/scripts/"
 
 bash scripts/check-redaction.sh
 
@@ -43,3 +43,15 @@ fi
 
 echo "Package: ${PACKAGE_PATH}"
 echo "SHA256:  ${SHA_PATH}"
+echo
+echo "官方 GitHub 一键运行："
+echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh)"
+echo
+echo "安装快捷命令："
+echo "curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh | bash"
+echo
+echo "下载到本地再执行："
+echo "curl -fsSL -o /root/wg-toolkit.sh https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh && chmod +x /root/wg-toolkit.sh && ln -sf /root/wg-toolkit.sh /usr/local/bin/lq && lq"
+echo
+echo "Release 包安装："
+echo "curl -fsSL -o /tmp/leikwan-wg-toolkit.tar.gz https://github.com/ike-sh/leikwan-wg-toolkit/releases/latest/download/leikwan-wg-toolkit-${PACKAGE_VERSION}.tar.gz && tar -xzf /tmp/leikwan-wg-toolkit.tar.gz -C /root && cp /root/leikwan-wg-toolkit-${PACKAGE_VERSION}/wg-toolkit.sh /root/wg-toolkit.sh && chmod +x /root/wg-toolkit.sh && ln -sf /root/wg-toolkit.sh /usr/local/bin/lq && lq"

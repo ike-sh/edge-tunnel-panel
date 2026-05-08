@@ -37,8 +37,8 @@ B 利群中转机负责所有后端目标：
 
 ```bash
 sudo lq forward add
-sudo lq forward edit hk
-sudo lq forward delete hk
+sudo lq forward edit service-a
+sudo lq forward delete service-a
 sudo lq forward apply-relay
 ```
 

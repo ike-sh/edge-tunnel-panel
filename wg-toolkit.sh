@@ -3,9 +3,10 @@ set -Eeuo pipefail
 
 TOOL_VERSION="0.4.0-alpha"
 PROJECT_NAME="leikwan-wg-toolkit"
-PROJECT_TITLE="利群高铁四层转发工具"
+PROJECT_TITLE="利群快速组网工具"
 PROJECT_AUTHOR="ike-sh"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-wg-toolkit"
+PROJECT_RAW_SCRIPT="https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/wg-toolkit.sh"
 
 DRY_RUN=0
 VERBOSE_DOCTOR=0
@@ -236,7 +237,7 @@ confirm_summary() {
 print_banner() {
   cat <<EOF
 --------------------------------------------------
-  Leikwan WG Toolkit
+  Leikwan Toolkit
   ${PROJECT_TITLE}
   Author : ${PROJECT_AUTHOR}
   Version: ${TOOL_VERSION}
@@ -274,6 +275,13 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   默认 EasyTier 虚拟网段：${ET_NET}，relay：${RELAY_ET_IP}。
   默认 EasyTier TCP 端口：${DEFAULT_EASYTIER_PORT}，位于利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。
   不部署后端协议，不生成代理客户端链接。
+
+一键安装：
+  curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-wg-toolkit/main/scripts/bootstrap.sh | bash
+  bash <(curl -fsSL ${PROJECT_RAW_SCRIPT})
+
+如果 GitHub 下载慢，可设置：
+  export LEIKWAN_GITHUB_MIRRORS="https://mirror.example/https://github.com"
 EOF
 }
 
@@ -463,23 +471,99 @@ easytier_asset_names() {
 }
 
 easytier_api_url() {
-  local version="$1" arch="$2" api re
+  local version="$1" arch="$2" api re tmp result
   api="https://api.github.com/repos/EasyTier/EasyTier/releases/tags/${version}"
   case "$arch" in
     x86_64) re='linux.*(x86_64|amd64).*\.(zip|tar\.gz|tgz)$' ;;
     aarch64) re='linux.*(aarch64|arm64).*\.(zip|tar\.gz|tgz)$' ;;
     *) return 1 ;;
   esac
-  curl -fsSL "$api" 2>/dev/null |
-    jq -r --arg re "$re" '.assets[]? | select(.name | test($re; "i")) | .browser_download_url' |
-    head -n 1
+  tmp="$(mktemp)"
+  if ! download_github_asset "$api" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! result="$(jq -r --arg re "$re" '.assets[]? | select(.name | test($re; "i")) | .browser_download_url' "$tmp" | head -n 1)"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  rm -f "$tmp"
+  printf '%s\n' "$result"
 }
 
-url_variants() {
+trim_spaces() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+github_raw_to_github_url() {
   local url="$1"
-  printf '%s\n' "$url"
-  printf 'https://ghfast.top/%s\n' "$url"
-  printf 'https://ghproxy.net/%s\n' "$url"
+  if [[ "$url" =~ ^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.*)$ ]]; then
+    printf 'https://github.com/%s/%s/raw/%s/%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+    return 0
+  fi
+  return 1
+}
+
+mirror_url_for() {
+  local mirror="$1" raw_url="$2" github_url
+  mirror="${mirror%/}"
+  if [[ "$mirror" == *"{url}"* ]]; then
+    printf '%s\n' "${mirror//\{url\}/$raw_url}"
+    return 0
+  fi
+  if [[ "$mirror" == */https://github.com ]]; then
+    if [[ "$raw_url" == https://github.com/* ]]; then
+      printf '%s/%s\n' "$mirror" "${raw_url#https://github.com/}"
+      return 0
+    fi
+    if github_url="$(github_raw_to_github_url "$raw_url")"; then
+      printf '%s/%s\n' "$mirror" "${github_url#https://github.com/}"
+      return 0
+    fi
+  fi
+  printf '%s/%s\n' "$mirror" "$raw_url"
+}
+
+github_url_candidates() {
+  local raw_url="$1" mirrors mirror
+  local -a mirror_list=()
+  printf '%s\n' "$raw_url"
+  mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}"
+  mirrors="${mirrors//;/,}"
+  IFS=',' read -r -a mirror_list <<<"$mirrors"
+  for mirror in "${mirror_list[@]}"; do
+    mirror="$(trim_spaces "$mirror")"
+    [[ -n "$mirror" ]] || continue
+    mirror_url_for "$mirror" "$raw_url"
+  done
+}
+
+download_with_fallback() {
+  local raw_url="$1" dest_file="$2" candidate tmp timeout
+  timeout="${LEIKWAN_DOWNLOAD_TIMEOUT:-15}"
+  tmp="${dest_file}.tmp.$$"
+  rm -f "$tmp"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    info "正在尝试下载：${candidate}"
+    if curl -fL --retry 1 --connect-timeout "$timeout" --max-time "$timeout" -o "$tmp" "$candidate"; then
+      mv -f "$tmp" "$dest_file"
+      ok "下载成功：${candidate}"
+      return 0
+    fi
+    warn "下载失败，尝试下一个镜像"
+  done < <(github_url_candidates "$raw_url")
+  rm -f "$tmp"
+  warn "全部下载地址均失败：${raw_url}"
+  return 1
+}
+
+download_github_asset() {
+  local raw_url="$1" dest_file="$2"
+  download_with_fallback "$raw_url" "$dest_file"
 }
 
 choose_local_easytier_archive() {
@@ -519,12 +603,11 @@ download_easytier_archive() {
   for url in "${urls[@]}"; do
     while IFS= read -r candidate; do
       attempted+=("$candidate")
-      info "尝试下载：${candidate}"
-      if curl -fL --retry 2 --connect-timeout 15 "$candidate" -o "$dest"; then
-        ok "EasyTier 下载成功。"
-        return 0
-      fi
-    done < <(url_variants "$url")
+    done < <(github_url_candidates "$url")
+    if download_github_asset "$url" "$dest"; then
+      ok "EasyTier 下载成功。"
+      return 0
+    fi
   done
   warn "EasyTier 自动下载失败，已尝试以下 URL："
   printf '  %s\n' "${attempted[@]}" >&2
@@ -557,7 +640,7 @@ install_easytier_binary() {
   fi
   install_packages curl jq ca-certificates tar unzip
   local tmpdir archive core cli list
-  confirm_summary "EasyTier 安装摘要" "版本：${EASYTIER_VERSION}\n目标：${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}\n下载：GitHub API + 确定性 Release URL + ghfast/ghproxy + 本地包 fallback" || return 0
+  confirm_summary "EasyTier 安装摘要" "版本：${EASYTIER_VERSION}\n目标：${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}\n下载：官方 GitHub + LEIKWAN_GITHUB_MIRRORS 镜像轮询 + 本地包 fallback" || return 0
   (( DRY_RUN == 1 )) && return 0
   tmpdir="$(mktemp -d)"
   archive="${tmpdir}/easytier.pkg"
@@ -1407,7 +1490,7 @@ add_forward() {
   install_packages iproute2 netcat-openbsd
   ensure_tsv_files
   local name entry_port target_host target_port out_iface route_table enabled comment row target_ip route_defaults existing_name existing_port
-  name="$(safe_name "$(prompt_value "转发名称" "hk")")"
+  name="$(safe_name "$(prompt_value "转发名称" "service-a")")"
   entry_port="$(prompt_port "公网入口端口" "10001")"
   if reserved_entry_port "$entry_port"; then
     warn "该端口属于保留/常用端口：${entry_port}"
@@ -1714,7 +1797,7 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=${nft_bin} -f ${NFT_RULE_FILE}
-ExecStop=${nft_bin} delete table inet leikwan_forward
+ExecStop=-${nft_bin} delete table inet leikwan_forward
 
 [Install]
 WantedBy=multi-user.target
@@ -1850,22 +1933,25 @@ ENTRY_EXPOSE_END=${end}
 RELAY_ET_IP=${relay_ip}
 ENABLED=true" 600
   if [[ "$apply" != "no" ]]; then
-    apply_nft_rules "cloud-entry"
+    apply_nft_rules "cloud-entry" || warn "公网入口 nftables 未应用成功，请检查后重试。"
   fi
 }
 
 apply_nft_rules() {
   local role="$1" content tmp old enabled_count=-1 relay_ip start end
   need_root_unless_dry_run
-  install_packages nftables iproute2
-  configure_forward_sysctl
+  install_packages nftables iproute2 || return 1
+  configure_forward_sysctl || warn "IPv4 转发 sysctl 写入失败，请稍后手动检查。"
   case "$role" in
     cloud-entry)
       [[ -f "$ENTRY_EXPOSE_ENV" ]] || { warn "公网入口端口池未配置，请执行 lq entry expose-range"; return 1; }
       relay_ip="$(entry_expose_relay_ip)"
       start="$(entry_expose_start)"
       end="$(entry_expose_end)"
-      content="$(render_nft_cloud)"
+      if ! content="$(render_nft_cloud)"; then
+        fail "公网入口 nftables 规则生成失败。"
+        return 1
+      fi
       if ! grep -q "tcp dport ${start}-${end} dnat ip to ${relay_ip}" <<<"$content"; then
         fail "入口端口池 ${start}-${end} 未生成 DNAT 规则。"
         return 1
@@ -1882,7 +1968,10 @@ apply_nft_rules() {
         fail "没有可用的 resolved 转发规则，已停止应用 nftables。"
         return 1
       fi
-      content="$(render_nft_relay)"
+      if ! content="$(render_nft_relay)"; then
+        fail "利群转发 nftables 规则生成失败。"
+        return 1
+      fi
       if (( enabled_count > 0 )) && ! grep -q 'dnat ip to ' <<<"$content"; then
         fail "enabled forwards=${enabled_count}，但 relay nftables 未生成 DNAT 规则。"
         return 1
@@ -1895,12 +1984,20 @@ apply_nft_rules() {
   (( DRY_RUN == 1 )) && return 0
   tmp="$(mktemp)"; old="$(mktemp)"
   printf '%s\n' "$content" >"$tmp"
-  nft -c -f "$tmp"
+  if ! nft -c -f "$tmp"; then
+    fail "nftables 规则校验失败。"
+    rm -f "$tmp" "$old"
+    return 1
+  fi
   nft list table inet leikwan_forward >"$old" 2>/dev/null || true
   nft delete table inet leikwan_forward 2>/dev/null || true
   if nft -f "$tmp"; then
-    systemctl daemon-reload
-    systemctl enable "${NFT_SERVICE_NAME}.service"
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload || warn "systemd daemon-reload 失败，请稍后手动检查。"
+      systemctl enable "${NFT_SERVICE_NAME}.service" || warn "nftables 持久化服务启用失败，请稍后手动检查。"
+    else
+      warn "未找到 systemctl，nftables 已临时应用但无法创建持久化服务。"
+    fi
     if (( enabled_count == 0 )); then
       warn "已应用空 nftables 项目表；当前没有转发 DNAT 规则。"
     elif [[ "$role" == "cloud-entry" ]]; then
@@ -1915,6 +2012,84 @@ apply_nft_rules() {
     return 1
   fi
   rm -f "$tmp" "$old"
+}
+
+nft_project_table_exists() {
+  command -v nft >/dev/null 2>&1 || return 1
+  nft list table inet leikwan_forward >/dev/null 2>&1
+}
+
+nft_show_rules() {
+  if [[ -f "$NFT_RULE_FILE" ]]; then
+    echo
+    echo "${BOLD}脚本生成的 nftables 规则文件：${NFT_RULE_FILE}${RESET}"
+    sed -n '1,200p' "$NFT_RULE_FILE"
+  else
+    warn "未找到 nftables 规则文件，请先配置公网入口端口池或利群转发目标。"
+  fi
+  if ! command -v nft >/dev/null 2>&1; then
+    warn "系统未安装 nft 命令，无法读取当前内核规则。"
+    return 0
+  fi
+  echo
+  echo "${BOLD}当前内核中的项目 nftables 表：${RESET}"
+  if nft_project_table_exists; then
+    nft list table inet leikwan_forward || warn "读取 nftables 项目表失败。"
+  else
+    warn "当前未发现脚本生成的 nftables 表。"
+  fi
+}
+
+cleanup_nftables_rules() {
+  need_root_unless_dry_run
+  echo
+  echo "${BOLD}将清理以下脚本生成的 nftables 项：${RESET}"
+  echo "- nft table inet leikwan_forward"
+  echo "- ${NFT_RULE_FILE}"
+  echo "- ${NFT_SERVICE}"
+  prompt_yes_no "二次确认清理脚本生成的 nftables 规则？" "N" || return 0
+  (( DRY_RUN == 1 )) && return 0
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now "${NFT_SERVICE_NAME}.service" 2>/dev/null || warn "nftables 持久化服务不存在或停止失败，继续清理文件。"
+  else
+    warn "未找到 systemctl，跳过服务停止。"
+  fi
+  if command -v nft >/dev/null 2>&1; then
+    if nft_project_table_exists; then
+      nft delete table inet leikwan_forward 2>/dev/null || warn "删除 nftables 项目表失败，请手动检查。"
+    else
+      warn "当前未发现脚本生成的 nftables 表。"
+    fi
+  else
+    warn "系统未安装 nft 命令，跳过内核规则清理。"
+  fi
+  rm -f "$NFT_RULE_FILE" "$NFT_SERVICE"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload 2>/dev/null || warn "systemd daemon-reload 失败，请稍后手动检查。"
+  fi
+  ok "nftables 清理完成。"
+}
+
+nftables_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}nftables 规则管理${RESET}"
+    echo "1. 查看当前 nftables 规则"
+    echo "2. 重新应用公网入口规则"
+    echo "3. 重新应用利群转发规则"
+    echo "4. 清理脚本生成的 nftables 规则"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) nft_show_rules ;;
+      2) apply_nft_rules "cloud-entry" || warn "公网入口 nftables 规则未应用成功。" ;;
+      3) apply_nft_rules "leikwan-relay" || warn "利群转发 nftables 规则未应用成功。" ;;
+      4) cleanup_nftables_rules ;;
+      0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
+      *) echo "无效选择。" ;;
+    esac
+  done
 }
 
 pbr_init_rt_tables() {
@@ -2193,13 +2368,30 @@ doctor() {
 
 fix_dns_ipv4_first() {
   need_root_unless_dry_run
+  local gai_line
+  gai_line='precedence ::ffff:0:0/96  100'
   backup_file /etc/gai.conf
-  grep -q 'precedence ::ffff:0:0/96  100' /etc/gai.conf 2>/dev/null || echo 'precedence ::ffff:0:0/96  100' >>/etc/gai.conf
-  if systemctl list-unit-files --no-legend systemd-resolved.service 2>/dev/null | grep -q .; then
-    write_file "$DNS_RESOLVED_CONF" $'[Resolve]\nDNS=8.8.8.8 1.1.1.1 8.8.4.4\nFallbackDNS=9.9.9.9 223.5.5.5\nLLMNR=no\nMulticastDNS=no' 644
-    systemctl restart systemd-resolved 2>/dev/null || true
+  if grep -q "$gai_line" /etc/gai.conf 2>/dev/null; then
+    ok "IPv4 优先规则已存在：/etc/gai.conf"
+  elif (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] 追加 ${gai_line} 到 /etc/gai.conf"
+  elif printf '%s\n' "$gai_line" >>/etc/gai.conf; then
+    ok "已启用 IPv4 优先：/etc/gai.conf"
+  else
+    warn "写入 /etc/gai.conf 失败，请检查文件权限。"
+    return 1
   fi
-  if getent ahosts raw.githubusercontent.com >/dev/null; then ok "raw.githubusercontent.com 可解析"; else warn "raw.githubusercontent.com 解析失败"; fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files --no-legend systemd-resolved.service 2>/dev/null | grep -q .; then
+    write_file "$DNS_RESOLVED_CONF" $'[Resolve]\nDNS=8.8.8.8 1.1.1.1 8.8.4.4\nFallbackDNS=9.9.9.9 223.5.5.5\nLLMNR=no\nMulticastDNS=no' 644
+    systemctl restart systemd-resolved 2>/dev/null || warn "systemd-resolved 重启失败，请稍后手动检查 DNS。"
+  else
+    warn "未检测到 systemd-resolved，已仅处理 IPv4 优先规则。"
+  fi
+  if command -v getent >/dev/null 2>&1 && getent ahosts raw.githubusercontent.com >/dev/null; then
+    ok "raw.githubusercontent.com 可解析"
+  else
+    warn "raw.githubusercontent.com 解析失败"
+  fi
 }
 
 ipv6_lockdown() {
@@ -2282,57 +2474,103 @@ legacy_cleanup_menu() {
   local choice
   while true; do
     echo; echo "${BOLD}legacy 清理（默认不执行）${RESET}"
-    echo "1. 清理旧 WireGuard 配置与服务"; echo "2. 清理旧 Phantun 组件"; echo "3. 清理旧 FRP 组件"; echo "4. 清理旧 Xray 组件"; echo "5. 清理旧 realm 组件"; echo "0. 返回"
+    echo "1. 清理旧 WireGuard 残留"
+    echo "2. 清理旧 Phantun 残留"
+    echo "3. 清理旧 FRP 残留"
+    echo "4. 清理旧 realm 残留"
+    echo "5. 清理旧 Xray 测试残留"
+    echo "6. 清理脚本生成的 nftables 规则"
+    echo "7. 清理 EasyTier 服务和配置"
+    echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1)
-        if prompt_yes_no "二次确认清理旧 WireGuard wg0/wg1？" "N"; then
+        if prompt_yes_no "二次确认清理旧 WireGuard 残留？" "N"; then
           systemctl disable --now wg-quick@wg0 wg-quick@wg1 2>/dev/null || true
           rm -f /etc/wireguard/wg0.conf /etc/wireguard/wg1.conf /etc/wireguard/wg0_privatekey /etc/wireguard/wg1_privatekey /etc/wireguard/wg0_publickey /etc/wireguard/wg1_publickey
         fi
         ;;
       2)
-        if prompt_yes_no "二次确认清理旧 Phantun 组件？" "N"; then
+        if prompt_yes_no "二次确认清理旧 Phantun 残留？" "N"; then
           systemctl disable --now phantun-server-leikwan 'phantun-client-entry-*' 2>/dev/null || true
           rm -f /etc/systemd/system/phantun-server-leikwan.service /etc/systemd/system/phantun-client-entry-*.service /usr/local/bin/phantun_server /usr/local/bin/phantun_client
         fi
         ;;
       3)
-        if prompt_yes_no "二次确认清理旧 FRP 组件？" "N"; then
+        if prompt_yes_no "二次确认清理旧 FRP 残留？" "N"; then
           systemctl disable --now frps-leikwan frpc-leikwan 2>/dev/null || true
           rm -f /etc/systemd/system/frps-leikwan.service /etc/systemd/system/frpc-leikwan.service /etc/frp/frps-leikwan.toml /etc/frp/frpc-leikwan.toml
         fi
         ;;
       4)
-        if prompt_yes_no "二次确认清理旧 Xray 组件？" "N"; then
-          systemctl disable --now xray-leikwan 2>/dev/null || true
-          rm -f /etc/systemd/system/xray-leikwan.service
-          rm -rf /usr/local/etc/xray/leikwan
-        fi
-        ;;
-      5)
-        if prompt_yes_no "二次确认清理旧 realm 组件？" "N"; then
+        if prompt_yes_no "二次确认清理旧 realm 残留？" "N"; then
           systemctl disable --now realm-leikwan 2>/dev/null || true
           rm -f /etc/systemd/system/realm-leikwan.service
           rm -rf "${STATE_DIR}/realm"
         fi
         ;;
+      5)
+        if prompt_yes_no "二次确认清理旧 Xray 测试残留？" "N"; then
+          systemctl disable --now xray-leikwan 2>/dev/null || true
+          rm -f /etc/systemd/system/xray-leikwan.service
+          rm -rf /usr/local/etc/xray/leikwan
+        fi
+        ;;
+      6) cleanup_nftables_rules ;;
+      7)
+        echo "将清理本脚本生成的 EasyTier 服务与配置："
+        echo "- ${EASYTIER_RELAY_SERVICE}"
+        echo "- /etc/systemd/system/easytier-entry-*.service"
+        echo "- ${EASYTIER_DIR}"
+        if prompt_yes_no "二次确认清理 EasyTier 服务和配置？" "N"; then
+          if command -v systemctl >/dev/null 2>&1; then
+            systemctl disable --now "$EASYTIER_RELAY_SERVICE_NAME" 2>/dev/null || true
+            systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | awk '{print $1}' | while read -r svc; do
+              systemctl disable --now "$svc" 2>/dev/null || true
+              rm -f "/etc/systemd/system/${svc}"
+            done
+          else
+            warn "未找到 systemctl，跳过 systemd 服务停止。"
+          fi
+          rm -f "$EASYTIER_RELAY_SERVICE"
+          rm -rf "$EASYTIER_DIR"
+        fi
+        ;;
       0) return 0 ;;
     esac
-    systemctl daemon-reload || true
+    command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
   done
 }
 
 uninstall_new_mode() {
   need_root
-  prompt_yes_no "确认卸载 v0.4 EasyTier 模式组件？" "N" || return 0
-  systemctl disable --now "$EASYTIER_RELAY_SERVICE_NAME" "$NFT_SERVICE_NAME" 2>/dev/null || true
-  systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | awk '{print $1}' | while read -r svc; do systemctl disable --now "$svc" 2>/dev/null || true; rm -f "/etc/systemd/system/${svc}"; done
+  echo
+  echo "${BOLD}卸载全部说明${RESET}"
+  echo "这会删除通过本脚本安装/生成的服务、配置、nftables 规则、EasyTier 文件、快捷命令。"
+  echo "不会删除系统本身，也不会删除用户手动部署的业务。"
+  echo "将处理的路径："
+  echo "- ${STATE_DIR}"
+  echo "- ${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}"
+  echo "- ${SHORTCUT_LQ} / ${SHORTCUT_LQ_UPPER}"
+  echo "- ${NFT_RULE_FILE} / ${NFT_SERVICE}"
+  prompt_yes_no "第一次确认：继续卸载全部？" "N" || return 0
+  prompt_yes_no "第二次确认：确实删除本脚本生成的组件？" "N" || return 0
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now "$EASYTIER_RELAY_SERVICE_NAME" "$NFT_SERVICE_NAME" 2>/dev/null || true
+    systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | awk '{print $1}' | while read -r svc; do
+      systemctl disable --now "$svc" 2>/dev/null || true
+      rm -f "/etc/systemd/system/${svc}"
+    done
+  else
+    warn "未找到 systemctl，跳过 systemd 服务停止。"
+  fi
   rm -f "$EASYTIER_RELAY_SERVICE" "$NFT_SERVICE"
-  nft delete table inet leikwan_forward 2>/dev/null || true
-  if prompt_yes_no "是否删除 EasyTier 二进制？" "N"; then rm -f "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN"; fi
-  if prompt_yes_no "是否删除 /etc/leikwan-wg-toolkit？" "N"; then rm -rf "$STATE_DIR"; fi
-  systemctl daemon-reload || true
+  if command -v nft >/dev/null 2>&1; then
+    nft delete table inet leikwan_forward 2>/dev/null || true
+  fi
+  rm -f "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN" "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER"
+  rm -rf "$STATE_DIR"
+  command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
   ok "卸载完成。"
 }
 
@@ -2415,19 +2653,17 @@ forwards_menu() {
   local choice
   while true; do
     echo; echo "${BOLD}转发目标管理${RESET}"
-    echo "1. B relay：添加落地转发"
-    echo "2. B relay：修改落地转发"
-    echo "3. B relay：删除落地转发"
-    echo "4. 查看当前转发"
+    echo "1. 添加转发目标"
+    echo "2. 修改转发目标"
+    echo "3. 删除转发目标"
+    echo "4. 查看转发目标"
     echo "5. 启用 / 禁用转发目标"
-    echo "6. 重新应用 relay nftables"
+    echo "6. 重新应用利群转发规则"
     echo "7. 解析 target_host"
     echo "8. 测试单个转发目标"
     echo "9. 导入 forwards.tsv（高级）"
     echo "10. 导出 forwards.tsv"
     echo "11. 生成转发入口输出"
-    echo "12. A entry：导入 FORWARD 码（legacy 兼容，不推荐）"
-    echo "13. A entry：配置入口端口池"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -2436,14 +2672,12 @@ forwards_menu() {
       3) delete_forward ;;
       4) list_forwards ;;
       5) set_forward_enabled ;;
-      6) apply_nft_rules "leikwan-relay" ;;
+      6) apply_nft_rules "leikwan-relay" || warn "利群转发 nftables 规则未应用成功。" ;;
       7) resolve_forwards ;;
       8) test_forward ;;
       9) import_forwards_tsv ;;
       10) export_forwards_tsv ;;
       11) generate_forward_outputs ;;
-      12) import_forward_code ;;
-      13) entry_expose_range ;;
       0) return 0 ;;
     esac
   done
@@ -2464,36 +2698,6 @@ pbr_menu() {
   done
 }
 
-wizard_menu() {
-  echo
-  echo "${BOLD}极速部署向导默认使用 EasyTier 快速配对。${RESET}"
-  pairing_menu
-}
-
-quick_forward_menu() {
-  local choice
-  while true; do
-    echo; echo "${BOLD}快速转发${RESET}"
-    echo "1. A 公网入口：配置入口端口池"
-    echo "2. B 利群中转：添加落地转发"
-    echo "3. B 利群中转：修改落地转发"
-    echo "4. B 利群中转：删除落地转发"
-    echo "5. B 利群中转：查看落地转发"
-    echo "6. B 利群中转：重新应用转发规则"
-    echo "0. 返回"
-    choice="$(prompt_menu_choice "请选择：")"
-    case "$choice" in
-      1) entry_expose_range ;;
-      2) add_forward ;;
-      3) edit_forward ;;
-      4) delete_forward ;;
-      5) list_forwards ;;
-      6) apply_nft_rules "leikwan-relay" ;;
-      0) return 0 ;;
-    esac
-  done
-}
-
 install_shortcuts() {
   need_root_unless_dry_run
   local script_path content
@@ -2505,28 +2709,174 @@ exec bash ${script_path@Q} \"\$@\""
   write_file "$SHORTCUT_LQ_UPPER" "$content" 755
 }
 
-advanced_menu() {
+print_quick_networking_steps() {
+  cat <<'EOF'
+完整分步说明
+----------------------------------------
+步骤 0：利群主机先修复 DNS / IPv4 优先
+在 B 利群主机执行：
+主菜单 -> 快速组网（分步提示） -> 1
+
+步骤 1：利群主机生成网络码
+在 B 利群主机执行：
+主菜单 -> 快速组网（分步提示） -> 2
+复制输出的 NETWORK 网络码。
+
+步骤 2：公网入口加入网络
+在 A 公网入口机执行：
+主菜单 -> 快速组网（分步提示） -> 3
+粘贴 B 生成的 NETWORK 网络码。
+完成后复制 A 输出的 ENTRY 入口码。
+
+步骤 3：利群主机完成接入
+在 B 利群主机执行：
+主菜单 -> 快速组网（分步提示） -> 4
+粘贴 A 生成的 ENTRY 入口码。
+
+步骤 4：公网入口配置端口池
+在 A 公网入口机执行：
+主菜单 -> 快速组网（分步提示） -> 5
+例如：
+10001-10020 -> 10.198.1.1
+
+步骤 5：利群主机添加后端转发
+在 B 利群主机执行：
+主菜单 -> 快速组网（分步提示） -> 6
+例如：
+10001 -> 后端IP:后端端口
+
+步骤 6：两边执行诊断
+A 和 B 都执行：
+主菜单 -> 一键诊断
+
+确认：
+- EasyTier active
+- ping 对端成功
+- nftables DNAT 存在
+- TCP MSS clamp enabled: 1320
+----------------------------------------
+EOF
+}
+
+quick_networking_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}高级功能${RESET}"
-    echo "1. EasyTier 组网管理"; echo "2. 公网入口机管理"; echo "3. 转发目标管理"; echo "4. nftables 规则管理"; echo "5. IPv4 多出口策略路由"; echo "6. 链路测试"; echo "7. DNS / IPv4 优先修复"; echo "8. IPv6 入站安全收口"; echo "9. BBR / 系统优化"; echo "10. 查看状态"; echo "11. 备份 / 恢复"; echo "12. 生成脱敏故障报告"; echo "13. legacy 清理"; echo "14. 卸载"; echo "0. 返回"
+    echo; echo "${BOLD}快速组网（分步提示）${RESET}"
+    echo "----------------------------------------"
+    echo "本向导用于帮助你按顺序完成："
+    echo
+    echo "A：公网入口机"
+    echo "B：利群主机"
+    echo "C：后端 TCP 目标"
+    echo
+    echo "推荐链路："
+    echo "外部客户端 -> A 公网入口端口 -> EasyTier -> B 利群主机 -> 后端目标"
+    echo "----------------------------------------"
+    echo
+    echo "${BOLD}[重要提示]${RESET}"
+    echo "如果当前机器是利群主机，请先执行："
+    echo "高级功能 -> DNS / IPv4 优先修复"
+    echo
+    echo "原因："
+    echo "部分利群主机 IPv6 / DNS 默认环境可能导致 GitHub、raw.githubusercontent.com、GitHub release 下载失败。"
+    echo "先修复 IPv4 优先和 DNS，可以显著减少 EasyTier、release 包、脚本更新下载失败的问题。"
+    echo
+    echo "1. 我现在在利群主机：先执行 DNS / IPv4 优先修复"
+    echo "2. 我现在在利群主机：生成给公网入口的 EasyTier 网络码"
+    echo "3. 我现在在公网入口：粘贴利群网络码，部署公网入口"
+    echo "4. 我现在在利群主机：粘贴公网入口码，完成组网"
+    echo "5. 我现在在公网入口：配置入口端口池"
+    echo "6. 我现在在利群主机：添加后端转发目标"
+    echo "7. 查看完整分步说明"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
+      2) quick_generate_network_pairing || warn "生成 EasyTier 网络码未完成，请查看上方提示后重试。" ;;
+      3) quick_deploy_entry_from_network_pairing || warn "公网入口部署未完成，请查看上方提示后重试。" ;;
+      4) quick_deploy_relay_from_entry_pairing || warn "利群主机接入未完成，请查看上方提示后重试。" ;;
+      5) entry_expose_range || warn "公网入口端口池配置未完成，请查看上方提示后重试。" ;;
+      6) add_forward || warn "后端转发目标添加未完成，请查看上方提示后重试。" ;;
+      7) echo; print_quick_networking_steps ;;
+      0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
+      *) echo "无效选择。" ;;
+    esac
+  done
+}
+
+relay_host_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}利群主机${RESET}"
+    echo "1. EasyTier 组网管理"
+    echo "2. 转发目标管理"
+    echo "3. IPv4 多出口策略路由"
+    echo "4. IPv6 入站安全收口"
+    echo "5. 查看利群主机状态"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) easytier_menu ;;
+      2) forwards_menu ;;
+      3) pbr_menu ;;
+      4) ipv6_lockdown ;;
+      5) doctor ;;
+      0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
+      *) echo "无效选择。" ;;
+    esac
+  done
+}
+
+entry_host_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}公网入口${RESET}"
+    echo "1. EasyTier 组网管理"
+    echo "2. 公网入口机管理"
+    echo "3. 转发端口池"
+    echo "4. 查看公网入口状态"
+    echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) easytier_menu ;;
       2) entries_menu ;;
-      3) forwards_menu ;;
-      4) apply_nft_rules "$(detect_role)" ;;
-      5) pbr_menu ;;
-      6) link_test_menu ;;
-      7) fix_dns_ipv4_first ;;
-      8) ipv6_lockdown ;;
-      9) bbr_menu ;;
-      10) doctor ;;
-      11) backup_restore_menu ;;
-      12) generate_debug_report ;;
-      13) legacy_cleanup_menu ;;
-      14) uninstall_new_mode ;;
+      3) entry_expose_range ;;
+      4) doctor ;;
       0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
+      *) echo "无效选择。" ;;
+    esac
+  done
+}
+
+advanced_menu() {
+  local choice
+  while true; do
+    echo; echo "${BOLD}高级功能${RESET}"
+    echo "1. nftables 规则管理"
+    echo "2. 链路测试"
+    echo "3. DNS / IPv4 优先修复"
+    echo "4. BBR / 系统优化"
+    echo "5. 查看全部状态"
+    echo "6. 备份 / 恢复"
+    echo "7. 生成脱敏故障报告"
+    echo "8. legacy 清理"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) nftables_menu ;;
+      2) link_test_menu ;;
+      3) fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
+      4) bbr_menu ;;
+      5) doctor ;;
+      6) backup_restore_menu ;;
+      7) generate_debug_report ;;
+      8) legacy_cleanup_menu ;;
+      0) return 0 ;;
+      "") echo "请输入选项编号。" ;;
+      *) echo "无效选择。" ;;
     esac
   done
 }
@@ -2538,14 +2888,21 @@ main_menu() {
   local choice
   while true; do
     echo; print_banner; echo
-    echo "1. 极速部署向导"; echo "2. 快速转发"; echo "3. 查看转发入口"; echo "4. 一键诊断 doctor"; echo "5. 高级功能"; echo "0. 退出"
+    echo "1. 快速组网（分步提示）"
+    echo "2. 利群主机"
+    echo "3. 公网入口"
+    echo "4. 高级功能"
+    echo "5. 一键诊断"
+    echo "6. 卸载全部"
+    echo "0. 退出"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) wizard_menu ;;
-      2) quick_forward_menu ;;
-      3) generate_forward_outputs ;;
-      4) doctor ;;
-      5) advanced_menu ;;
+      1) quick_networking_menu ;;
+      2) relay_host_menu ;;
+      3) entry_host_menu ;;
+      4) advanced_menu ;;
+      5) doctor ;;
+      6) uninstall_new_mode ;;
       0) exit 0 ;;
       "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;

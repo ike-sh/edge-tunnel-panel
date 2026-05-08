@@ -3,12 +3,28 @@
 ## 基础检查
 
 ```bash
-shellcheck wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh
-bash -n wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh
+shellcheck wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
+bash -n wg-toolkit.sh uninstall.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
 scripts/check-redaction.sh
 git diff --check
 scripts/package-release.sh
 ```
+
+## 菜单检查
+
+主菜单应显示：
+
+```text
+1. 快速组网（分步提示）
+2. 利群主机
+3. 公网入口
+4. 高级功能
+5. 一键诊断
+6. 卸载全部
+0. 退出
+```
+
+进入 `快速组网（分步提示）` 后，第一屏必须提示利群主机先执行 DNS / IPv4 优先修复。`利群主机` 菜单只包含 B 侧转发目标、PBR、IPv6 收口和状态检查。`公网入口` 菜单只包含 A 侧入口机管理、端口池和状态检查。`高级功能 -> nftables 规则管理` 在未配置规则文件或 nft table 时应显示 WARN，不应退出脚本。
 
 ## clean-room 最小流程
 
@@ -83,7 +99,7 @@ sudo lq entry expose-range --range 10000-19999 --relay-ip 10.198.1.1
 - A doctor 显示 `[OK] 入口端口池：10000-19999 -> 10.198.1.1`。
 - A doctor 显示 `[OK] TCP MSS clamp enabled: 1320`。
 
-在 B 使用快速转发添加：
+在 B 使用 `利群主机 -> 转发目标管理` 添加：
 
 ```bash
 sudo lq forward add
@@ -92,7 +108,7 @@ sudo lq forward add
 输入示例：
 
 ```text
-name=hk
+name=service-a
 entry_port=10001
 target_host=203.0.113.30
 target_port=30004
@@ -105,7 +121,7 @@ target_port=30004
 - `nft list table inet leikwan_forward` 存在。
 - B 侧有 `tcp dport 10001 dnat ip to <resolved-target>:30004`。
 - B 侧有 `tcp flags syn tcp option maxseg size set 1320`。
-- B doctor 显示 `hk relay DNAT 正常`。
+- B doctor 显示 `service-a relay DNAT 正常`。
 - B doctor 显示 `[OK] TCP MSS clamp enabled: 1320`。
 - 外部访问 `A_PUBLIC_HOST:10001` 能到达后端 TCP 服务。
 
@@ -156,7 +172,7 @@ A/B 的 leikwan_forward 表加入 MSS 1320 后链路成功。
 删除一个后端：
 
 ```bash
-sudo lq forward delete hk
+sudo lq forward delete service-a
 ```
 
 合格标准：不需要重新操作 A，`10001` 不再通，`10002` 仍然通。
@@ -167,7 +183,7 @@ sudo lq forward delete hk
 
 ```text
 # nameentry_porttarget_hosttarget_portout_ifaceroute_tableenabledcomment
-hk10001203.0.113.3030004truehk-target
+service-a10001203.0.113.3030004truecomment
 ```
 
 合格标准：
