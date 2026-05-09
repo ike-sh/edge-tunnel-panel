@@ -88,6 +88,13 @@ A 部署后 systemd service 必须同时包含 `tcp://0.0.0.0:8301` 和 `udp://0
 
 旧网络码如果只有 `SUGGESTED_EASYTIER_PROTOCOL=tcp` 和 `SUGGESTED_EASYTIER_PORT=8301`，A 仍应部署 TCP-only；旧 ENTRY 码如果只有 `EASYTIER_PROTOCOL=tcp`，B 仍应只生成 TCP peer。
 
+连续生成入口码验收：
+
+1. B 上 `entries.tsv` 为空。
+2. 第一次生成推荐 `aliyun / 10.198.1.2 / tcp+udp / 8301`。
+3. 不粘贴 ENTRY，立刻第二次生成；确认继续后必须推荐 `home / 10.198.1.3 / tcp+udp / 8302`。
+4. `entries/pending-entries.tsv` 中不应重复预占同一个 EasyTier IP 或端口。
+
 新 A 若在“本机 EasyTier IP [10.198.1.3]”输入 `home.example.com`，应提示这是域名而不是 EasyTier 虚拟 IP，并提示 DDNS 应填在“本机公网 IP / 域名”；下一轮默认值仍是 `10.198.1.3`。
 
 ## 公网入口管理
@@ -100,7 +107,24 @@ B 侧路径：
 
 删除、启用/禁用、修改权重、测试公网入口必须先展示列表，支持编号或名称，空输入返回。
 
-B 粘贴新 A 返回的 ENTRY 入口码后，默认只保存 `entries.tsv`，不渲染 relay service，不重启 relay。用户选择稍后应用时，已有入口保持在线。用户选择立即应用时，必须再次提示重启 relay 会短暂中断所有入口；确认后才 restart，并测试所有 enabled entries。
+菜单必须显示：
+
+```text
+1. 生成新公网入口接入码
+2. 粘贴公网入口返回码并接入
+3. 手动添加公网入口（高级）
+4. 修改公网入口详情
+5. 删除公网入口
+6. 启用 / 禁用公网入口
+7. 修改公网入口权重
+8. 查看所有公网入口
+9. 测试公网入口
+10. 切换主公网入口
+11. 批量启用 / 禁用公网入口
+0. 返回
+```
+
+B 粘贴新 A 返回的 ENTRY 入口码后，默认只保存 `entries.tsv`，不渲染 relay service，不重启 relay。手动添加、修改详情、删除、启用/禁用、修改权重后也必须统一提示应用 relay。用户选择稍后应用时，已有入口保持在线。用户选择立即应用时，必须再次提示重启 relay 会短暂中断所有入口；确认后才 restart，并测试所有 enabled entries。
 
 立即应用后：
 
@@ -110,6 +134,26 @@ relay service peer 列表同时包含 aliyun 和 home
 ```
 
 `tcp,udp` 入口在 `entries.tsv` 中保存为 `tcp,udp  8301`，列表显示为 `tcp+udp`，relay service peer 列表必须同时包含 `tcp://PUBLIC_HOST:8301` 和 `udp://PUBLIC_HOST:8301`。
+
+修改入口协议验收：
+
+1. 把 `aliyun` 从 `tcp+udp` 改成 `tcp`。
+2. 立即应用后，relay service 只包含 `tcp://203.0.113.10:8301`，不再包含 `udp://203.0.113.10:8301`。
+3. 再改回 `tcp+udp` 后，TCP/UDP peer 都恢复。
+
+角色保护验收：
+
+- B 利群主机执行“启动 / 重启 entry 服务”时，应 WARN 当前机器看起来是 B，默认不继续。
+- A 公网入口执行“启动 / 重启 relay 服务”时，应 WARN 当前机器看起来是 A，默认不继续。
+
+入口策略验收：
+
+- 切换主公网入口选择 `home`，模式 1 后，`home enabled=true`，其它入口 `enabled=false`；立即应用后 relay service 只包含 `home` peer。
+- 批量启用所有入口后，所有 entry `enabled=true`；立即应用后 relay service 包含所有 enabled entry 的 TCP/UDP peer。
+- 切换主公网入口选择 `home`，模式 2 后，`home` 权重最高且仍保留其它 enabled entry；`generate_forward_outputs` 中 `home` 标记 PRIMARY，其它标记 BACKUP。
+- 批量只保留 `aliyun` enabled 后，`aliyun enabled=true`，其它入口 `enabled=false`。
+- 禁用所有入口必须二次确认；立即应用后 relay peer 为空，doctor WARN 当前没有 enabled 公网入口。
+- 输出清单和 doctor 必须说明：权重只影响排序和推荐，不代表自动负载均衡。
 
 A 侧配置入口端口池 `10000-19999` 后，nftables 必须同时存在：
 

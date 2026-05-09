@@ -34,6 +34,8 @@ SUGGESTED_EASYTIER_PORT=8302
 
 新字段 `SUGGESTED_EASYTIER_PROTOCOLS` 优先，默认是 `tcp,udp`。旧网络码如果只有 `SUGGESTED_EASYTIER_PROTOCOL=tcp` 和 `SUGGESTED_EASYTIER_PORT=8301`，A 侧会继续按 TCP-only 部署。
 
+生成网络码后，B 会把推荐值写入 `entries/pending-entries.tsv`。如果第一份入口码还没接回 B 就继续生成第二份，脚本会提示存在未完成入口码，并在确认后推荐下一个入口，避免 EasyTier IP / 端口重复。
+
 ## 2. A 粘贴网络码并部署入口
 
 在 `cloud-entry`：
@@ -81,7 +83,11 @@ B 侧优先读取 `EASYTIER_PROTOCOLS`。旧 ENTRY 码如果只有 `EASYTIER_PRO
 sudo lq pair relay-join
 ```
 
-粘贴 A 的入口码。脚本会写入 `entries.tsv`，协议字段允许 `tcp`、`udp` 或 `tcp,udp`。`tcp,udp` 会展开为两个 peer：`tcp://PUBLIC_HOST:PORT` 和 `udp://PUBLIC_HOST:PORT`。
+粘贴 A 的入口码。脚本会写入 `entries.tsv`，协议字段允许 `tcp`、`udp` 或 `tcp,udp`，并清理对应 pending。`tcp,udp` 会展开为两个 peer：`tcp://PUBLIC_HOST:PORT` 和 `udp://PUBLIC_HOST:PORT`。
+
+保存 ENTRY 后脚本不会静默重启 relay，而是提示是否现在重启。选择立即应用后会重启 `easytier-relay.service` 并测试所有 enabled entries；选择 `N` 时请在维护窗口从 EasyTier 组网管理菜单重启 relay。
+
+多入口接入后，B 可以连接多个 enabled entry peer，但这不等于自动负载均衡。外部客户端仍然连接某个 A 的公网地址；`weight` 只用于输出排序和 PRIMARY / BACKUP 推荐。
 
 ## 非交互导入
 

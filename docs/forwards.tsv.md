@@ -49,6 +49,8 @@ sudo lq forward apply-relay
 
 修改、删除、启用/禁用、测试单个目标都会先展示列表，支持编号或名称选择。
 
+导出的 `forward-endpoints.txt` 会把业务转发标成 `TCP+UDP`，并分别展示 `TCP=UP/DOWN/UNKNOWN` 与 `UDP=PROBED/UNKNOWN`。UDP 探测只是参考，不会阻断转发目标保存。
+
 菜单入口：
 
 ```text

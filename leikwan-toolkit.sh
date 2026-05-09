@@ -29,6 +29,7 @@ EASYTIER_DIR="${STATE_DIR}/easytier"
 REPORT_FILE="/root/leikwan-debug-report.txt"
 
 ENTRIES_TSV="${ENTRIES_DIR}/entries.tsv"
+PENDING_ENTRIES_TSV="${ENTRIES_DIR}/pending-entries.tsv"
 FORWARDS_TSV="${FORWARDS_DIR}/forwards.tsv"
 RESOLVED_TSV="${FORWARDS_DIR}/resolved.tsv"
 FORWARD_TXT="${OUTPUT_DIR}/forward-endpoints.txt"
@@ -1394,11 +1395,25 @@ machine_has_relay_network() {
   [[ "$role" == "leikwan-relay" ]]
 }
 
+machine_looks_like_relay() {
+  machine_has_relay_network && return 0
+  systemctl list-unit-files --type=service --no-legend "${EASYTIER_RELAY_SERVICE_NAME}.service" 2>/dev/null | grep -q . && return 0
+  et_ip_present "$RELAY_ET_IP"
+}
+
 machine_has_entry_service() {
   if compgen -G "/etc/systemd/system/easytier-entry-*.service" >/dev/null; then
     return 0
   fi
   systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | grep -q .
+}
+
+machine_looks_like_entry() {
+  local role
+  role="$(env_file_get "$NETWORK_ENV" ROLE)"
+  [[ "$role" == "cloud-entry" ]] && return 0
+  machine_has_entry_service && return 0
+  [[ -f "$ENTRY_PAIRING_FILE" ]]
 }
 
 guard_entry_join_role() {
@@ -1445,8 +1460,38 @@ entries_rows() {
   ' "$ENTRIES_TSV"
 }
 
+pending_entries_rows() {
+  [[ -f "$PENDING_ENTRIES_TSV" ]] || return 0
+  awk -F'\t' '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    function norm_proto(s) {
+      s=tolower(trim(s))
+      gsub(/[[:space:]]+/, "", s)
+      gsub(/\+/, ",", s)
+      if (s=="dual" || s=="both" || s=="udp,tcp") s="tcp,udp"
+      return s
+    }
+    { gsub(/\r/, "") }
+    NF == 0 { next }
+    $1 ~ /^#/ { next }
+    {
+      name=trim($1)
+      et_ip=trim($2)
+      proto=norm_proto($3)
+      port=trim($4)
+      created_at=trim($5)
+      if (name=="" || et_ip=="" || proto=="" || port=="") next
+      printf "%s\t%s\t%s\t%s\t%s\n", name, et_ip, proto, port, created_at
+    }
+  ' "$PENDING_ENTRIES_TSV"
+}
+
 entries_rows_sorted() {
   entries_rows | sort -t$'\t' -k6,6nr -k1,1
+}
+
+enabled_entries_sorted() {
+  entries_rows | awk -F'\t' '$7=="true"' | sort -t$'\t' -k6,6nr -k1,1
 }
 
 forwards_rows() {
@@ -1501,16 +1546,16 @@ display_entries() {
 }
 
 select_entry_name() {
-  local only_enabled="${1:-all}" choice name count
+  local only_enabled="${1:-all}" prompt="${2:-请输入编号或名称，直接回车返回}" choice name count
   ensure_tsv_files
   count="$(entries_rows | awk -F'\t' -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} {c++} END{print c+0}')"
   if (( count == 0 )); then
-    warn "当前没有公网入口。"
+    warn "当前没有公网入口。" >&2
     return 1
   fi
-  display_entries "$only_enabled"
+  display_entries "$only_enabled" >&2
   while true; do
-    choice="$(prompt_value "请输入编号或名称，直接回车返回")"
+    choice="$(prompt_value "$prompt")"
     [[ -z "$choice" ]] && return 1
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
       name="$(entries_rows_sorted | awk -F'\t' -v idx="$choice" -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} {i++} i==idx {print $1; exit}')"
@@ -1521,7 +1566,7 @@ select_entry_name() {
       printf '%s' "$name"
       return 0
     fi
-    warn "入口不存在或编号无效：${choice}"
+    warn "入口不存在或编号无效：${choice}" >&2
   done
 }
 
@@ -1748,6 +1793,124 @@ entry_exists() {
   entries_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}'
 }
 
+pending_entries_count() {
+  pending_entries_rows | awk 'END{print NR+0}'
+}
+
+display_pending_entries() {
+  pending_entries_rows | awk -F'\t' '
+    BEGIN { print "编号  名称            EasyTier IP    协议      端口   created_at" }
+    {
+      proto=($3=="tcp,udp" ? "tcp+udp" : $3)
+      printf "%d) %-12s %-14s %-9s %-6s %s\n", ++i, $1, $2, proto, $4, ($5!="" ? $5 : "-")
+    }
+  '
+}
+
+entry_reserved_count() {
+  { entries_rows; pending_entries_rows; } | awk 'END{print NR+0}'
+}
+
+entry_name_reserved() {
+  local name="$1"
+  entries_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}' && return 0
+  pending_entries_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}'
+}
+
+entry_et_ip_reserved() {
+  local et_ip="$1"
+  entries_rows | awk -F'\t' -v ip="$et_ip" '$3==ip {found=1} END{exit !found}' && return 0
+  pending_entries_rows | awk -F'\t' -v ip="$et_ip" '$2==ip {found=1} END{exit !found}'
+}
+
+entry_easytier_port_reserved() {
+  local port="$1"
+  entries_rows | awk -F'\t' -v p="$port" '$5==p {found=1} END{exit !found}' && return 0
+  pending_entries_rows | awk -F'\t' -v p="$port" '$4==p {found=1} END{exit !found}'
+}
+
+pending_entry_is_stale() {
+  local created_at="$1" now created_epoch
+  [[ -n "$created_at" ]] || return 1
+  now="$(date -u '+%s')"
+  created_epoch="$(date -u -d "$created_at" '+%s' 2>/dev/null || true)"
+  [[ -n "$created_epoch" ]] && (( now - created_epoch > 86400 ))
+}
+
+pending_entries_have_stale() {
+  local _name _et_ip _proto _port created_at
+  while IFS=$'\t' read -r _name _et_ip _proto _port created_at; do
+    if pending_entry_is_stale "$created_at"; then
+      return 0
+    fi
+  done < <(pending_entries_rows)
+  return 1
+}
+
+clean_stale_pending_entries() {
+  local tmp name et_ip proto port created_at
+  [[ -f "$PENDING_ENTRIES_TSV" ]] || return 0
+  tmp="$(mktemp)"
+  while IFS=$'\t' read -r name et_ip proto port created_at; do
+    pending_entry_is_stale "$created_at" && continue
+    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$et_ip" "$proto" "$port" "$created_at" >>"$tmp"
+  done < <(pending_entries_rows)
+  if [[ -s "$tmp" ]]; then
+    write_file "$PENDING_ENTRIES_TSV" "$(cat "$tmp")" 600
+  else
+    rm -f "$PENDING_ENTRIES_TSV"
+  fi
+  rm -f "$tmp"
+}
+
+prompt_pending_entries_before_generation() {
+  local count
+  count="$(pending_entries_count)"
+  (( count > 0 )) || return 0
+  warn "检测到未完成的公网入口接入码："
+  display_pending_entries
+  if pending_entries_have_stale; then
+    warn "存在超过 24 小时的未完成入口接入码。"
+    if prompt_yes_no "是否清理过期 pending 记录？" "Y"; then
+      clean_stale_pending_entries
+    fi
+  fi
+  count="$(pending_entries_count)"
+  (( count == 0 )) && return 0
+  prompt_yes_no "是否继续生成下一个入口码？" "N"
+}
+
+reserve_pending_entry() {
+  local name="$1" et_ip="$2" protocols="$3" port="$4" created_at tmp
+  ensure_base_dirs
+  protocols="$(normalize_easytier_protocols "$protocols")" || return 1
+  created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  tmp="$(mktemp)"
+  pending_entries_rows | awk -F'\t' -v n="$name" -v ip="$et_ip" -v p="$port" '
+    $1==n || $2==ip || $4==p {next}
+    {print}
+  ' >"$tmp"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$et_ip" "$protocols" "$port" "$created_at" >>"$tmp"
+  write_file "$PENDING_ENTRIES_TSV" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+}
+
+clear_pending_entry_reservation() {
+  local name="$1" et_ip="$2" port="$3" tmp
+  [[ -f "$PENDING_ENTRIES_TSV" ]] || return 0
+  tmp="$(mktemp)"
+  pending_entries_rows | awk -F'\t' -v n="$name" -v ip="$et_ip" -v p="$port" '
+    $1==n || $2==ip || $4==p {next}
+    {print}
+  ' >"$tmp"
+  if [[ -s "$tmp" ]]; then
+    write_file "$PENDING_ENTRIES_TSV" "$(cat "$tmp")" 600
+  else
+    rm -f "$PENDING_ENTRIES_TSV"
+  fi
+  rm -f "$tmp"
+}
+
 forward_exists() {
   local name="$1"
   forwards_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}'
@@ -1755,20 +1918,20 @@ forward_exists() {
 
 next_entry_name() {
   local count candidate n
-  count="$(entries_rows | awk 'END{print NR+0}')"
+  count="$(entry_reserved_count)"
   case "$count" in
     0) candidate="aliyun" ;;
     1) candidate="home" ;;
     *) candidate="entry$((count + 1))" ;;
   esac
-  if ! entry_exists "$candidate"; then
+  if ! entry_name_reserved "$candidate"; then
     printf '%s' "$candidate"
     return 0
   fi
   n=$((count + 1))
   while true; do
     candidate="entry${n}"
-    if ! entry_exists "$candidate"; then
+    if ! entry_name_reserved "$candidate"; then
       printf '%s' "$candidate"
       return 0
     fi
@@ -1780,7 +1943,7 @@ next_entry_et_ip() {
   local prefix="10.198.1" last ip
   for ((last=2; last<=254; last++)); do
     ip="${prefix}.${last}"
-    if ! entries_rows | awk -F'\t' -v ip="$ip" '$3==ip {found=1} END{exit !found}'; then
+    if ! entry_et_ip_reserved "$ip"; then
       printf '%s' "$ip"
       return 0
     fi
@@ -1791,13 +1954,13 @@ next_entry_et_ip() {
 next_entry_easytier_port() {
   local port
   for ((port=DEFAULT_EASYTIER_PORT; port<=FAST_PORT_RANGE_END; port++)); do
-    if ! entries_rows | awk -F'\t' -v p="$port" '$5==p {found=1} END{exit !found}'; then
+    if ! entry_easytier_port_reserved "$port"; then
       printf '%s' "$port"
       return 0
     fi
   done
   for ((port=FAST_PORT_RANGE_START; port<DEFAULT_EASYTIER_PORT; port++)); do
-    if ! entries_rows | awk -F'\t' -v p="$port" '$5==p {found=1} END{exit !found}'; then
+    if ! entry_easytier_port_reserved "$port"; then
       printf '%s' "$port"
       return 0
     fi
@@ -1832,23 +1995,36 @@ validate_unique_entry_fields() {
     warn "公网入口名称已存在：${name}"
     return 1
   fi
+  if pending_entries_rows | awk -F'\t' -v n="$name" -v cur="$current_name" '$1==n && $1!=cur {found=1} END{exit !found}'; then
+    warn "公网入口名称已被未完成接入码预占：${name}"
+    return 1
+  fi
   if entries_rows | awk -F'\t' -v ip="$et_ip" -v cur="$current_name" '$3==ip && $1!=cur {found=1} END{exit !found}'; then
     warn "EasyTier IP 已被使用：${et_ip}"
+    return 1
+  fi
+  if pending_entries_rows | awk -F'\t' -v ip="$et_ip" -v cur="$current_name" '$2==ip && $1!=cur {found=1} END{exit !found}'; then
+    warn "EasyTier IP 已被未完成接入码预占：${et_ip}"
     return 1
   fi
   if entries_rows | awk -F'\t' -v p="$port" -v cur="$current_name" '$5==p && $1!=cur {found=1} END{exit !found}'; then
     warn "EasyTier 端口已被使用：${port}"
     return 1
   fi
+  if pending_entries_rows | awk -F'\t' -v p="$port" -v cur="$current_name" '$4==p && $1!=cur {found=1} END{exit !found}'; then
+    warn "EasyTier 端口已被未完成接入码预占：${port}"
+    return 1
+  fi
   return 0
 }
 
 replace_entry_row() {
-  local row="$1" name tmp
+  local row="$1" name old_name tmp
   name="${row%%$'\t'*}"
+  old_name="${2:-$name}"
   ensure_tsv_files
   tmp="$(mktemp)"
-  awk -F'\t' -v n="$name" '$1==n {next} {print}' "$ENTRIES_TSV" >"$tmp"
+  awk -F'\t' -v n="$name" -v old="$old_name" '$1==n || $1==old {next} {print}' "$ENTRIES_TSV" >"$tmp"
   printf '%s\n' "$row" >>"$tmp"
   write_file "$ENTRIES_TSV" "$(cat "$tmp")" 600
   rm -f "$tmp"
@@ -1871,6 +2047,7 @@ quick_generate_network_pairing() {
   install_packages openssl coreutils
   local network_name network_secret suggested_name suggested_ip suggested_protocols suggested_proto suggested_port has_network=0
   local candidate_name candidate_ip candidate_proto candidate_port
+  prompt_pending_entries_before_generation || return 0
   if relay_network_env_ready; then
     network_name="$(env_file_get "$NETWORK_ENV" EASYTIER_NETWORK_NAME)"
     network_secret="$(env_file_get "$NETWORK_ENV" EASYTIER_NETWORK_SECRET)"
@@ -1933,6 +2110,7 @@ SUGGESTED_EASYTIER_TCP_PORT=${suggested_port}
 SUGGESTED_EASYTIER_UDP_PORT=${suggested_port}
 SUGGESTED_EASYTIER_PROTOCOL=${suggested_proto}
 SUGGESTED_EASYTIER_PORT=${suggested_port}" 600
+  reserve_pending_entry "$suggested_name" "$suggested_ip" "$suggested_protocols" "$suggested_port"
   print_pairing_code "复制下面整段到 A 公网入口机" \
     "-----BEGIN LEIKWAN EASYTIER NETWORK-----" \
     "-----END LEIKWAN EASYTIER NETWORK-----" \
@@ -2056,22 +2234,9 @@ quick_deploy_relay_from_entry_pairing() {
   confirm_summary "relay 接入入口摘要" "入口名称：${name}\n入口公网：${public_host}:${port}\n入口 EasyTier 监听：$(easytier_protocols_display "$proto")/${port}\n入口 EasyTier IP：${et_ip}\nRelay EasyTier IP：${RELAY_ET_IP}" || { rm -f "$tmp"; return 0; }
   row="${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
   replace_entry_row "$row"
+  clear_pending_entry_reservation "$name" "$et_ip" "$port"
   ok "已保存入口配置：${name}。"
-  warn "应用新入口需要重启 EasyTier relay，现有入口会短暂中断。"
-  if prompt_yes_no "是否现在重启 relay？" "N"; then
-    apply_easytier_relay_service || { rm -f "$tmp"; return 1; }
-    if (( ${APPLY_RELAY_RESTARTED:-0} == 1 )); then
-      wait_et_ip "$RELAY_ET_IP" 15 || warn "15 秒内未检测到 Relay EasyTier IP：${RELAY_ET_IP}"
-      test_all_enabled_entries
-    else
-      info "已保存新入口，但尚未应用到 EasyTier relay。"
-      info "请在维护窗口执行：利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务"
-    fi
-  else
-    info "已保存新入口，但尚未应用到 EasyTier relay。"
-    info "请在维护窗口执行：利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务"
-  fi
-  ok "已接入入口 ${name}。"
+  prompt_apply_relay_after_entry_change || { rm -f "$tmp"; return 1; }
   info "下一步：在 A 公网入口配置端口池后，回到 B 利群主机添加后端转发目标。"
   rm -f "$tmp"
 }
@@ -2126,6 +2291,38 @@ add_entry() {
   row="${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
   confirm_summary "添加入口摘要" "name=${name}\npublic_host=${public_host}\net_ip=${et_ip}\nprotocols=${proto}\nlisten=$(easytier_protocols_display "$proto")/${port}\nport=${port}\nweight=${weight}\nenabled=${enabled}" || return 0
   replace_entry_row "$row"
+  clear_pending_entry_reservation "$name" "$et_ip" "$port"
+  ok "已保存公网入口：${name}"
+  prompt_apply_relay_after_entry_change
+}
+
+edit_entry() {
+  need_root_unless_dry_run
+  ensure_tsv_files
+  local name row old_name old_public_host old_et_ip old_proto old_port old_weight old_enabled
+  local new_name public_host et_ip proto port weight enabled new_row
+  name="$(select_entry_name)" || return 0
+  row="$(entries_rows | awk -F'\t' -v n="$name" '$1==n {print; found=1} END{exit !found}')"
+  [[ -n "$row" ]] || { warn "入口不存在。"; return 0; }
+  IFS=$'\034' read -r old_name old_public_host old_et_ip old_proto old_port old_weight old_enabled <<<"$(awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} {print $1,$2,$3,$4,$5,$6,$7}' <<<"$row")"
+  while true; do
+    new_name="$(safe_name "$(prompt_value "入口名称" "$old_name")")"
+    public_host="$(prompt_host "公网 IP / 域名" "$old_public_host")"
+    et_ip="$(prompt_easytier_ip "EasyTier IP" "$old_et_ip")"
+    proto="$(prompt_easytier_protocols "EasyTier 传输模式" "$old_proto")"
+    port="$(prompt_port "EasyTier 监听端口（TCP+UDP，同端口，白名单 8000-9000）" "$old_port")"
+    weight="$(prompt_value "权重" "$old_weight")"
+    enabled="$(prompt_value "enabled true/false" "$old_enabled")"
+    [[ "$weight" =~ ^[0-9]+$ ]] || { warn "权重必须是非负整数。"; continue; }
+    [[ "$enabled" == "true" || "$enabled" == "false" ]] || { warn "enabled 必须是 true 或 false。"; continue; }
+    validate_unique_entry_fields "$new_name" "$et_ip" "$port" "$old_name" && break
+  done
+  new_row="${new_name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
+  confirm_summary "修改公网入口摘要" "name=${new_name}\npublic_host=${public_host}\net_ip=${et_ip}\nprotocols=${proto}\nlisten=$(easytier_protocols_display "$proto")/${port}\nweight=${weight}\nenabled=${enabled}" || return 0
+  replace_entry_row "$new_row" "$old_name"
+  clear_pending_entry_reservation "$new_name" "$et_ip" "$port"
+  ok "已修改公网入口：${old_name} -> ${new_name}"
+  prompt_apply_relay_after_entry_change
 }
 
 list_entries() {
@@ -2141,6 +2338,8 @@ delete_entry() {
   awk -F'\t' -v n="$name" '$1==n {next} {print}' "$ENTRIES_TSV" >"$tmp"
   write_file "$ENTRIES_TSV" "$(cat "$tmp")" 600
   rm -f "$tmp"
+  ok "已删除公网入口：${name}"
+  prompt_apply_relay_after_entry_change
 }
 
 set_entry_enabled() {
@@ -2153,6 +2352,8 @@ set_entry_enabled() {
   row="$(entries_rows | awk -F'\t' -v n="$name" -v e="$enabled" 'BEGIN{OFS="\t"} $1==n {$7=e; print; found=1} END{exit !found}')"
   [[ -n "$row" ]] || { warn "入口不存在。"; return 0; }
   replace_entry_row "$row"
+  ok "已更新公网入口：${name} enabled=${enabled}"
+  prompt_apply_relay_after_entry_change
 }
 
 set_entry_weight() {
@@ -2164,6 +2365,86 @@ set_entry_weight() {
   row="$(entries_rows | awk -F'\t' -v n="$name" -v w="$weight" 'BEGIN{OFS="\t"} $1==n {$6=w; print; found=1} END{exit !found}')"
   [[ -n "$row" ]] || { warn "入口不存在。"; return 0; }
   replace_entry_row "$row"
+  ok "已更新公网入口权重：${name} weight=${weight}"
+  prompt_apply_relay_after_entry_change
+}
+
+switch_primary_entry() {
+  need_root_unless_dry_run
+  ensure_tsv_files
+  local name choice max_weight new_weight content
+  name="$(select_entry_name all "请选择要作为主入口的编号或名称，直接回车返回")" || return 0
+  echo
+  echo "${BOLD}切换模式：${RESET}"
+  echo "1. 只启用 ${name}，禁用其它入口（推荐用于手动切换）"
+  echo "2. 启用 ${name}，并保留其它入口 enabled（用于多入口备用 / 输出清单）"
+  echo "0. 返回"
+  choice="$(prompt_menu_choice "请选择：")"
+  case "$choice" in
+    1)
+      content="$(entries_rows | awk -F'\t' -v n="$name" 'BEGIN{OFS="\t"} {$7=($1==n ? "true" : "false"); if ($1==n) $6=100; print}')"
+      write_file "$ENTRIES_TSV" "$content" 600
+      ok "已切换主公网入口：${name}"
+      info "手动切换模式：应用 relay 后只保留 ${name} peer。"
+      prompt_apply_relay_after_entry_change
+      ;;
+    2)
+      max_weight="$(entries_rows | awk -F'\t' 'BEGIN{m=0} $6 ~ /^[0-9]+$/ && $6>m {m=$6} END{print m+0}')"
+      if (( max_weight < 1000 )); then new_weight=1000; else new_weight=$((max_weight + 10)); fi
+      content="$(entries_rows | awk -F'\t' -v n="$name" -v w="$new_weight" 'BEGIN{OFS="\t"} $1==n {$6=w; $7="true"} {print}')"
+      write_file "$ENTRIES_TSV" "$content" 600
+      ok "已切换主公网入口：${name}"
+      info "主备推荐模式：应用 relay 后保留所有 enabled peer，${name} 会在输出清单中标记 PRIMARY。"
+      prompt_apply_relay_after_entry_change
+      ;;
+    3|0|"") return 0 ;;
+    *) warn "无效选择。" ;;
+  esac
+}
+
+bulk_entry_enable_menu() {
+  need_root_unless_dry_run
+  ensure_tsv_files
+  local choice name content count
+  count="$(entries_rows | awk 'END{print NR+0}')"
+  (( count > 0 )) || { warn "当前没有公网入口。"; return 0; }
+  while true; do
+    echo
+    echo "${BOLD}批量操作：${RESET}"
+    echo "1. 启用所有公网入口"
+    echo "2. 禁用所有公网入口"
+    echo "3. 只保留一个入口 enabled，其它全部 disabled"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1)
+        content="$(entries_rows | awk -F'\t' 'BEGIN{OFS="\t"} {$7="true"; print}')"
+        write_file "$ENTRIES_TSV" "$content" 600
+        ok "已启用所有公网入口。"
+        prompt_apply_relay_after_entry_change
+        return 0
+        ;;
+      2)
+        warn "禁用所有入口会导致 relay 没有公网入口 peer。"
+        prompt_yes_no "是否继续？" "N" || return 0
+        content="$(entries_rows | awk -F'\t' 'BEGIN{OFS="\t"} {$7="false"; print}')"
+        write_file "$ENTRIES_TSV" "$content" 600
+        ok "已禁用所有公网入口。"
+        prompt_apply_relay_after_entry_change
+        return 0
+        ;;
+      3)
+        name="$(select_entry_name all "请选择要保留 enabled 的编号或名称，直接回车返回")" || return 0
+        content="$(entries_rows | awk -F'\t' -v n="$name" 'BEGIN{OFS="\t"} {$7=($1==n ? "true" : "false"); print}')"
+        write_file "$ENTRIES_TSV" "$content" 600
+        ok "已只保留公网入口 enabled：${name}"
+        prompt_apply_relay_after_entry_change
+        return 0
+        ;;
+      4|0|"") return 0 ;;
+      *) warn "无效选择。" ;;
+    esac
+  done
 }
 
 test_entry_row() {
@@ -2198,11 +2479,22 @@ test_entries() {
 }
 
 test_all_enabled_entries() {
-  local name public_host et_ip proto port _weight enabled tested=0
+  local name public_host et_ip proto port _weight enabled tested=0 peer_text peer_url
   ensure_nc_for_test || true
+  peer_text="$(easytier_cli_peer_text)"
   while IFS=$'\t' read -r name public_host et_ip proto port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
     tested=1
+    echo
+    info "入口 ${name} peer 目标："
+    while IFS= read -r peer_url; do
+      [[ -n "$peer_url" ]] && info "  * ${peer_url}"
+    done < <(easytier_urls "$public_host" "$proto" "$port")
+    if grep -q "$et_ip" <<<"$peer_text"; then
+      ok "入口 ${name} peer 可见：${et_ip}"
+    else
+      warn "入口 ${name} peer 暂未在 easytier-cli 中出现"
+    fi
     test_entry_row "$name" "$public_host" "$et_ip" "$proto" "$port" "$enabled"
   done < <(entries_rows)
   (( tested == 1 )) || warn "没有 enabled 公网入口可测试。"
@@ -2214,6 +2506,11 @@ enabled_entries_count() {
 
 apply_easytier_entry_services() {
   need_root_unless_dry_run
+  if machine_looks_like_relay; then
+    warn "当前机器看起来是 B 利群主机，不应该启动 entry 服务。"
+    warn "如需重启 B，请选择：启动 / 重启 relay 服务。"
+    prompt_yes_no "是否仍然继续？" "N" || return 0
+  fi
   install_easytier_binary
   local name public_host et_ip proto port weight enabled service
   while IFS=$'\t' read -r name public_host et_ip proto port weight enabled; do
@@ -2227,10 +2524,14 @@ apply_easytier_entry_services() {
 
 apply_easytier_relay_service() {
   need_root_unless_dry_run
-  APPLY_RELAY_RESTARTED=0
-  local service enabled_count
+  local confirm_mode="${1:-ask}" service enabled_count
+  if machine_looks_like_entry; then
+    warn "当前机器看起来是 A 公网入口，不应该启动 relay 服务。"
+    warn "如需重启 A，请选择：启动 / 重启 entry 服务。"
+    prompt_yes_no "是否仍然继续？" "N" || return 0
+  fi
   enabled_count="$(enabled_entries_count)"
-  if (( enabled_count > 0 )); then
+  if [[ "$confirm_mode" != "confirmed" ]] && (( enabled_count > 0 )); then
     warn "重启 EasyTier relay 会短暂中断所有已接入公网入口。"
     if ! prompt_yes_no "是否继续？" "N"; then
       info "已取消重启 EasyTier relay。"
@@ -2241,8 +2542,19 @@ apply_easytier_relay_service() {
   service="$(render_relay_service)" || return 1
   write_file "$EASYTIER_RELAY_SERVICE" "$service" 644
   start_service_file "$EASYTIER_RELAY_SERVICE_NAME"
-  APPLY_RELAY_RESTARTED=1
   ok "EasyTier relay 已配置。"
+  wait_et_ip "$RELAY_ET_IP" 15 || warn "15 秒内未检测到 Relay EasyTier IP：${RELAY_ET_IP}"
+  test_all_enabled_entries
+}
+
+prompt_apply_relay_after_entry_change() {
+  info "已更新公网入口配置，但尚未应用到 EasyTier relay。"
+  warn "应用公网入口变更需要重启 EasyTier relay，现有入口会短暂中断。"
+  if prompt_yes_no "是否现在重启 relay？" "N"; then
+    apply_easytier_relay_service confirmed
+  else
+    info "请在维护窗口执行：利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务"
+  fi
 }
 
 reserved_entry_port() {
@@ -3511,22 +3823,30 @@ generate_forward_outputs() {
   validate_forwards_tsv || return 1
   mkdir -p "$OUTPUT_DIR"
   local txt tsv name entry_port target_host target_port out_iface route_table enabled comment
-  local e_name public_host et_ip proto port weight e_enabled health
+  local e_name public_host et_ip proto port weight e_enabled tcp_health udp_health role rank
   txt="【转发入口清单】"$'\n'
   tsv=$'target_name\tentry_name\tpublic_host\tentry_port\ttarget_host\ttarget_port\thealth\tweight'
   while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
     [[ "$enabled" == "true" ]] || continue
     txt="${txt}"$'\n'"目标：${name}"$'\n'"后端：${target_host}:${target_port}"$'\n'"入口："$'\n'
+    rank=0
     while IFS=$'\t' read -r e_name public_host et_ip proto port weight e_enabled; do
       [[ "$e_enabled" == "true" ]] || continue
-      health="UNKNOWN"
+      rank=$((rank + 1))
+      if (( rank == 1 )); then role="PRIMARY"; else role="BACKUP "; fi
+      tcp_health="UNKNOWN"
+      udp_health="UNKNOWN"
       if command -v nc >/dev/null 2>&1; then
-        if nc -vz -w 2 "$public_host" "$entry_port" >/dev/null 2>&1; then health="UP"; else health="DOWN"; fi
+        if nc -vz -w 2 "$public_host" "$entry_port" >/dev/null 2>&1; then tcp_health="UP"; else tcp_health="DOWN"; fi
+        if nc -uvz -w 2 "$public_host" "$entry_port" >/dev/null 2>&1; then udp_health="PROBED"; fi
       fi
-      txt="${txt}- ${e_name}  ${public_host}:${entry_port}  状态：${health}  权重：${weight}"$'\n'
-      tsv="${tsv}"$'\n'"${name}"$'\t'"${e_name}"$'\t'"${public_host}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${health}"$'\t'"${weight}"
-    done < <(entries_rows | sort -t$'\t' -k6,6nr)
+      txt="${txt}* ${role} ${e_name}  ${public_host}:${entry_port}  TCP+UDP  状态：TCP=${tcp_health} UDP=${udp_health}  权重：${weight}"$'\n'
+      tsv="${tsv}"$'\n'"${name}"$'\t'"${e_name}"$'\t'"${public_host}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${tcp_health}"$'\t'"${weight}"
+    done < <(enabled_entries_sorted)
   done < <(forwards_rows_usv)
+  txt="${txt}"$'\n'"[INFO] 本工具不会自动把外部客户端流量按权重分流；权重用于排序和推荐。"$'\n'
+  txt="${txt}[INFO] 真正负载均衡需要客户端、DNS 或外部 LB 配合。"$'\n'
+  txt="${txt}[INFO] 如需手动切换入口，请使用：公网入口列表管理 -> 切换主公网入口。"
   write_file "$FORWARD_TXT" "$txt" 644
   write_file "$FORWARD_TSV" "$tsv" 644
   cat "$FORWARD_TXT"
@@ -3590,6 +3910,29 @@ report_mss_clamp_status() {
     report OK "TCP MSS clamp enabled: ${mss}"
   else
     report WARN "TCP MSS clamp 未启用，EasyTier/tun TCP 转发可能出现有延迟但连接异常"
+  fi
+}
+
+report_entry_policy_summary() {
+  local count rank label name public_host et_ip proto port weight enabled
+  count="$(enabled_entries_count)"
+  report INFO "公网入口策略："
+  report INFO "enabled entries: ${count}"
+  if (( count == 0 )); then
+    report WARN "当前没有 enabled 公网入口，relay peer 列表为空。"
+    return 0
+  fi
+  rank=0
+  while IFS=$'\t' read -r name public_host et_ip proto port weight enabled; do
+    rank=$((rank + 1))
+    if (( rank == 1 )); then label="PRIMARY"; else label="BACKUP"; fi
+    report INFO "${label}: ${name} weight=${weight} $(easytier_protocols_display "$proto")/${port}"
+  done < <(enabled_entries_sorted)
+  if (( count == 1 )); then
+    name="$(enabled_entries_sorted | awk -F'\t' 'NR==1 {print $1}')"
+    report OK "当前为单入口模式：${name}"
+  else
+    report INFO "当前为多入口模式，权重只影响输出排序，不代表自动流量负载均衡。"
   fi
 }
 
@@ -3671,6 +4014,7 @@ doctor_relay() {
   iface="$(et_iface_by_ip "$RELAY_ET_IP")"
   if [[ -n "$iface" ]]; then report OK "Relay EasyTier IP ${RELAY_ET_IP} 在接口 ${iface}"; else report WARN "未检测到 Relay EasyTier IP：${RELAY_ET_IP}"; fi
   entries="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"; report INFO "enabled entries：${entries}"
+  report_entry_policy_summary
   peer_text="$(easytier_cli_peer_text)"
   while IFS=$'\t' read -r name public_host et_ip proto port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
@@ -4276,23 +4620,29 @@ entries_menu() {
     echo "1. 生成新公网入口接入码"
     echo "2. 粘贴公网入口返回码并接入"
     echo "3. 手动添加公网入口（高级）"
-    echo "4. 删除公网入口"
-    echo "5. 启用 / 禁用公网入口"
-    echo "6. 修改公网入口权重"
-    echo "7. 查看所有公网入口"
-    echo "8. 测试公网入口"
+    echo "4. 修改公网入口详情"
+    echo "5. 删除公网入口"
+    echo "6. 启用 / 禁用公网入口"
+    echo "7. 修改公网入口权重"
+    echo "8. 查看所有公网入口"
+    echo "9. 测试公网入口"
+    echo "10. 切换主公网入口"
+    echo "11. 批量启用 / 禁用公网入口"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) quick_generate_network_pairing ;;
       2) quick_deploy_relay_from_entry_pairing ;;
       3) add_entry ;;
-      4) delete_entry ;;
-      5) set_entry_enabled ;;
-      6) set_entry_weight ;;
-      7) list_entries ;;
-      8) test_entries ;;
-      0) return 0 ;;
+      4) edit_entry ;;
+      5) delete_entry ;;
+      6) set_entry_enabled ;;
+      7) set_entry_weight ;;
+      8) list_entries ;;
+      9) test_entries ;;
+      10) switch_primary_entry ;;
+      11) bulk_entry_enable_menu ;;
+      12|0) return 0 ;;
     esac
   done
 }

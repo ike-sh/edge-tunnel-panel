@@ -52,6 +52,8 @@ udp 10.198.1.1:ENTRY_PORT -> TARGET_HOST:TARGET_PORT
 
 `forwards.tsv` 仍保持 8 列，不新增协议字段。旧 8 列行默认代表 TCP+UDP 同端口转发；如果后端只有 TCP，UDP 规则不会影响 TCP 使用。
 
+多公网入口只影响可用 A 入口 peer 和输出清单排序，不是 B 侧自动负载均衡。外部客户端从哪个 A 的公网地址进入，就命中该 A 的端口池规则；PRIMARY / BACKUP 只是推荐提示。
+
 如果 `TARGET_HOST` 是域名，会先解析为 IPv4 并写入：
 
 ```text

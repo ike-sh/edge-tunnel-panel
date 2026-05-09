@@ -56,17 +56,31 @@ sudo lq --doctor --verbose
 利群主机 -> 公网入口列表管理
 ```
 
-B 侧删除、启用/禁用、修改权重、测试公网入口都会先展示列表，并支持编号选择。
+B 侧修改详情、删除、启用/禁用、修改权重、测试公网入口都会先展示列表，并支持编号或名称选择。
 
 ## 新增入口不应影响旧入口
 
 新增第二台公网入口时，B 侧“生成 / 新增公网入口网络码”会复用已有 EasyTier network name / secret，不会覆盖 `/etc/leikwan-toolkit/easytier/network.env`，也不会重启 `easytier-relay`。
 
-B 粘贴 A 返回的 ENTRY 入口码时，默认只保存 `entries.tsv`。如果要立即应用，脚本会提示重启 relay 会短暂中断所有已接入入口，并要求确认；建议在维护窗口应用。
+B 粘贴 A 返回的 ENTRY 入口码，或在公网入口列表中手动添加、修改、删除、禁用、改权重时，默认只保存 `entries.tsv`。如果要立即应用，脚本会提示重启 relay 会短暂中断所有已接入入口，并要求确认；建议在维护窗口应用。
 
 如果发现旧入口掉线，优先检查是否手动重启过 `easytier-relay`、service peer 列表是否同时包含所有 enabled entries，以及 `entries.tsv` 是否还保留旧入口行。
 
 新入口默认使用 `tcp,udp`，relay service 中应能看到同一入口的两个 peer，例如 `tcp://host:8301` 和 `udp://host:8301`。旧 `tcp` 入口只生成 TCP peer，这是兼容行为。
+
+多入口不是自动 LB。若输出清单或 doctor 显示 PRIMARY / BACKUP，那只是排序和推荐；外部客户端连接哪个 A，就从哪个 A 进入。要自动按权重分流，需要客户端、DNS 或外部负载均衡器配合。
+
+如果连续生成多份入口码，检查：
+
+```text
+/etc/leikwan-toolkit/entries/pending-entries.tsv
+```
+
+pending 会预占尚未接回 B 的入口名、EasyTier IP 和端口。误生成的旧 pending 超过 24 小时时，生成新码会提示清理。
+
+## EasyTier 角色误操作
+
+B 利群主机误点“启动 / 重启 entry 服务”时会提示当前机器看起来是 B，不建议启动 entry，默认不继续。A 公网入口误点“启动 / 重启 relay 服务”时也会提示当前机器看起来是 A，不建议启动 relay，默认不继续。
 
 ## EasyTier IP 填写错误
 

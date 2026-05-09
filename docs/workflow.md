@@ -45,11 +45,34 @@ curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leik
 2. 脚本读取现有 `entries.tsv`，自动推荐下一个唯一 EasyTier IP 和监听端口，例如已有 `aliyun 10.198.1.2 tcp+udp/8301` 时推荐 `home 10.198.1.3 tcp+udp/8302`。
 3. 新 A 执行第 3 项，粘贴 B 的网络码。默认使用网络码里的 `SUGGESTED_ENTRY_NAME`、`SUGGESTED_ENTRY_ET_IP`、`SUGGESTED_EASYTIER_PROTOCOLS` 和 `SUGGESTED_EASYTIER_PORT`。
 4. 新 A 执行第 5 项，配置本机入口端口池。
-5. B 执行第 4 项，粘贴 A 返回码。默认只保存 `entries.tsv`，不会自动重启 relay，避免影响已有在线入口。
+5. B 执行第 4 项，粘贴 A 返回码。默认只保存 `entries.tsv`，不会自动重启 relay，避免影响已有在线入口。脚本会提示是否现在重启 relay，默认 `N`。
 6. 需要立即应用时，脚本会提示重启 EasyTier relay 会短暂中断所有入口，并要求用户确认；建议在维护窗口应用。
 7. B 进入 `利群主机 -> 公网入口列表管理` 查看或测试。
 
 B 侧菜单 `公网入口列表管理` 的“手动添加公网入口（高级）”只适合明确知道 `entries.tsv` 字段含义的用户。
+
+连续生成多个入口码时，脚本会把已推荐但尚未接回 B 的入口写入 `entries/pending-entries.tsv`。后续推荐会同时排除 `entries.tsv` 和 pending 记录，所以可以连续生成 `aliyun 10.198.1.2 tcp+udp/8301`、`home 10.198.1.3 tcp+udp/8302`，不会重复。A 的 ENTRY 码接回 B 后，对应 pending 会自动清理。
+
+## 公网入口列表管理
+
+```text
+1. 生成新公网入口接入码
+2. 粘贴公网入口返回码并接入
+3. 手动添加公网入口（高级）
+4. 修改公网入口详情
+5. 删除公网入口
+6. 启用 / 禁用公网入口
+7. 修改公网入口权重
+8. 查看所有公网入口
+9. 测试公网入口
+10. 切换主公网入口
+11. 批量启用 / 禁用公网入口
+0. 返回
+```
+
+手动添加、修改详情、删除、启用/禁用、修改权重、粘贴 ENTRY 返回码后，都会提示“已更新公网入口配置，但尚未应用到 EasyTier relay”。选择立即应用会重启 `easytier-relay.service` 并测试所有 enabled entries；选择 `N` 时不会静默重启。
+
+多公网入口是“清单 + 手动切换 + 主备推荐”，不是 B 侧自动负载均衡。外部客户端连接哪个 A，就从哪个 A 进入；`weight` 只影响输出清单和 doctor 里的 PRIMARY / BACKUP 排序。真正自动负载均衡需要客户端、DNS 或外部 LB 配合。
 
 ## EasyTier IP 与公网地址
 
