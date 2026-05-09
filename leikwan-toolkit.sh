@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="0.4.0-alpha"
+TOOL_VERSION="0.4.1-alpha"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_AUTHOR="ike-sh"
@@ -1073,6 +1073,9 @@ install_local_easytier_binaries() {
 
 install_easytier_binary() {
   if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]] && easytier_validate_help; then
+    if ! command -v jq >/dev/null 2>&1; then
+      info "jq 缺失只影响 GitHub release metadata 获取，不影响当前已安装 EasyTier 运行。"
+    fi
     if prompt_yes_no "检测到可用 EasyTier 二进制，是否复用？" "Y"; then
       ok "复用已安装 EasyTier。"
       return 0
@@ -1245,6 +1248,19 @@ wait_et_ip() {
   local ip="$1" timeout="${2:-15}" i
   for i in $(seq 1 "$timeout"); do
     if et_ip_present "$ip"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+wait_systemd_active() {
+  local service_name="$1" timeout="${2:-15}" i
+  (( DRY_RUN == 1 )) && return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+  for i in $(seq 1 "$timeout"); do
+    if systemctl is-active --quiet "${service_name}.service"; then
+      return 0
+    fi
     sleep 1
   done
   return 1
@@ -2567,8 +2583,56 @@ pending_entries_menu() {
   done
 }
 
+entry_peer_text_matches() {
+  local peer_text="$1" name="$2" public_host="$3" et_ip="$4" proto="$5" port="$6" peer_url
+  grep -Fq "$et_ip" <<<"$peer_text" && return 0
+  grep -Fq "$public_host" <<<"$peer_text" && return 0
+  while IFS= read -r peer_url; do
+    [[ -n "$peer_url" ]] || continue
+    grep -Fq "$peer_url" <<<"$peer_text" && return 0
+  done < <(easytier_urls "$public_host" "$proto" "$port")
+  grep -Fq "$name" <<<"$peer_text" && return 0
+  return 1
+}
+
+wait_entry_peer_visible() {
+  local name="$1" public_host="$2" et_ip="$3" proto="$4" port="$5" attempts="${6:-8}" interval="${7:-1}"
+  local i peer_text
+  for i in $(seq 1 "$attempts"); do
+    peer_text="$(easytier_cli_peer_text)"
+    if entry_peer_text_matches "$peer_text" "$name" "$public_host" "$et_ip" "$proto" "$port"; then
+      return 0
+    fi
+    sleep "$interval"
+  done
+  return 1
+}
+
+emit_entry_peer_targets() {
+  local name="$1" public_host="$2" proto="$3" port="$4" mode="${5:-plain}" peer_url
+  emit_status "$mode" INFO "入口 ${name} peer 目标："
+  while IFS= read -r peer_url; do
+    [[ -n "$peer_url" ]] && emit_status "$mode" INFO "  * ${peer_url}"
+  done < <(easytier_urls "$public_host" "$proto" "$port")
+}
+
+check_entry_peer_connectivity() {
+  local name="$1" public_host="$2" et_ip="$3" proto="$4" port="$5" mode="${6:-plain}"
+  if wait_entry_peer_visible "$name" "$public_host" "$et_ip" "$proto" "$port"; then
+    emit_status "$mode" OK "入口 ${name} peer 可见：${et_ip}"
+    ping_entry_et_ip "$name" "$et_ip" "$mode" || true
+    return 0
+  fi
+  if ping_entry_et_ip "$name" "$et_ip" "$mode"; then
+    emit_status "$mode" INFO "easytier-cli peer 列表暂未显示 ${name}，但 EasyTier IP ping 成功，视为已连通。"
+    return 0
+  fi
+  emit_status "$mode" WARN "入口 ${name} peer 未确认，且 EasyTier IP ping 失败。"
+  return 1
+}
+
 test_entry_row() {
-  local name="$1" public_host="$2" et_ip="$3" proto="$4" port="$5" enabled="$6"
+  local name="$1" public_host="$2" et_ip="$3" proto="$4" port="$5" enabled="$6" ping_mode="${7:-yes}"
   echo
   echo "入口：${name}"
   [[ "$enabled" == "true" ]] || warn "该公网入口当前 disabled，仅执行连通性测试。"
@@ -2586,7 +2650,7 @@ test_entry_row() {
       *) warn "入口 ${name} UDP 探测未确认。UDP 无连接探测可能不可靠，请结合 EasyTier peer / ping 判断。" ;;
     esac
   fi
-  ping -c 2 "$et_ip" || true
+  [[ "$ping_mode" == "yes" ]] && ping_entry_et_ip "$name" "$et_ip" plain || true
 }
 
 test_entries() {
@@ -2599,23 +2663,15 @@ test_entries() {
 }
 
 test_all_enabled_entries() {
-  local name public_host et_ip proto port _weight enabled tested=0 peer_text peer_url
+  local name public_host et_ip proto port _weight enabled tested=0
   ensure_nc_for_test || true
-  peer_text="$(easytier_cli_peer_text)"
   while IFS=$'\t' read -r name public_host et_ip proto port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
     tested=1
     echo
-    info "入口 ${name} peer 目标："
-    while IFS= read -r peer_url; do
-      [[ -n "$peer_url" ]] && info "  * ${peer_url}"
-    done < <(easytier_urls "$public_host" "$proto" "$port")
-    if grep -q "$et_ip" <<<"$peer_text"; then
-      ok "入口 ${name} peer 可见：${et_ip}"
-    else
-      warn "入口 ${name} peer 暂未在 easytier-cli 中出现"
-    fi
-    test_entry_row "$name" "$public_host" "$et_ip" "$proto" "$port" "$enabled"
+    emit_entry_peer_targets "$name" "$public_host" "$proto" "$port" plain
+    check_entry_peer_connectivity "$name" "$public_host" "$et_ip" "$proto" "$port" plain || true
+    test_entry_row "$name" "$public_host" "$et_ip" "$proto" "$port" "$enabled" no
   done < <(entries_rows)
   (( tested == 1 )) || warn "没有 enabled 公网入口可测试。"
 }
@@ -2663,6 +2719,7 @@ apply_easytier_relay_service() {
   write_file "$EASYTIER_RELAY_SERVICE" "$service" 644
   start_service_file "$EASYTIER_RELAY_SERVICE_NAME"
   ok "EasyTier relay 已配置。"
+  wait_systemd_active "$EASYTIER_RELAY_SERVICE_NAME" 15 || warn "15 秒内 easytier-relay.service 未进入 active 状态。"
   wait_et_ip "$RELAY_ET_IP" 15 || warn "15 秒内未检测到 Relay EasyTier IP：${RELAY_ET_IP}"
   test_all_enabled_entries
 }
@@ -3529,6 +3586,9 @@ apply_nft_rules() {
     else
       ok "nftables 转发规则已应用。"
     fi
+    if mss_clamp_enabled && nft_has_mss_clamp; then
+      ok "已自动启用 TCP MSS clamp: $(tcp_mss_clamp_value)"
+    fi
   else
     fail "nftables 应用失败，尝试回滚。"
     [[ -s "$old" ]] && nft -f "$old" || true
@@ -3793,8 +3853,19 @@ pbr_add_from_forward() {
     printf '%s %s forward %s %s\n' "$cidr" "${group#T_}" "$name" "$target_host" >>"$PBR_STATIC_CONF"
     ok "已从转发目标添加 PBR：${name} ${target_host}(${target_ip}) -> T_${group#T_}"
   fi
-  pbr_apply
-  info "如需同步转发目标 out_iface / route_table 元数据，请执行：lq forward apply-relay --auto-fix-route"
+  if pbr_apply; then
+    if prompt_yes_no "是否立即重新应用转发规则并同步 route_table？" "Y"; then
+      if apply_nft_rules "leikwan-relay" 1; then
+        ok "已重新应用转发规则并同步 route_table 元数据。"
+      else
+        warn "PBR 已添加，但转发规则重新应用失败；请稍后执行：lq forward apply-relay --auto-fix-route"
+      fi
+    else
+      info "PBR 已添加。请稍后执行：lq forward apply-relay --auto-fix-route 以同步转发目标元数据。"
+    fi
+  else
+    warn "PBR 已写入，但应用失败；请稍后执行：lq pbr apply"
+  fi
 }
 
 pbr_rows() {
@@ -4004,6 +4075,51 @@ ping_loss_text() {
   }'
 }
 
+ping_loss_percent() {
+  awk -F, '/packet loss/ {
+    for (i=1; i<=NF; i++) {
+      if ($i ~ /packet loss/) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+        sub(/[[:space:]]*packet loss.*/, "", $i)
+        print $i
+        exit
+      }
+    }
+  }'
+}
+
+emit_status() {
+  local mode="$1" status="$2" msg="$3"
+  if [[ "$mode" == "report" ]]; then
+    report "$status" "$msg"
+  else
+    case "$status" in
+      OK) ok "$msg" ;;
+      WARN) warn "$msg" ;;
+      INFO) info "$msg" ;;
+      FAIL) fail "$msg" ;;
+      *) echo "[${status}] ${msg}" ;;
+    esac
+  fi
+}
+
+ping_entry_et_ip() {
+  local name="$1" et_ip="$2" mode="${3:-plain}" output rc avg loss msg
+  rc=0
+  output="$(ping -c 2 -W 2 "$et_ip" 2>&1)" || rc=$?
+  log "PING ${name} ${et_ip}: $(printf '%s' "$output" | tr '\n' ' ')"
+  avg="$(printf '%s\n' "$output" | ping_avg_ms)"
+  loss="$(printf '%s\n' "$output" | ping_loss_percent)"
+  if (( rc == 0 )); then
+    msg="ping ${name} ${et_ip} 成功${avg:+，RTT avg=${avg}ms}"
+    emit_status "$mode" OK "$msg"
+    return 0
+  fi
+  msg="ping ${name} ${et_ip} 失败，packet loss=${loss:-unknown}"
+  emit_status "$mode" WARN "$msg"
+  return 1
+}
+
 report_ping_quality() {
   local host="$1" label="$2" output rc avg loss
   rc=0
@@ -4090,7 +4206,7 @@ doctor_cloud() {
   if easytier_protocols_has "$proto" udp; then
     if ss -lunH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then report OK "EasyTier UDP ${port} 已监听"; else report WARN "EasyTier UDP ${port} 未监听"; fi
   fi
-  report_ping_quality "$RELAY_ET_IP" "ping relay ${RELAY_ET_IP}" || true
+  ping_entry_et_ip "relay" "$RELAY_ET_IP" report || true
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
     report OK "nftables table inet leikwan_forward 存在"
     if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; fi
@@ -4121,7 +4237,7 @@ doctor_cloud() {
 
 doctor_relay() {
   report OK "角色：leikwan-relay"
-  local iface entries forwards name public_host et_ip proto port _weight enabled peer_text target_ip target_port peer_url
+  local iface entries forwards name public_host et_ip proto port _weight enabled target_ip target_port
   local entry_port target_host out_iface route_table comment
   if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then
     report OK "EasyTier binary 存在"
@@ -4135,16 +4251,11 @@ doctor_relay() {
   if [[ -n "$iface" ]]; then report OK "Relay EasyTier IP ${RELAY_ET_IP} 在接口 ${iface}"; else report WARN "未检测到 Relay EasyTier IP：${RELAY_ET_IP}"; fi
   entries="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"; report INFO "enabled entries：${entries}"
   report_entry_policy_summary
-  peer_text="$(easytier_cli_peer_text)"
   while IFS=$'\t' read -r name public_host et_ip proto port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
-    if grep -q "$et_ip" <<<"$peer_text"; then report OK "入口 ${name} peer 可见：${et_ip}"; else report WARN "入口 ${name} peer 暂未在 easytier-cli 中出现"; fi
-    report INFO "入口 ${name} peer 目标："
-    while IFS= read -r peer_url; do
-      [[ -n "$peer_url" ]] && report INFO "  * ${peer_url}"
-    done < <(easytier_urls "$public_host" "$proto" "$port")
+    emit_entry_peer_targets "$name" "$public_host" "$proto" "$port" report
+    check_entry_peer_connectivity "$name" "$public_host" "$et_ip" "$proto" "$port" report || true
     if is_fast_port "$port"; then report OK "入口 ${name} EasyTier 端口 ${port} 位于白名单"; else report WARN "入口 ${name} EasyTier 端口 ${port} 不在白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; fi
-    report_ping_quality "$et_ip" "ping ${name} ${et_ip}" || true
     if easytier_protocols_has "$proto" tcp; then
       case "$(tcp_reachable_status "$public_host" "$port")" in
         0) report OK "入口 ${name} TCP 可达：${public_host}:${port}" ;;
@@ -4228,6 +4339,8 @@ doctor_dependency_tools() {
   for cmd in curl jq tar unzip; do
     if command -v "$cmd" >/dev/null 2>&1; then
       report OK "依赖命令存在：${cmd}"
+    elif [[ "$cmd" == "jq" && -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then
+      report INFO "jq 缺失只影响 GitHub release metadata 获取，不影响当前已安装 EasyTier 运行。"
     else
       report WARN "依赖命令缺失：${cmd}"
     fi
@@ -4270,6 +4383,9 @@ doctor_apt_sources() {
     report OK "apt 源更新检查通过。"
   else
     report WARN "apt 源更新检查失败，依赖包可能无法自动安装。"
+  fi
+  if grep -qi 'mirror sync in progress\|sync in progress\|正在同步' "$tmp"; then
+    report WARN "apt 镜像可能正在同步，请稍后重试或换源。"
   fi
   if grep -qi '403[[:space:]]\+Forbidden\|403 Forbidden' "$tmp"; then
     report WARN "apt 源返回 403 Forbidden，请换源或手动安装 deb 包。"
@@ -4365,8 +4481,8 @@ link_test_menu() {
     echo "1. ping relay EasyTier IP"; echo "2. ping 所有入口 EasyTier IP"; echo "3. 测入口 EasyTier TCP/UDP"; echo "4. 测后端 target"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) ping -c 4 "$RELAY_ET_IP" || true ;;
-      2) entries_rows | while IFS=$'\t' read -r _n _h ip _proto _port _w e; do [[ "$e" == "true" ]] && ping -c 2 "$ip" || true; done ;;
+      1) ping_entry_et_ip "relay" "$RELAY_ET_IP" plain || true ;;
+      2) entries_rows | while IFS=$'\t' read -r n _h ip _proto _port _w e; do [[ "$e" == "true" ]] && ping_entry_et_ip "$n" "$ip" plain || true; done ;;
       3)
         ensure_nc_for_test || continue
         entries_rows | while IFS=$'\t' read -r n h ip proto port _w e; do [[ "$e" == "true" ]] && test_entry_row "$n" "$h" "$ip" "$proto" "$port" "$e" || true; done
@@ -4916,10 +5032,10 @@ quick_networking_menu() {
     echo
     echo "A：公网入口机"
     echo "B：利群主机"
-    echo "C：后端 TCP 目标"
+    echo "C：后端目标（TCP/UDP）"
     echo
     echo "推荐链路："
-    echo "外部客户端 -> A 公网入口端口 -> EasyTier -> B 利群主机 -> 后端目标"
+    echo "外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标"
     echo "----------------------------------------"
     echo
     echo "${BOLD}[重要提示]${RESET}"

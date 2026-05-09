@@ -86,6 +86,8 @@ sudo lq --pbr-delete 203.0.113.154
 
 `lq forward apply-relay --auto-fix-route` 会同步 `forwards.tsv` 中的 `out_iface` 和 `route_table` 元数据。
 
+从现有转发目标添加 PBR 后，脚本会默认询问是否立即重新应用利群转发规则并同步 `route_table`，等价于执行 `lq forward apply-relay --auto-fix-route`。选择稍后应用时，PBR 会保留，但转发目标元数据需要在维护窗口手动同步。
+
 - 实际出口接口和配置不一致时，脚本会 WARN，因为 nftables `oifname` 可能不匹配。
 - 出口接口一致但 route_table 元数据不同，只提示 INFO；这通常不会单独导致转发失败。
 

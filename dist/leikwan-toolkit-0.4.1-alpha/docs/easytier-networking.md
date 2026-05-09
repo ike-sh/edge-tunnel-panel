@@ -67,4 +67,4 @@ ping 10.198.1.1
 ping 10.198.1.2
 ```
 
-如果 `easytier-cli peer` 能看到对端但 ping 暂时不通，doctor 会给 WARN，便于继续排查安全组、系统路由或 EasyTier 参数。
+relay 重启后的检测会等待 service active、Relay EasyTier IP 就绪，并重试读取 `easytier-cli peer`。如果 peer 列表暂时没刷新但 EasyTier IP ping 成功，脚本会按已连通处理；只有 peer 未确认且 ping 失败时才 WARN。

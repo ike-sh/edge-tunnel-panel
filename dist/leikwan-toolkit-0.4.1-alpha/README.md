@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-`leikwan-toolkit` v0.4.0-alpha 是“公网入口 + 利群主机 + 后端目标”的三段 TCP/UDP 转发组网工具。
+`leikwan-toolkit` v0.4.1-alpha 是“公网入口 + 利群主机 + 后端目标”的三段 TCP/UDP 转发组网工具。
 
 - 传输层：EasyTier
 - 转发层：nftables
@@ -28,13 +28,13 @@ export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://
 Release 包名：
 
 ```text
-leikwan-toolkit-0.4.0-alpha.tar.gz
+leikwan-toolkit-0.4.1-alpha.tar.gz
 ```
 
 Release URL：
 
 ```text
-https://github.com/ike-sh/leikwan-toolkit/releases/latest/download/leikwan-toolkit-0.4.0-alpha.tar.gz
+https://github.com/ike-sh/leikwan-toolkit/releases/latest/download/leikwan-toolkit-0.4.1-alpha.tar.gz
 ```
 
 ## Banner
@@ -43,7 +43,7 @@ https://github.com/ike-sh/leikwan-toolkit/releases/latest/download/leikwan-toolk
 Leikwan Toolkit
 利群快速组网工具
 Author : ike-sh
-Version: 0.4.0-alpha
+Version: 0.4.1-alpha
 GitHub : https://github.com/ike-sh/leikwan-toolkit
 ```
 
@@ -130,7 +130,7 @@ DDNS / 域名后端是支持的。`apply-relay` 每次都会重新解析域名�
 
 ## 下载排错
 
-`doctor` 会检查 GitHub / apt 域名是否解析到 `198.18.x.x` fake-ip，以及 `curl`、`jq`、`tar`、`unzip` 是否存在。若 OpenClash / Mihomo / sing-box fake-ip DNS 没有透明代理接管本机流量，GitHub 或 apt 可能连接超时；可临时改用 `223.5.5.5` / `119.29.29.29`，或在路由器中让该主机直连 / 正确透明代理。apt 源返回 403 时，请换源或手动安装 deb。无法安装 `unzip` 时，优先使用 EasyTier `tar.gz` / `tgz` 包或本地 `easytier-core`、`easytier-cli` 二进制。
+`doctor` 会检查 GitHub / apt 域名是否解析到 `198.18.x.x` fake-ip，以及 `curl`、`jq`、`tar`、`unzip` 是否存在。若 OpenClash / Mihomo / sing-box fake-ip DNS 没有透明代理接管本机流量，GitHub 或 apt 可能连接超时；可临时改用 `223.5.5.5` / `119.29.29.29`，或在路由器中让该主机直连 / 正确透明代理。apt 源返回 403 或 mirror sync in progress 时，请换源、稍后重试或手动安装 deb。`jq` 缺失只影响 GitHub release metadata 获取；EasyTier 已安装时不会影响当前组网运行。
 
 ## 卸载
 

@@ -1,9 +1,9 @@
 # 排错
 
-v0.4.0-alpha 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+v0.4.1-alpha 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
-client -> A 公网入口端口 -> EasyTier -> B 利群主机 -> 后端目标
+client -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
 ```
 
 默认情况下，EasyTier 组网和业务转发都使用 TCP+UDP。旧 TCP-only 配置仍兼容，不会被自动改成双协议。
@@ -46,7 +46,7 @@ sudo lq --doctor --verbose
 
 如果 DNS 解析到了 `198.18.x.x` fake-ip，通常是 OpenClash / Mihomo / sing-box fake-ip DNS。若本机流量没有被透明代理接管，GitHub / apt 会超时。可临时改用真实 DNS，例如 `223.5.5.5` / `119.29.29.29`，或在路由器中让该主机直连 / 正确透明代理。
 
-如果 apt 源返回 403，请换源或手动安装对应 deb 包。若无法安装 `unzip`，脚本会跳过 zip 包并优先尝试 `tar.gz` / `tgz` 资产；也可以上传本地 EasyTier 包，或直接提供本地 `easytier-core` 与 `easytier-cli` 二进制。
+如果 apt 源返回 403 或提示 mirror sync in progress，请换源、稍后重试或手动安装对应 deb 包。`jq` 缺失只影响 GitHub release metadata 获取；如果 EasyTier 已安装，不影响当前组网运行。若无法安装 `unzip`，也可以上传本地 EasyTier 包，或直接提供本地 `easytier-core` 与 `easytier-cli` 二进制。
 
 ## 公网入口角色误用
 

@@ -1,6 +1,6 @@
 # 验收测试
 
-本页用于 v0.4.0-alpha 收尾验收。
+本页用于 v0.4.1-alpha 收尾验收。
 
 ## 静态检查
 
@@ -15,7 +15,7 @@ scripts/package-release.sh
 Release 包应生成：
 
 ```text
-dist/leikwan-toolkit-0.4.0-alpha.tar.gz
+dist/leikwan-toolkit-0.4.1-alpha.tar.gz
 ```
 
 包内包含：
@@ -37,7 +37,7 @@ Banner 显示：
 Leikwan Toolkit
 利群快速组网工具
 Author : ike-sh
-Version: 0.4.0-alpha
+Version: 0.4.1-alpha
 GitHub : https://github.com/ike-sh/leikwan-toolkit
 ```
 
@@ -228,7 +228,7 @@ udp dport 10002 dnat ip to 203.0.113.20:52936
 
 ## 依赖和下载排错
 
-A 缺少 `unzip` 且 apt 安装失败时，应明确提示 `unzip` 缺失，不应误报 EasyTier zip 坏包。脚本应跳过 zip 候选并优先尝试 `tar.gz` / `tgz`，或引导用户提供本地 EasyTier 包 / `easytier-core` / `easytier-cli`。
+A 缺少 `unzip` 且 apt 安装失败时，应明确提示 `unzip` 缺失，不应误报 EasyTier zip 坏包。脚本会优先尝试已知 zip 资产；如果缺少 `unzip`，会跳过 zip 并继续尝试 `tar.gz` / `tgz`，或引导用户提供本地 EasyTier 包 / `easytier-core` / `easytier-cli`。
 
 `doctor` 应检查：
 

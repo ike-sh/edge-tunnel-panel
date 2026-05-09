@@ -75,6 +75,8 @@ tcp flags syn tcp option maxseg size set 1320
 
 该规则位于 `forward` hook，随 `/etc/leikwan-toolkit/nft/leikwan-forward.nft` 和 `leikwan-nft-forward.service` 持久化，不需要手工创建临时 `lq_mss` 表。
 
+`doctor` 和“查看状态”只检测当前 nftables 规则，不会自行修改 MSS clamp。执行入口端口池应用或利群转发规则应用时，脚本会重新渲染 nftables；如果默认开启 MSS clamp，会明确输出 `已自动启用 TCP MSS clamp: 1320`。
+
 默认 MSS clamp 是 `1320`。如仍不稳定，可降到 `1280` 或故障兜底值 `1200`：
 
 ```bash
