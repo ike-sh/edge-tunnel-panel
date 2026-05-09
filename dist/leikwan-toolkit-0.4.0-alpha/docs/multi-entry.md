@@ -15,10 +15,12 @@
 B 生成网络码时会读取 `entries.tsv` 并自动推荐唯一值：
 
 ```text
-第一台：aliyun  10.198.1.2  tcp/8301
-第二台：home    10.198.1.3  tcp/8302
-第三台：entry3  10.198.1.4  tcp/8303
+第一台：aliyun  10.198.1.2  tcp+udp/8301
+第二台：home    10.198.1.3  tcp+udp/8302
+第三台：entry3  10.198.1.4  tcp+udp/8303
 ```
+
+旧 TCP-only 入口不会被自动改写；只有新生成的入口默认使用 TCP+UDP。
 
 ## entries.tsv
 
@@ -32,17 +34,20 @@ B 生成网络码时会读取 `entries.tsv` 并自动推荐唯一值：
 
 ```text
 entry_name  public_host      et_ip        easytier_protocol  easytier_port  weight  enabled
-aliyun      192.0.2.10       10.198.1.2   tcp                8301           100     true
+aliyun      192.0.2.10       10.198.1.2   tcp,udp            8301           100     true
 home        home.example.com 10.198.1.3   tcp                8302           100     true
-entry3      198.51.100.20    10.198.1.4   tcp                8303           50      false
+entry3      198.51.100.20    10.198.1.4   udp                8303           50      false
 ```
 
 要求：
 
 - `entry_name` 唯一。
 - `et_ip` 唯一。
-- `easytier_port` 位于 `8000-9000`，且唯一。
+- `easytier_protocol` 允许 `tcp`、`udp`、`tcp,udp`；列表显示会把 `tcp,udp` 显示成 `tcp+udp`。
+- `easytier_port` 是 EasyTier 组网端口，TCP/UDP 都校验在 `8000-9000`，且唯一。
 - `public_host` 可以是 IP 或域名。
 - `enabled=false` 不参与输出和测试。
 
 删除、启用/禁用、修改权重、测试入口都会先展示列表，支持编号或名称选择。
+
+relay service 渲染 peer 时会展开多协议入口：`tcp,udp` 写成 `tcp://host:port` 和 `udp://host:port` 两个 peer；旧 `tcp` 行仍只生成 TCP peer。

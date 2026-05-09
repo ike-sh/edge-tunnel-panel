@@ -20,6 +20,7 @@ sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
 
 ```text
 tcp dport 10001-10020 dnat ip to 10.198.1.1
+udp dport 10001-10020 dnat ip to 10.198.1.1
 ```
 
 注意这里不指定 DNAT 目标端口，因此会保持原始端口：
@@ -29,7 +30,7 @@ A_PUBLIC_HOST:10001 -> 10.198.1.1:10001
 A_PUBLIC_HOST:10002 -> 10.198.1.1:10002
 ```
 
-A 不需要读取 `target_host`，也不需要为每个后端重复导入转发码。
+A 不需要读取 `target_host`，也不需要为每个后端重复导入转发码。A 侧入口端口池默认同时处理 TCP 和 UDP。
 
 ## leikwan-relay
 
@@ -45,8 +46,11 @@ sudo lq forward apply-relay
 B 侧根据 `forwards.tsv` 生成每个后端的 DNAT：
 
 ```text
-10.198.1.1:ENTRY_PORT -> TARGET_HOST:TARGET_PORT
+tcp 10.198.1.1:ENTRY_PORT -> TARGET_HOST:TARGET_PORT
+udp 10.198.1.1:ENTRY_PORT -> TARGET_HOST:TARGET_PORT
 ```
+
+`forwards.tsv` 仍保持 8 列，不新增协议字段。旧 8 列行默认代表 TCP+UDP 同端口转发；如果后端只有 TCP，UDP 规则不会影响 TCP 使用。
 
 如果 `TARGET_HOST` 是域名，会先解析为 IPv4 并写入：
 

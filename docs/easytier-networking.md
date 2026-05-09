@@ -1,6 +1,6 @@
 # EasyTier 组网
 
-v0.4 使用 EasyTier 作为 A 公网入口机和 B 利群主机之间的虚拟网络。脚本只管理 EasyTier 组网和 nftables 四层 TCP 转发，不部署后端代理协议。
+v0.4 使用 EasyTier 作为 A 公网入口机和 B 利群主机之间的虚拟网络。脚本只管理 EasyTier 组网和 nftables 四层 TCP/UDP 转发，不部署后端代理协议。
 
 默认地址：
 
@@ -13,11 +13,14 @@ ET_NET=10.198.1.0/24
 默认端口：
 
 ```text
+EASYTIER_PROTOCOLS=tcp,udp
+EASYTIER_TCP_PORT=8301
+EASYTIER_UDP_PORT=8301
 EASYTIER_PROTOCOL=tcp
 EASYTIER_PORT=8301
 ```
 
-本项目默认 EasyTier 端口是 `8301/tcp`，位于利群推荐 `8000-9000` 白名单端口段。`11010` 只是 EasyTier 官方常见示例端口，不作为本项目默认值。
+本项目默认 EasyTier 端口是 `8301` 的 TCP+UDP 双协议监听，位于利群推荐 `8000-9000` 白名单端口段。`11010` 只是 EasyTier 官方常见示例端口，不作为本项目默认值。旧配置只有 `EASYTIER_PROTOCOL=tcp` 时仍保持 TCP-only。
 
 ## 安装器
 

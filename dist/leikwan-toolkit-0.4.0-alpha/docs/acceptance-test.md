@@ -68,11 +68,25 @@ bash /root/leikwan-toolkit.sh --uninstall
 8. 查看完整分步说明
 ```
 
-已有 `aliyun 10.198.1.2 tcp/8301` 时，B 再生成网络码，应推荐 `home` 或 `entry2`、`10.198.1.3`、`8302`。
+已有 `aliyun 10.198.1.2 tcp+udp/8301` 时，B 再生成网络码，应推荐 `home` 或 `entry2`、`10.198.1.3`、`tcp+udp/8302`。
+
+B 生成网络码默认必须包含：
+
+```text
+SUGGESTED_EASYTIER_PROTOCOLS=tcp,udp
+SUGGESTED_EASYTIER_TCP_PORT=8301
+SUGGESTED_EASYTIER_UDP_PORT=8301
+SUGGESTED_EASYTIER_PROTOCOL=tcp
+SUGGESTED_EASYTIER_PORT=8301
+```
 
 如果已有 `/etc/leikwan-toolkit/easytier/network.env` 且角色是 `leikwan-relay`，再次生成网络码必须复用现有 network name / secret，不覆盖 `network.env`，不重启 `easytier-relay`，已有入口不掉线。
 
-新 A 粘贴网络码部署时，默认使用 B 推荐的 `SUGGESTED_ENTRY_NAME`、`SUGGESTED_ENTRY_ET_IP`、`SUGGESTED_EASYTIER_PORT`。
+新 A 粘贴网络码部署时，默认使用 B 推荐的 `SUGGESTED_ENTRY_NAME`、`SUGGESTED_ENTRY_ET_IP`、`SUGGESTED_EASYTIER_PROTOCOLS`、`SUGGESTED_EASYTIER_PORT`。默认提示应显示 `EasyTier 传输模式 [tcp+udp]` 和 `EasyTier 监听端口（TCP+UDP，同端口，白名单 8000-9000） [8301]`。
+
+A 部署后 systemd service 必须同时包含 `tcp://0.0.0.0:8301` 和 `udp://0.0.0.0:8301`。A 返回 ENTRY 码必须同时包含 `EASYTIER_PROTOCOLS=tcp,udp`、`EASYTIER_TCP_PORT=8301`、`EASYTIER_UDP_PORT=8301` 和旧字段 `EASYTIER_PROTOCOL=tcp`、`EASYTIER_PORT=8301`。
+
+旧网络码如果只有 `SUGGESTED_EASYTIER_PROTOCOL=tcp` 和 `SUGGESTED_EASYTIER_PORT=8301`，A 仍应部署 TCP-only；旧 ENTRY 码如果只有 `EASYTIER_PROTOCOL=tcp`，B 仍应只生成 TCP peer。
 
 新 A 若在“本机 EasyTier IP [10.198.1.3]”输入 `home.example.com`，应提示这是域名而不是 EasyTier 虚拟 IP，并提示 DDNS 应填在“本机公网 IP / 域名”；下一轮默认值仍是 `10.198.1.3`。
 
@@ -95,6 +109,15 @@ entries.tsv 同时存在 aliyun 和 home
 relay service peer 列表同时包含 aliyun 和 home
 ```
 
+`tcp,udp` 入口在 `entries.tsv` 中保存为 `tcp,udp  8301`，列表显示为 `tcp+udp`，relay service peer 列表必须同时包含 `tcp://PUBLIC_HOST:8301` 和 `udp://PUBLIC_HOST:8301`。
+
+A 侧配置入口端口池 `10000-19999` 后，nftables 必须同时存在：
+
+```text
+tcp dport 10000-19999 dnat ip to 10.198.1.1
+udp dport 10000-19999 dnat ip to 10.198.1.1
+```
+
 A 侧路径：
 
 ```text
@@ -109,6 +132,7 @@ A 侧路径：
 
 - 公网入口端口提示显示端口池范围和推荐下一个未使用端口。
 - 后端目标端口不显示默认值，空输入会 WARN。
+- 添加摘要显示 `protocols=tcp,udp`，但 `forwards.tsv` 仍保持 8 列兼容。
 
 修改、删除、启用/禁用、测试单个转发目标必须先展示列表，支持编号或名称。修改、删除、启用/禁用后必须重新生成 `resolved.tsv` 并应用 relay nftables。
 
@@ -128,6 +152,15 @@ Hinet 10002 -> tw.example.com(203.0.113.20):52936 eth1 - enabled
 ```
 
 `apply-relay` 每次重新解析域名；IP 变化时输出解析变化并刷新 nftables。
+
+对每个 enabled 转发目标，B 侧 nftables 必须同时生成：
+
+```text
+tcp dport 10002 dnat ip to 203.0.113.20:52936
+udp dport 10002 dnat ip to 203.0.113.20:52936
+```
+
+`doctor` 应同时检查入口 TCP / UDP、后端 target TCP / UDP、relay TCP / UDP DNAT。UDP 探测失败只 WARN，最终以 EasyTier peer / ping 和业务实测为准。
 
 ## PBR
 

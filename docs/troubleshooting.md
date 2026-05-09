@@ -1,10 +1,12 @@
 # 排错
 
-v0.4.0-alpha 主线是 EasyTier 传输 + nftables 四层 TCP 转发。脚本不部署后端业务，只负责：
+v0.4.0-alpha 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 client -> A 公网入口端口 -> EasyTier -> B 利群主机 -> 后端目标
 ```
+
+默认情况下，EasyTier 组网和业务转发都使用 TCP+UDP。旧 TCP-only 配置仍兼容，不会被自动改成双协议。
 
 ## 安装失败
 
@@ -64,6 +66,8 @@ B 粘贴 A 返回的 ENTRY 入口码时，默认只保存 `entries.tsv`。如果
 
 如果发现旧入口掉线，优先检查是否手动重启过 `easytier-relay`、service peer 列表是否同时包含所有 enabled entries，以及 `entries.tsv` 是否还保留旧入口行。
 
+新入口默认使用 `tcp,udp`，relay service 中应能看到同一入口的两个 peer，例如 `tcp://host:8301` 和 `udp://host:8301`。旧 `tcp` 入口只生成 TCP peer，这是兼容行为。
+
 ## EasyTier IP 填写错误
 
 A 部署入口时：
@@ -82,6 +86,11 @@ A 部署入口时：
 ```
 
 添加转发目标时，公网入口端口提示会显示入口端口池或常见范围，并推荐下一个未使用端口。
+
+请区分两类端口：
+
+- EasyTier 组网端口：例如 `8301`，TCP 和 UDP 都校验在 `8000-9000`，用于 A/B peer 建链。
+- 业务公网入口端口：例如 `10001`，用于外部客户端访问后端业务，A 侧端口池会同时 DNAT TCP 和 UDP。
 
 ## DDNS / 域名后端
 
@@ -132,10 +141,20 @@ sudo lq --doctor --verbose
 重点看：
 
 - A 入口端口池是否包含该 entry_port。
-- B relay nftables 是否有 DNAT。
+- A 入口端口池是否同时有 TCP / UDP DNAT。
+- B relay nftables 是否同时有 TCP / UDP DNAT。
 - 后端目标 TCP 是否可达。
 - `out_iface` 是否和实际出口 dev 一致。
 - MSS clamp 是否启用。
+
+## UDP 探测未确认
+
+`doctor` 会尝试 `nc -uvz -w 3 host port`，但 UDP 是无连接协议，失败不一定代表业务不可用。UDP 探测失败时脚本只 WARN，最终仍应结合 EasyTier peer / ping 和实际业务测试判断。
+
+如果 UDP 不通但 TCP 正常，常见原因是安全组或家宽路由器只放行了 TCP。请同时开放：
+
+- EasyTier 端口 TCP+UDP，例如 `8301`。
+- 业务入口端口 TCP+UDP，例如 `10001-10020` 或具体端口。
 
 MSS clamp 配置：
 

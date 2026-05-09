@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-`leikwan-toolkit` v0.4.0-alpha 是“公网入口 + 利群主机 + 后端目标”的三段 TCP 转发组网工具。
+`leikwan-toolkit` v0.4.0-alpha 是“公网入口 + 利群主机 + 后端目标”的三段 TCP/UDP 转发组网工具。
 
 - 传输层：EasyTier
 - 转发层：nftables
@@ -65,7 +65,7 @@ GitHub : https://github.com/ike-sh/leikwan-toolkit
 
 新增第二台公网入口的正确流程：
 
-1. B 利群主机执行第 2 项，脚本复用现有 EasyTier network name / secret，不覆盖 `network.env`，不重启 relay，并自动推荐新的入口名、EasyTier IP 和 8000-9000 内监听端口。
+1. B 利群主机执行第 2 项，脚本复用现有 EasyTier network name / secret，不覆盖 `network.env`，不重启 relay，并自动推荐新的入口名、EasyTier IP 和 8000-9000 内监听端口。新生成的网络码默认建议 EasyTier `tcp,udp`，TCP 和 UDP 使用同一个端口，例如 `8301`。
 2. 新 A 公网入口执行第 3 项，粘贴 B 的网络码并部署本机入口。
 3. 新 A 执行第 5 项，配置本机入口端口池。
 4. B 执行第 4 项，粘贴 A 返回的 ENTRY 入口码；默认只保存 `entries.tsv`，不会自动重启 relay。
@@ -78,11 +78,18 @@ EasyTier IP 和公网地址不要混填：
 - EasyTier IP：虚拟网 IP，例如 `10.198.1.3`。
 - 公网地址 / DDNS：例如 `home.ike-nicholas.xyz`，应填写在“本机公网 IP / 域名”。
 
+端口概念要分清：
+
+- EasyTier 组网端口：例如 `8301` / `8302`，TCP 和 UDP 都使用利群推荐的 `8000-9000` 白名单端口，用于 A 和 B 建立 EasyTier peer。
+- 业务公网入口端口：例如 `10001` / `10002`，用于外部客户端访问业务转发，不受 EasyTier `8000-9000` 限制。
+
 ## 转发目标
 
 B 侧管理路径：`利群主机 -> 转发目标管理`
 
 修改、删除、启用/禁用、测试单个转发目标都会先显示列表，并支持输入编号或名称。添加转发目标时，公网入口端口会按入口端口池推荐下一个未使用端口；后端目标端口没有默认值，必须输入 `1-65535`。
+
+每个转发目标默认同时创建 TCP 和 UDP 转发：同一个 `entry_port` 会同时处理 `tcp dport` 和 `udp dport`。如果后端服务只有 TCP，UDP 规则存在也不会影响 TCP；如果后端服务支持 UDP，外部 UDP 可以走同一个公网入口端口。
 
 DDNS / 域名后端是支持的。`apply-relay` 每次都会重新解析域名并刷新 `resolved.tsv` 和 nftables 规则；解析失败时，如果存在上次解析 IP，会继续使用旧 IP 并 WARN。
 
@@ -141,13 +148,13 @@ bash /root/leikwan-toolkit.sh --uninstall
 Description:
 
 ```text
-Role-based Debian toolkit for Leikwan TCP chaining with EasyTier, nftables, IPv4 PBR, MSS clamp, and diagnostics.
+Role-based Debian toolkit for Leikwan TCP/UDP chaining with EasyTier, nftables, IPv4 PBR, MSS clamp, and diagnostics.
 ```
 
 Topics:
 
 ```text
-debian shell-script easytier nftables tcp-forwarding pbr mss-clamp network-toolkit proxy-toolkit leikwan diagnostics
+debian shell-script easytier nftables tcp-forwarding udp-forwarding pbr mss-clamp network-toolkit proxy-toolkit leikwan diagnostics
 ```
 
 ## 文档

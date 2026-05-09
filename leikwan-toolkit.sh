@@ -62,6 +62,7 @@ FAST_PORT_RANGE_END="9000"
 DEFAULT_EASYTIER_PORT="8301"
 EASYTIER_PORT_DEFAULT="$DEFAULT_EASYTIER_PORT"
 EASYTIER_PROTOCOL_DEFAULT="tcp"
+EASYTIER_PROTOCOLS_DEFAULT="tcp,udp"
 EASYTIER_RELAY_SERVICE_NAME="easytier-relay"
 EASYTIER_RELAY_SERVICE="/etc/systemd/system/${EASYTIER_RELAY_SERVICE_NAME}.service"
 
@@ -177,6 +178,55 @@ is_easytier_protocol() {
   esac
 }
 
+normalize_easytier_protocols() {
+  local value="$1"
+  value="$(normalize_menu_choice "$value")"
+  value="${value,,}"
+  value="${value//[[:space:]]/}"
+  value="${value//+/,}"
+  case "$value" in
+    tcp,udp|udp,tcp|dual|both) printf '%s' "tcp,udp" ;;
+    tcp|udp) printf '%s' "$value" ;;
+    *) return 1 ;;
+  esac
+}
+
+easytier_protocols_display() {
+  local protocols
+  protocols="$(normalize_easytier_protocols "$1" 2>/dev/null || printf '%s' "$1")"
+  case "$protocols" in
+    tcp,udp) printf '%s' "tcp+udp" ;;
+    *) printf '%s' "$protocols" ;;
+  esac
+}
+
+easytier_legacy_protocol() {
+  local protocols
+  protocols="$(normalize_easytier_protocols "$1")" || return 1
+  case ",${protocols}," in
+    *,tcp,*) printf '%s' "tcp" ;;
+    *,udp,*) printf '%s' "udp" ;;
+    *) return 1 ;;
+  esac
+}
+
+easytier_protocols_has() {
+  local protocols="$1" proto="$2"
+  protocols="$(normalize_easytier_protocols "$protocols")" || return 1
+  [[ ",${protocols}," == *",${proto},"* ]]
+}
+
+easytier_urls() {
+  local host="$1" protocols="$2" port="$3"
+  protocols="$(normalize_easytier_protocols "$protocols")" || return 1
+  if easytier_protocols_has "$protocols" tcp; then
+    printf 'tcp://%s:%s\n' "$host" "$port"
+  fi
+  if easytier_protocols_has "$protocols" udp; then
+    printf 'udp://%s:%s\n' "$host" "$port"
+  fi
+}
+
 looks_like_domain() {
   local value="$1"
   [[ "$value" =~ [A-Za-z] && "$value" == *.* ]]
@@ -226,17 +276,20 @@ prompt_easytier_ip() {
   done
 }
 
-prompt_easytier_protocol() {
+prompt_easytier_protocols() {
   local prompt="$1" default="$2" value
   while true; do
-    value="$(prompt_value "$prompt" "$default")"
-    value="${value,,}"
-    if is_easytier_protocol "$value"; then
+    value="$(prompt_value "$prompt" "$(easytier_protocols_display "$default")")"
+    if value="$(normalize_easytier_protocols "$value")"; then
       printf '%s' "$value"
       return 0
     fi
-    warn "EasyTier 协议无效：${value}。请输入 tcp / udp / ws / wss。"
+    warn "EasyTier 传输模式无效。请输入 tcp、udp 或 tcp+udp。"
   done
+}
+
+prompt_easytier_protocol() {
+  prompt_easytier_protocols "$@"
 }
 
 is_ipv4() {
@@ -369,10 +422,10 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   bash leikwan-toolkit.sh --version
 
 定位：
-  公网入口 + 利群主机 + 后端目标的三段 TCP 转发组网工具。
+  公网入口 + 利群主机 + 后端目标的三段 TCP/UDP 转发组网工具。
   传输层使用 EasyTier，转发层使用 nftables。
   默认 EasyTier 虚拟网段：${ET_NET}，relay：${RELAY_ET_IP}。
-  默认 EasyTier TCP 端口：${DEFAULT_EASYTIER_PORT}，位于利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。
+  默认 EasyTier 传输：TCP+UDP / ${DEFAULT_EASYTIER_PORT}，位于利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。
   不部署后端协议，不生成代理客户端链接。
 
 一键安装：
@@ -533,6 +586,18 @@ tcp_reachable_status() {
   printf '%s' "$rc"
 }
 
+udp_probe() {
+  local host="$1" port="$2"
+  command -v nc >/dev/null 2>&1 || return 2
+  nc -uvz -w 3 "$host" "$port" >/dev/null 2>&1
+}
+
+udp_probe_status() {
+  local rc=0
+  udp_probe "$@" || rc=$?
+  printf '%s' "$rc"
+}
+
 is_fast_port() {
   local port="$1"
   [[ "$port" =~ ^[0-9]+$ ]] && (( port >= FAST_PORT_RANGE_START && port <= FAST_PORT_RANGE_END ))
@@ -563,6 +628,41 @@ normalize_easytier_port() {
   fi
   confirm_easytier_port "$port" || return 1
   printf '%s' "$port"
+}
+
+easytier_protocols_from_env() {
+  local file="$1" protocols_key="$2" protocol_key="$3" default="${4:-$EASYTIER_PROTOCOLS_DEFAULT}" value
+  value="$(env_file_get "$file" "$protocols_key")"
+  if [[ -n "$value" ]]; then
+    normalize_easytier_protocols "$value"
+    return
+  fi
+  value="$(env_file_get "$file" "$protocol_key")"
+  if [[ -n "$value" ]]; then
+    normalize_easytier_protocols "$value"
+    return
+  fi
+  normalize_easytier_protocols "$default"
+}
+
+easytier_port_from_env() {
+  local file="$1" protocols="$2" tcp_key="$3" udp_key="$4" legacy_key="$5"
+  local tcp_port udp_port port
+  tcp_port="$(env_file_get "$file" "$tcp_key")"
+  udp_port="$(env_file_get "$file" "$udp_key")"
+  port="$(env_file_get "$file" "$legacy_key")"
+  if easytier_protocols_has "$protocols" tcp && [[ -n "$tcp_port" ]]; then
+    port="$tcp_port"
+  elif easytier_protocols_has "$protocols" udp && [[ -n "$udp_port" ]]; then
+    port="$udp_port"
+  fi
+  [[ -n "$port" ]] || port="$EASYTIER_PORT_DEFAULT"
+  if easytier_protocols_has "$protocols" tcp && easytier_protocols_has "$protocols" udp &&
+     [[ -n "$tcp_port" && -n "$udp_port" && "$tcp_port" != "$udp_port" ]]; then
+    fail "当前 entries.tsv 只支持 TCP/UDP 使用同一个 EasyTier 端口：tcp=${tcp_port} udp=${udp_port}"
+    return 1
+  fi
+  normalize_easytier_port "$port"
 }
 
 random_hex() {
@@ -1051,11 +1151,15 @@ entry_service_path() {
 }
 
 render_entry_service() {
-  local name="$1" et_ip="$2" proto="$3" port="$4" args listener
+  local name="$1" et_ip="$2" proto="$3" port="$4" args listener_args listener
   args="$(core_common_args "$et_ip")" || return 1
   confirm_easytier_port "$port" || return 1
   easytier_help_has '--listeners' || { fail "当前 easytier-core 不支持 --listeners"; return 1; }
-  listener="${proto}://0.0.0.0:${port}"
+  proto="$(normalize_easytier_protocols "$proto")" || { fail "EasyTier 传输模式无效：${proto}"; return 1; }
+  listener_args=""
+  while IFS= read -r listener; do
+    [[ -n "$listener" ]] && listener_args="${listener_args}$(printf '%q ' --listeners "$listener")"
+  done < <(easytier_urls "0.0.0.0" "$proto" "$port")
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
 [Unit]
@@ -1065,7 +1169,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${EASYTIER_CORE_BIN} ${args}--listeners ${listener}
+ExecStart=${EASYTIER_CORE_BIN} ${args}${listener_args}
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
@@ -1079,19 +1183,22 @@ enabled_entry_peers() {
   local name public_host et_ip proto port weight enabled
   while IFS=$'\t' read -r name public_host et_ip proto port weight enabled; do
     [[ "$enabled" == "true" ]] || continue
-    printf '%s://%s:%s\n' "$proto" "$public_host" "$port"
+    easytier_urls "$public_host" "$proto" "$port"
   done < <(entries_rows)
 }
 
 render_relay_service() {
-  local args peers listener_args
+  local args peers listener_args listener
   peers="$(enabled_entry_peers)"
   args="$(core_common_args "$RELAY_ET_IP" "$peers")" || return 1
   if listener_args="$(easytier_disable_listener_arg)"; then
     :
   else
     easytier_help_has '--listeners' || { fail "当前 easytier-core 不支持禁用 listener，也不支持 --listeners，无法避免默认 11010/11011/11012。"; return 1; }
-    listener_args="$(printf '%q ' --listeners "${EASYTIER_PROTOCOL_DEFAULT}://0.0.0.0:${DEFAULT_EASYTIER_PORT}")"
+    listener_args=""
+    while IFS= read -r listener; do
+      [[ -n "$listener" ]] && listener_args="${listener_args}$(printf '%q ' --listeners "$listener")"
+    done < <(easytier_urls "0.0.0.0" "$EASYTIER_PROTOCOLS_DEFAULT" "$DEFAULT_EASYTIER_PORT")
   fi
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
@@ -1312,7 +1419,30 @@ guard_relay_join_role() {
 
 entries_rows() {
   [[ -f "$ENTRIES_TSV" ]] || return 0
-  awk -F'\t' 'NF && $1 !~ /^#/ {print}' "$ENTRIES_TSV"
+  awk -F'\t' '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    function norm_proto(s) {
+      s=tolower(trim(s))
+      gsub(/[[:space:]]+/, "", s)
+      gsub(/\+/, ",", s)
+      if (s=="dual" || s=="both" || s=="udp,tcp") s="tcp,udp"
+      return s
+    }
+    { gsub(/\r/, "") }
+    NF == 0 { next }
+    $1 ~ /^#/ { next }
+    {
+      name=trim($1)
+      public_host=trim($2)
+      et_ip=trim($3)
+      proto=norm_proto($4)
+      port=trim($5)
+      weight=trim($6)
+      enabled=trim($7)
+      if (name=="" || public_host=="" || et_ip=="" || proto=="" || port=="" || enabled=="") next
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", name, public_host, et_ip, proto, port, weight, enabled
+    }
+  ' "$ENTRIES_TSV"
 }
 
 entries_rows_sorted() {
@@ -1362,9 +1492,10 @@ display_entries() {
   local only_enabled="${1:-all}"
   printf '%s\n' "编号  名称            公网地址                 EasyTier IP    协议  端口   权重        启用"
   entries_rows_sorted | awk -F'\t' -v only="$only_enabled" '
+    function proto_display(s) { return s=="tcp,udp" ? "tcp+udp" : s }
     only=="enabled" && $7!="true" {next}
     {
-      printf "%d) %-12s %-24s %-14s %-5s %-6s weight=%-5s %s\n", ++i, $1, $2, $3, $4, $5, $6, ($7=="true" ? "enabled" : "disabled")
+      printf "%d) %-12s %-24s %-14s %-7s %-6s weight=%-5s %s\n", ++i, $1, $2, $3, proto_display($4), $5, $6, ($7=="true" ? "enabled" : "disabled")
     }
   '
 }
@@ -1567,15 +1698,15 @@ nft_has_dnat_rules() {
 }
 
 nft_has_cloud_dnat() {
-  local relay_ip="$1" entry_port="$2"
+  local proto="$1" relay_ip="$2" entry_port="$3"
   nft list table inet leikwan_forward 2>/dev/null |
-    grep -Fq "tcp dport ${entry_port} dnat ip to ${relay_ip}:${entry_port}"
+    grep -Fq "${proto} dport ${entry_port} dnat ip to ${relay_ip}"
 }
 
 nft_has_relay_dnat() {
-  local entry_port="$1" target_ip="$2" target_port="$3"
+  local proto="$1" entry_port="$2" target_ip="$3" target_port="$4"
   nft list table inet leikwan_forward 2>/dev/null |
-    grep -Fq "tcp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
+    grep -Fq "${proto} dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
 }
 
 is_mss_value() {
@@ -1738,7 +1869,7 @@ quick_generate_network_pairing() {
   need_root_unless_dry_run
   ensure_base_dirs
   install_packages openssl coreutils
-  local network_name network_secret suggested_name suggested_ip suggested_proto suggested_port has_network=0
+  local network_name network_secret suggested_name suggested_ip suggested_protocols suggested_proto suggested_port has_network=0
   local candidate_name candidate_ip candidate_proto candidate_port
   if relay_network_env_ready; then
     network_name="$(env_file_get "$NETWORK_ENV" EASYTIER_NETWORK_NAME)"
@@ -1752,24 +1883,26 @@ quick_generate_network_pairing() {
   fi
   suggested_name="$(next_entry_name)"
   suggested_ip="$(next_entry_et_ip 2>/dev/null || printf '%s' "$ENTRY_ET_IP_DEFAULT")"
+  suggested_protocols="$EASYTIER_PROTOCOLS_DEFAULT"
   suggested_proto="$EASYTIER_PROTOCOL_DEFAULT"
   suggested_port="$(next_entry_easytier_port 2>/dev/null || printf '%s' "$EASYTIER_PORT_DEFAULT")"
   echo
   echo "${BOLD}新增公网入口建议：${RESET}"
   echo "- 名称：${suggested_name}"
   echo "- EasyTier IP：${suggested_ip}"
-  echo "- EasyTier 端口：${suggested_port}"
+  echo "- EasyTier 监听：$(easytier_protocols_display "$suggested_protocols") / ${suggested_port}"
   echo
   if ! prompt_yes_no "是否使用以上推荐？" "Y"; then
     while true; do
       candidate_name="$(safe_name "$(prompt_value "公网入口名称" "$suggested_name")")"
       candidate_ip="$(prompt_easytier_ip "EasyTier IP" "$suggested_ip")"
-      candidate_proto="$(prompt_easytier_protocol "EasyTier 协议" "$suggested_proto")"
-      candidate_port="$(prompt_port "EasyTier 监听端口（8000-9000）" "$suggested_port")"
+      candidate_proto="$(prompt_easytier_protocols "EasyTier 传输模式" "$suggested_protocols")"
+      candidate_port="$(prompt_port "EasyTier 监听端口（TCP+UDP，同端口，白名单 8000-9000）" "$suggested_port")"
       if validate_unique_entry_fields "$candidate_name" "$candidate_ip" "$candidate_port" ""; then
         suggested_name="$candidate_name"
         suggested_ip="$candidate_ip"
-        suggested_proto="$candidate_proto"
+        suggested_protocols="$candidate_proto"
+        suggested_proto="$(easytier_legacy_protocol "$suggested_protocols")"
         suggested_port="$candidate_port"
         break
       fi
@@ -1782,6 +1915,9 @@ quick_generate_network_pairing() {
 EASYTIER_NETWORK_NAME=${network_name}
 EASYTIER_NETWORK_SECRET=${network_secret}
 EASYTIER_LISTEN_PORT=${suggested_port}
+EASYTIER_PROTOCOLS=${suggested_protocols}
+EASYTIER_TCP_PORT=${suggested_port}
+EASYTIER_UDP_PORT=${suggested_port}
 EASYTIER_PROTOCOL=${suggested_proto}
 EASYTIER_RELAY_ET_IP=${RELAY_ET_IP}" 600
   fi
@@ -1792,6 +1928,9 @@ EASYTIER_NETWORK_SECRET=${network_secret}
 RELAY_ET_IP=${RELAY_ET_IP}
 SUGGESTED_ENTRY_NAME=${suggested_name}
 SUGGESTED_ENTRY_ET_IP=${suggested_ip}
+SUGGESTED_EASYTIER_PROTOCOLS=${suggested_protocols}
+SUGGESTED_EASYTIER_TCP_PORT=${suggested_port}
+SUGGESTED_EASYTIER_UDP_PORT=${suggested_port}
 SUGGESTED_EASYTIER_PROTOCOL=${suggested_proto}
 SUGGESTED_EASYTIER_PORT=${suggested_port}" 600
   print_pairing_code "复制下面整段到 A 公网入口机" \
@@ -1806,7 +1945,7 @@ quick_deploy_entry_from_network_pairing() {
   need_root_unless_dry_run
   ensure_base_dirs
   guard_entry_join_role || return 0
-  local source="${1:-}" tmp role network_name network_secret relay_ip name et_ip proto port public_host detected service service_name
+  local source="${1:-}" tmp role network_name network_secret relay_ip name et_ip proto port public_host detected service service_name legacy_proto
   tmp="$(mktemp)"
   read_pairing_code "$tmp" "B 利群主机" "-----END LEIKWAN EASYTIER NETWORK-----" "LEIKWAN_EASYTIER_NETWORK_BASE64" "$source" || { rm -f "$tmp"; return 1; }
   role="$(env_file_get "$tmp" ROLE)"
@@ -1815,21 +1954,21 @@ quick_deploy_entry_from_network_pairing() {
     cloud-entry) fail "你粘贴的是入口码，需要在 B 利群主机选择第 4 项。"; rm -f "$tmp"; return 1 ;;
     *) fail "这不是 EasyTier 网络码，请确认粘贴的是 B 生成的那段。"; rm -f "$tmp"; return 1 ;;
   esac
-  require_pairing_fields "$tmp" PAIRING_VERSION ROLE EASYTIER_NETWORK_NAME EASYTIER_NETWORK_SECRET RELAY_ET_IP SUGGESTED_ENTRY_NAME SUGGESTED_ENTRY_ET_IP SUGGESTED_EASYTIER_PROTOCOL SUGGESTED_EASYTIER_PORT || { rm -f "$tmp"; return 1; }
+  require_pairing_fields "$tmp" PAIRING_VERSION ROLE EASYTIER_NETWORK_NAME EASYTIER_NETWORK_SECRET RELAY_ET_IP SUGGESTED_ENTRY_NAME SUGGESTED_ENTRY_ET_IP || { rm -f "$tmp"; return 1; }
   network_name="$(env_file_get "$tmp" EASYTIER_NETWORK_NAME)"
   network_secret="$(env_file_get "$tmp" EASYTIER_NETWORK_SECRET)"
   relay_ip="$(env_file_get "$tmp" RELAY_ET_IP)"
   name="$(safe_name "$(env_file_get "$tmp" SUGGESTED_ENTRY_NAME)")"
   et_ip="$(env_file_get "$tmp" SUGGESTED_ENTRY_ET_IP)"
-  proto="$(env_file_get "$tmp" SUGGESTED_EASYTIER_PROTOCOL)"
-  port="$(env_file_get "$tmp" SUGGESTED_EASYTIER_PORT)"
+  proto="$(easytier_protocols_from_env "$tmp" SUGGESTED_EASYTIER_PROTOCOLS SUGGESTED_EASYTIER_PROTOCOL "$EASYTIER_PROTOCOLS_DEFAULT")" || { fail "网络码里的 EasyTier 传输模式无效。"; rm -f "$tmp"; return 1; }
+  port="$(easytier_port_from_env "$tmp" "$proto" SUGGESTED_EASYTIER_TCP_PORT SUGGESTED_EASYTIER_UDP_PORT SUGGESTED_EASYTIER_PORT)" || { rm -f "$tmp"; return 1; }
   local default_name="$name" default_et_ip="$et_ip" default_proto="$proto" default_port="$port"
   local candidate_name candidate_ip candidate_proto candidate_port
   while true; do
     candidate_name="$(safe_name "$(prompt_value "本机公网入口名称" "$default_name")")"
     candidate_ip="$(prompt_easytier_ip "本机 EasyTier IP" "$default_et_ip")"
-    candidate_proto="$(prompt_easytier_protocol "EasyTier 协议" "$default_proto")"
-    candidate_port="$(prompt_port "EasyTier 监听端口（8000-9000）" "$default_port")"
+    candidate_proto="$(prompt_easytier_protocols "EasyTier 传输模式" "$default_proto")"
+    candidate_port="$(prompt_port "EasyTier 监听端口（TCP+UDP，同端口，白名单 8000-9000）" "$default_port")"
     if validate_unique_entry_fields "$candidate_name" "$candidate_ip" "$candidate_port" "$candidate_name"; then
       name="$candidate_name"
       et_ip="$candidate_ip"
@@ -1841,14 +1980,18 @@ quick_deploy_entry_from_network_pairing() {
   detected="$(detect_public_ipv4 || true)"
   public_host="$(prompt_value "请输入本机公网 IP / 域名，用于 B 连接 EasyTier" "$detected")"
   [[ -n "$public_host" ]] || public_host="$(prompt_host "请输入本机公网 IP / 域名")"
-  confirm_summary "entry 快速部署摘要" "入口名称：${name}\n公网地址：${public_host}\nEasyTier IP：${et_ip}\nEasyTier 监听：${proto}/${port}\nRelay EasyTier IP：${relay_ip}" || { rm -f "$tmp"; return 0; }
+  confirm_summary "entry 快速部署摘要" "入口名称：${name}\n公网地址：${public_host}\nEasyTier IP：${et_ip}\nEasyTier 监听：$(easytier_protocols_display "$proto")/${port}\nRelay EasyTier IP：${relay_ip}" || { rm -f "$tmp"; return 0; }
+  legacy_proto="$(easytier_legacy_protocol "$proto")" || { rm -f "$tmp"; return 1; }
   write_file "$NETWORK_ENV" "ROLE=cloud-entry
 ENTRY_NAME=${name}
 ENTRY_ET_IP=${et_ip}
 EASYTIER_NETWORK_NAME=${network_name}
 EASYTIER_NETWORK_SECRET=${network_secret}
 EASYTIER_LISTEN_PORT=${port}
-EASYTIER_PROTOCOL=${proto}
+EASYTIER_PROTOCOLS=${proto}
+EASYTIER_TCP_PORT=${port}
+EASYTIER_UDP_PORT=${port}
+EASYTIER_PROTOCOL=${legacy_proto}
 EASYTIER_RELAY_ET_IP=${relay_ip}" 600
   install_easytier_binary || { rm -f "$tmp"; return 1; }
   service="$(render_entry_service "$name" "$et_ip" "$proto" "$port")" || { rm -f "$tmp"; return 1; }
@@ -1856,14 +1999,22 @@ EASYTIER_RELAY_ET_IP=${relay_ip}" 600
   write_file "$(entry_service_path "$name")" "$service" 644
   start_service_file "$service_name"
   wait_et_ip "$et_ip" 15 || warn "15 秒内未检测到 EasyTier IP：${et_ip}"
-  if ss -lntH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then ok "EasyTier TCP ${port} 已监听"; else warn "EasyTier TCP ${port} 未监听"; fi
+  if easytier_protocols_has "$proto" tcp; then
+    if ss -lntH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then ok "EasyTier TCP ${port} 已监听"; else warn "EasyTier TCP ${port} 未监听"; fi
+  fi
+  if easytier_protocols_has "$proto" udp; then
+    if ss -lunH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then ok "EasyTier UDP ${port} 已监听"; else warn "EasyTier UDP ${port} 未监听"; fi
+  fi
   replace_entry_row "${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"100"$'\t'"true"
   write_file "$ENTRY_PAIRING_FILE" "PAIRING_VERSION=0.4
 ROLE=cloud-entry
 ENTRY_NAME=${name}
 ENTRY_PUBLIC_HOST=${public_host}
 ENTRY_ET_IP=${et_ip}
-EASYTIER_PROTOCOL=${proto}
+EASYTIER_PROTOCOLS=${proto}
+EASYTIER_TCP_PORT=${port}
+EASYTIER_UDP_PORT=${port}
+EASYTIER_PROTOCOL=${legacy_proto}
 EASYTIER_PORT=${port}
 WEIGHT=100
 ENABLED=true" 600
@@ -1873,6 +2024,9 @@ ENABLED=true" 600
     "-----END LEIKWAN EASYTIER ENTRY-----" \
     "$ENTRY_PAIRING_FILE" \
     "LEIKWAN_EASYTIER_ENTRY_BASE64"
+  info "如果 A 在家宽 / NAT 后面，请在路由器中同时映射 TCP 和 UDP ${port} 到本机。"
+  info "如果只映射 TCP，则 UDP peer 不会生效，但 TCP 仍可用。"
+  info "如果只映射 UDP，则 TCP peer 不会生效，但 UDP 仍可用。"
   info '下一步：回到 B 利群主机，快速组网 -> 4，粘贴上面的入口码。'
 }
 
@@ -1890,19 +2044,16 @@ quick_deploy_relay_from_entry_pairing() {
     leikwan-relay) fail "你粘贴的是网络码，需要在 A 公网入口选择第 3 项。"; rm -f "$tmp"; return 1 ;;
     *) fail "这不是 EasyTier 入口码，请确认粘贴的是 A 生成的那段。"; rm -f "$tmp"; return 1 ;;
   esac
-  require_pairing_fields "$tmp" PAIRING_VERSION ROLE ENTRY_NAME ENTRY_PUBLIC_HOST ENTRY_ET_IP EASYTIER_PROTOCOL EASYTIER_PORT || { rm -f "$tmp"; return 1; }
+  require_pairing_fields "$tmp" PAIRING_VERSION ROLE ENTRY_NAME ENTRY_PUBLIC_HOST ENTRY_ET_IP || { rm -f "$tmp"; return 1; }
   name="$(safe_name "$(env_file_get "$tmp" ENTRY_NAME)")"
   public_host="$(env_file_get "$tmp" ENTRY_PUBLIC_HOST)"
   et_ip="$(env_file_get "$tmp" ENTRY_ET_IP)"
-  proto="$(env_file_get "$tmp" EASYTIER_PROTOCOL)"
-  proto="${proto,,}"
-  is_easytier_protocol "$proto" || { fail "入口码里的 EasyTier 协议无效：${proto}"; rm -f "$tmp"; return 1; }
-  port="$(env_file_get "$tmp" EASYTIER_PORT)"
-  port="$(normalize_easytier_port "$port")" || { rm -f "$tmp"; return 1; }
+  proto="$(easytier_protocols_from_env "$tmp" EASYTIER_PROTOCOLS EASYTIER_PROTOCOL "$EASYTIER_PROTOCOLS_DEFAULT")" || { fail "入口码里的 EasyTier 传输模式无效。"; rm -f "$tmp"; return 1; }
+  port="$(easytier_port_from_env "$tmp" "$proto" EASYTIER_TCP_PORT EASYTIER_UDP_PORT EASYTIER_PORT)" || { rm -f "$tmp"; return 1; }
   validate_unique_entry_fields "$name" "$et_ip" "$port" "$name" || { rm -f "$tmp"; return 1; }
   weight="$(env_file_get "$tmp" WEIGHT)"; weight="${weight:-100}"
   enabled="$(env_file_get "$tmp" ENABLED)"; enabled="${enabled:-true}"
-  confirm_summary "relay 接入入口摘要" "入口名称：${name}\n入口公网：${public_host}:${port}\n入口 EasyTier IP：${et_ip}\nRelay EasyTier IP：${RELAY_ET_IP}" || { rm -f "$tmp"; return 0; }
+  confirm_summary "relay 接入入口摘要" "入口名称：${name}\n入口公网：${public_host}:${port}\n入口 EasyTier 监听：$(easytier_protocols_display "$proto")/${port}\n入口 EasyTier IP：${et_ip}\nRelay EasyTier IP：${RELAY_ET_IP}" || { rm -f "$tmp"; return 0; }
   row="${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
   replace_entry_row "$row"
   ok "已保存入口配置：${name}。"
@@ -1966,14 +2117,14 @@ add_entry() {
   default_port="$(next_entry_easytier_port 2>/dev/null || printf '%s' "$EASYTIER_PORT_DEFAULT")"
   while true; do
     et_ip="$(prompt_easytier_ip "入口 EasyTier IP" "$default_ip")"
-    proto="$(prompt_easytier_protocol "EasyTier 协议" "$EASYTIER_PROTOCOL_DEFAULT")"
-    port="$(prompt_port "EasyTier 监听端口（8000-9000）" "$default_port")"
+    proto="$(prompt_easytier_protocols "EasyTier 传输模式" "$EASYTIER_PROTOCOLS_DEFAULT")"
+    port="$(prompt_port "EasyTier 监听端口（TCP+UDP，同端口，白名单 8000-9000）" "$default_port")"
     validate_unique_entry_fields "$name" "$et_ip" "$port" "$name" && break
   done
   weight="$(prompt_value "权重" "100")"
   enabled="$(prompt_value "是否启用 true/false" "true")"
   row="${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
-  confirm_summary "添加入口摘要" "name=${name}\npublic_host=${public_host}\net_ip=${et_ip}\nprotocol=${proto}\nport=${port}\nweight=${weight}\nenabled=${enabled}" || return 0
+  confirm_summary "添加入口摘要" "name=${name}\npublic_host=${public_host}\net_ip=${et_ip}\nprotocols=${proto}\nlisten=$(easytier_protocols_display "$proto")/${port}\nport=${port}\nweight=${weight}\nenabled=${enabled}" || return 0
   replace_entry_row "$row"
 }
 
@@ -2020,11 +2171,20 @@ test_entry_row() {
   echo
   echo "入口：${name}"
   [[ "$enabled" == "true" ]] || warn "该公网入口当前 disabled，仅执行连通性测试。"
-  case "$(tcp_reachable_status "$public_host" "$port")" in
-    0) ok "${proto} ${public_host}:${port} 可达" ;;
-    2) warn "未找到 nc，无法测试 ${proto} ${public_host}:${port}；请安装 netcat-openbsd" ;;
-    *) warn "${proto} ${public_host}:${port} 不可达" ;;
-  esac
+  if easytier_protocols_has "$proto" tcp; then
+    case "$(tcp_reachable_status "$public_host" "$port")" in
+      0) ok "入口 ${name} TCP 可达：${public_host}:${port}" ;;
+      2) warn "未找到 nc，无法测试入口 ${name} TCP；请安装 netcat-openbsd" ;;
+      *) warn "入口 ${name} TCP 不可达：${public_host}:${port}" ;;
+    esac
+  fi
+  if easytier_protocols_has "$proto" udp; then
+    case "$(udp_probe_status "$public_host" "$port")" in
+      0) ok "入口 ${name} UDP 探测完成：${public_host}:${port}" ;;
+      2) warn "未找到 nc，无法测试入口 ${name} UDP；请安装 netcat-openbsd" ;;
+      *) warn "入口 ${name} UDP 探测未确认。UDP 无连接探测可能不可靠，请结合 EasyTier peer / ping 判断。" ;;
+    esac
+  fi
   ping -c 2 "$et_ip" || true
 }
 
@@ -2061,7 +2221,7 @@ apply_easytier_entry_services() {
     service="$(render_entry_service "$name" "$et_ip" "$proto" "$port")" || return 1
     write_file "$(entry_service_path "$name")" "$service" 644
     start_service_file "$(entry_service_name "$name")"
-    ok "EasyTier entry 已配置：${name} ${et_ip} ${proto}/${port} weight=${weight}"
+    ok "EasyTier entry 已配置：${name} ${et_ip} $(easytier_protocols_display "$proto")/${port} weight=${weight}"
   done < <(entries_rows)
 }
 
@@ -2411,7 +2571,7 @@ add_forward() {
     prompt_yes_no "确认覆盖 / 更新？" "N" || return 0
   fi
   row="${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
-  confirm_summary "添加转发目标摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
+  confirm_summary "添加转发目标摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nprotocols=tcp,udp\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
   replace_forward_row "$row"
   apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
   info '下一步：A/B 两边执行"一键诊断"，并从外部机器测试公网入口端口。'
@@ -2481,7 +2641,7 @@ edit_forward() {
   enabled="$(prompt_value "是否启用 true/false" "$old_enabled")"
   comment="$(prompt_value "备注" "$old_comment")"
   new_row="${old_name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
-  confirm_summary "修改转发目标摘要" "name=${old_name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
+  confirm_summary "修改转发目标摘要" "name=${old_name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nprotocols=tcp,udp\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
   replace_forward_row "$new_row"
   ok "已修改转发目标：${old_name}"
   if apply_nft_rules "leikwan-relay"; then
@@ -2504,9 +2664,14 @@ test_forward() {
   [[ -n "$target_ip" ]] || { warn "目标未解析：${target_host}"; return 0; }
   ensure_nc_for_test || true
   case "$(tcp_reachable_status "$target_ip" "$target_port")" in
-    0) ok "${target_ip}:${target_port} 可达" ;;
-    2) warn "未找到 nc，无法测试 ${target_ip}:${target_port}；请安装 netcat-openbsd" ;;
-    *) warn "${target_ip}:${target_port} 不可达" ;;
+    0) ok "${name} target TCP 可达" ;;
+    2) warn "未找到 nc，无法测试 ${name} target TCP；请安装 netcat-openbsd" ;;
+    *) warn "${name} target TCP 不可达" ;;
+  esac
+  case "$(udp_probe_status "$target_ip" "$target_port")" in
+    0) ok "${name} target UDP 探测完成：${target_ip}:${target_port}" ;;
+    2) warn "未找到 nc，无法测试 ${name} target UDP；请安装 netcat-openbsd" ;;
+    *) warn "${name} target UDP 探测未确认。UDP 无连接探测可能不可靠，请结合业务实际测试。" ;;
   esac
 }
 
@@ -2623,6 +2788,7 @@ table inet leikwan_forward {
   chain prerouting {
     type nat hook prerouting priority dstnat; policy accept;
     tcp dport ${start}-${end} dnat ip to ${relay_ip}
+    udp dport ${start}-${end} dnat ip to ${relay_ip}
 EOF
   cat <<EOF
   }
@@ -2635,12 +2801,14 @@ EOF
   fi
   cat <<EOF
     ip daddr ${relay_ip} tcp dport ${start}-${end} accept
+    ip daddr ${relay_ip} udp dport ${start}-${end} accept
 EOF
   cat <<EOF
   }
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
     ip daddr ${relay_ip} tcp dport ${start}-${end} masquerade
+    ip daddr ${relay_ip} udp dport ${start}-${end} masquerade
 EOF
   cat <<EOF
   }
@@ -2661,6 +2829,7 @@ EOF
   while IFS=$'\034' read -r name entry_port target_host target_ip target_port out_iface route_table enabled _last_resolved_at comment; do
     [[ "$enabled" == "true" && -n "$target_ip" ]] || continue
     printf '    iifname "%s" tcp dport %s dnat ip to %s:%s\n' "$et_iface" "$entry_port" "$target_ip" "$target_port"
+    printf '    iifname "%s" udp dport %s dnat ip to %s:%s\n' "$et_iface" "$entry_port" "$target_ip" "$target_port"
   done < <(resolved_rows_usv)
   cat <<EOF
   }
@@ -2675,8 +2844,10 @@ EOF
     [[ "$enabled" == "true" && -n "$target_ip" ]] || continue
     if [[ -n "$out_iface" ]]; then
       printf '    iifname "%s" oifname "%s" ip daddr %s tcp dport %s accept\n' "$et_iface" "$out_iface" "$target_ip" "$target_port"
+      printf '    iifname "%s" oifname "%s" ip daddr %s udp dport %s accept\n' "$et_iface" "$out_iface" "$target_ip" "$target_port"
     else
       printf '    iifname "%s" ip daddr %s tcp dport %s accept\n' "$et_iface" "$target_ip" "$target_port"
+      printf '    iifname "%s" ip daddr %s udp dport %s accept\n' "$et_iface" "$target_ip" "$target_port"
     fi
   done < <(resolved_rows_usv)
   cat <<EOF
@@ -2688,8 +2859,10 @@ EOF
     [[ "$enabled" == "true" && -n "$target_ip" ]] || continue
     if [[ -n "$out_iface" ]]; then
       printf '    oifname "%s" ip daddr %s tcp dport %s masquerade\n' "$out_iface" "$target_ip" "$target_port"
+      printf '    oifname "%s" ip daddr %s udp dport %s masquerade\n' "$out_iface" "$target_ip" "$target_port"
     else
       printf '    ip daddr %s tcp dport %s masquerade\n' "$target_ip" "$target_port"
+      printf '    ip daddr %s udp dport %s masquerade\n' "$target_ip" "$target_port"
     fi
   done < <(resolved_rows_usv)
   cat <<EOF
@@ -2842,7 +3015,7 @@ entry_expose_range() {
   fi
   is_ipv4 "${relay_ip:-$RELAY_ET_IP}" || { fail "Relay EasyTier IP 非法：${relay_ip:-$RELAY_ET_IP}"; return 1; }
   relay_ip="${relay_ip:-$RELAY_ET_IP}"
-  confirm_summary "配置公网入口端口池摘要" "ENTRY_EXPOSE_START=${start}\nENTRY_EXPOSE_END=${end}\nRELAY_ET_IP=${relay_ip}\n动作：A 侧把该端口池 DNAT 到 Relay EasyTier IP，保持原端口不变。" || return 0
+  confirm_summary "配置公网入口端口池摘要" "ENTRY_EXPOSE_START=${start}\nENTRY_EXPOSE_END=${end}\nRELAY_ET_IP=${relay_ip}\n动作：A 侧把该端口池 TCP+UDP DNAT 到 Relay EasyTier IP，保持原端口不变。" || return 0
   write_file "$ENTRY_EXPOSE_ENV" "ENTRY_EXPOSE_START=${start}
 ENTRY_EXPOSE_END=${end}
 RELAY_ET_IP=${relay_ip}
@@ -2854,7 +3027,7 @@ ENABLED=true" 600
 }
 
 apply_nft_rules() {
-  local role="$1" auto_fix_route="${2:-0}" content tmp old enabled_count=-1 relay_ip start end
+  local role="$1" auto_fix_route="${2:-0}" content tmp old enabled_count=-1 relay_ip start end proto
   need_root_unless_dry_run
   install_packages nftables iproute2 || return 1
   configure_forward_sysctl || warn "IPv4 转发 sysctl 写入失败，请稍后手动检查。"
@@ -2868,10 +3041,12 @@ apply_nft_rules() {
         fail "公网入口 nftables 规则生成失败。"
         return 1
       fi
-      if ! grep -q "tcp dport ${start}-${end} dnat ip to ${relay_ip}" <<<"$content"; then
-        fail "入口端口池 ${start}-${end} 未生成 DNAT 规则。"
-        return 1
-      fi
+      for proto in tcp udp; do
+        if ! grep -q "${proto} dport ${start}-${end} dnat ip to ${relay_ip}" <<<"$content"; then
+          fail "入口端口池 ${start}-${end} 未生成 ${proto^^} DNAT 规则。"
+          return 1
+        fi
+      done
       ;;
 	    leikwan-relay)
 	      enabled_count="$(enabled_forwards_count)" || return 1
@@ -3420,7 +3595,7 @@ report_mss_clamp_status() {
 
 doctor_cloud() {
   report OK "角色：cloud-entry"
-  local entry_ip port iface service_name relay_ip start end
+  local entry_ip proto port iface service_name relay_ip start end
   local _public_host _et_ip _proto _port _weight
   entry_ip="$(current_entry_et_ip)"
   if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then
@@ -3437,11 +3612,21 @@ doctor_cloud() {
   done < <(entries_rows)
   iface="$(et_iface_by_ip "$entry_ip")"
   if [[ -n "$iface" ]]; then report OK "EasyTier IP ${entry_ip} 在接口 ${iface}"; else report WARN "未检测到 EasyTier IP：${entry_ip}"; fi
-  port="$(env_file_get "$ENTRY_PAIRING_FILE" EASYTIER_PORT)"
-  [[ -n "$port" ]] || port="$(env_file_get "$NETWORK_ENV" EASYTIER_LISTEN_PORT)"
-  port="${port:-$EASYTIER_PORT_DEFAULT}"
-  if is_fast_port "$port"; then report OK "EasyTier 监听端口：tcp/${port}，位于白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; else report WARN "EasyTier 监听端口：tcp/${port}，不在白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; fi
-  if ss -lntH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then report OK "EasyTier TCP ${port} 已监听"; else report WARN "EasyTier TCP ${port} 未监听"; fi
+  if [[ -f "$ENTRY_PAIRING_FILE" ]]; then
+    proto="$(easytier_protocols_from_env "$ENTRY_PAIRING_FILE" EASYTIER_PROTOCOLS EASYTIER_PROTOCOL "$EASYTIER_PROTOCOLS_DEFAULT" 2>/dev/null || printf '%s' "$EASYTIER_PROTOCOLS_DEFAULT")"
+    port="$(easytier_port_from_env "$ENTRY_PAIRING_FILE" "$proto" EASYTIER_TCP_PORT EASYTIER_UDP_PORT EASYTIER_PORT 2>/dev/null || true)"
+  else
+    proto="$(easytier_protocols_from_env "$NETWORK_ENV" EASYTIER_PROTOCOLS EASYTIER_PROTOCOL "$EASYTIER_PROTOCOLS_DEFAULT" 2>/dev/null || printf '%s' "$EASYTIER_PROTOCOLS_DEFAULT")"
+    port=""
+  fi
+  [[ -n "$port" ]] || port="$(easytier_port_from_env "$NETWORK_ENV" "$proto" EASYTIER_TCP_PORT EASYTIER_UDP_PORT EASYTIER_LISTEN_PORT 2>/dev/null || printf '%s' "$EASYTIER_PORT_DEFAULT")"
+  if is_fast_port "$port"; then report OK "EasyTier 监听端口：$(easytier_protocols_display "$proto")/${port}，位于白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; else report WARN "EasyTier 监听端口：$(easytier_protocols_display "$proto")/${port}，不在白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; fi
+  if easytier_protocols_has "$proto" tcp; then
+    if ss -lntH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then report OK "EasyTier TCP ${port} 已监听"; else report WARN "EasyTier TCP ${port} 未监听"; fi
+  fi
+  if easytier_protocols_has "$proto" udp; then
+    if ss -lunH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then report OK "EasyTier UDP ${port} 已监听"; else report WARN "EasyTier UDP ${port} 未监听"; fi
+  fi
   report_ping_quality "$RELAY_ET_IP" "ping relay ${RELAY_ET_IP}" || true
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
     report OK "nftables table inet leikwan_forward 存在"
@@ -3455,10 +3640,15 @@ doctor_cloud() {
     end="$(entry_expose_end)"
     relay_ip="$(entry_expose_relay_ip)"
     report OK "入口端口池：${start}-${end} -> ${relay_ip}"
-    if nft list table inet leikwan_forward 2>/dev/null | grep -Fq "tcp dport ${start}-${end} dnat ip to ${relay_ip}"; then
-      report OK "入口端口池 DNAT 正常"
+    if nft_has_cloud_dnat tcp "$relay_ip" "${start}-${end}"; then
+      report OK "入口端口池 TCP DNAT 正常"
     else
-      report FAIL "入口端口池 DNAT 缺失：应为 tcp dport ${start}-${end} dnat ip to ${relay_ip}"
+      report FAIL "入口端口池 TCP DNAT 缺失：应为 tcp dport ${start}-${end} dnat ip to ${relay_ip}"
+    fi
+    if nft_has_cloud_dnat udp "$relay_ip" "${start}-${end}"; then
+      report OK "入口端口池 UDP DNAT 正常"
+    else
+      report FAIL "入口端口池 UDP DNAT 缺失：应为 udp dport ${start}-${end} dnat ip to ${relay_ip}"
     fi
   else
     report WARN "公网入口端口池未配置，请执行 lq entry expose-range"
@@ -3468,7 +3658,7 @@ doctor_cloud() {
 
 doctor_relay() {
   report OK "角色：leikwan-relay"
-  local iface entries forwards name public_host et_ip proto port _weight enabled peer_text target_ip target_port
+  local iface entries forwards name public_host et_ip proto port _weight enabled peer_text target_ip target_port peer_url
   local entry_port target_host out_iface route_table comment
   if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then
     report OK "EasyTier binary 存在"
@@ -3485,14 +3675,26 @@ doctor_relay() {
   while IFS=$'\t' read -r name public_host et_ip proto port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
     if grep -q "$et_ip" <<<"$peer_text"; then report OK "入口 ${name} peer 可见：${et_ip}"; else report WARN "入口 ${name} peer 暂未在 easytier-cli 中出现"; fi
-    report INFO "入口 ${name} peer 目标：${proto}://${public_host}:${port}"
+    report INFO "入口 ${name} peer 目标："
+    while IFS= read -r peer_url; do
+      [[ -n "$peer_url" ]] && report INFO "  * ${peer_url}"
+    done < <(easytier_urls "$public_host" "$proto" "$port")
     if is_fast_port "$port"; then report OK "入口 ${name} EasyTier 端口 ${port} 位于白名单"; else report WARN "入口 ${name} EasyTier 端口 ${port} 不在白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}"; fi
     report_ping_quality "$et_ip" "ping ${name} ${et_ip}" || true
-    case "$(tcp_reachable_status "$public_host" "$port")" in
-      0) report OK "入口 ${name} TCP 可达：${public_host}:${port}" ;;
-      2) report WARN "未找到 nc，无法测试入口 ${name} TCP；请安装 netcat-openbsd" ;;
-      *) report WARN "入口 ${name} TCP 不可达：${public_host}:${port}" ;;
-    esac
+    if easytier_protocols_has "$proto" tcp; then
+      case "$(tcp_reachable_status "$public_host" "$port")" in
+        0) report OK "入口 ${name} TCP 可达：${public_host}:${port}" ;;
+        2) report WARN "未找到 nc，无法测试入口 ${name} TCP；请安装 netcat-openbsd" ;;
+        *) report WARN "入口 ${name} TCP 不可达：${public_host}:${port}" ;;
+      esac
+    fi
+    if easytier_protocols_has "$proto" udp; then
+      case "$(udp_probe_status "$public_host" "$port")" in
+        0) report OK "入口 ${name} UDP 探测完成：${public_host}:${port}" ;;
+        2) report WARN "未找到 nc，无法测试入口 ${name} UDP；请安装 netcat-openbsd" ;;
+        *) report WARN "入口 ${name} UDP 探测未确认。UDP 无连接探测可能不可靠，请结合 EasyTier peer / ping 判断。" ;;
+      esac
+    fi
   done < <(entries_rows)
   if sysctl -n net.ipv4.ip_forward 2>/dev/null | grep -qx 1; then report OK "net.ipv4.ip_forward=1"; else report WARN "net.ipv4.ip_forward 未启用"; fi
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
@@ -3527,12 +3729,22 @@ doctor_relay() {
           2) report WARN "未找到 nc，无法测试 ${name} target TCP；请安装 netcat-openbsd" ;;
           *) report WARN "${name} target TCP 不可达" ;;
         esac
+        case "$(udp_probe_status "$target_ip" "$target_port")" in
+          0) report OK "${name} target UDP 探测完成" ;;
+          2) report WARN "未找到 nc，无法测试 ${name} target UDP；请安装 netcat-openbsd" ;;
+          *) report WARN "${name} target UDP 探测未确认。UDP 无连接探测可能不可靠，请结合业务实际测试。" ;;
+        esac
       fi
       if [[ -n "$target_ip" ]]; then
-        if nft_has_relay_dnat "$entry_port" "$target_ip" "$target_port"; then
-          report OK "${name} relay DNAT 正常"
+        if nft_has_relay_dnat tcp "$entry_port" "$target_ip" "$target_port"; then
+          report OK "${name} relay TCP DNAT 正常"
         else
-          report FAIL "${name} relay DNAT 缺失：应为 tcp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
+          report FAIL "${name} relay TCP DNAT 缺失：应为 tcp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
+        fi
+        if nft_has_relay_dnat udp "$entry_port" "$target_ip" "$target_port"; then
+          report OK "${name} relay UDP DNAT 正常"
+        else
+          report WARN "${name} relay UDP DNAT 缺失：应为 udp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
         fi
       fi
     done < <(resolved_rows_usv)
@@ -3686,18 +3898,25 @@ link_test_menu() {
   local choice
   while true; do
     echo; echo "${BOLD}链路测试${RESET}"
-    echo "1. ping relay EasyTier IP"; echo "2. ping 所有入口 EasyTier IP"; echo "3. 测入口 EasyTier TCP"; echo "4. 测后端 target"; echo "0. 返回"
+    echo "1. ping relay EasyTier IP"; echo "2. ping 所有入口 EasyTier IP"; echo "3. 测入口 EasyTier TCP/UDP"; echo "4. 测后端 target"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) ping -c 4 "$RELAY_ET_IP" || true ;;
       2) entries_rows | while IFS=$'\t' read -r _n _h ip _proto _port _w e; do [[ "$e" == "true" ]] && ping -c 2 "$ip" || true; done ;;
       3)
         ensure_nc_for_test || continue
-        entries_rows | while IFS=$'\t' read -r _n h _ip _proto port _w e; do [[ "$e" == "true" ]] && nc -vz -w 3 "$h" "$port" || true; done
+        entries_rows | while IFS=$'\t' read -r n h ip proto port _w e; do [[ "$e" == "true" ]] && test_entry_row "$n" "$h" "$ip" "$proto" "$port" "$e" || true; done
         ;;
       4)
         ensure_nc_for_test || continue
-        resolved_rows | while IFS=$'\t' read -r _n _ep _th ti tp _oi _rt en _c; do [[ "$en" == "true" && -n "$ti" ]] && nc -vz -w 3 "$ti" "$tp" || true; done
+        resolved_rows | while IFS=$'\t' read -r n _ep _th ti tp _oi _rt en _ts _comment; do
+          [[ "$en" == "true" && -n "$ti" ]] || continue
+          nc -vz -w 3 "$ti" "$tp" || true
+          case "$(udp_probe_status "$ti" "$tp")" in
+            0) ok "${n} target UDP 探测完成：${ti}:${tp}" ;;
+            *) warn "${n} target UDP 探测未确认。UDP 无连接探测可能不可靠，请结合业务实际测试。" ;;
+          esac
+        done
         ;;
       0) return 0 ;;
     esac

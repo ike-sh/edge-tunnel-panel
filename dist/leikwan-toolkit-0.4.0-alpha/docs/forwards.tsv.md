@@ -1,6 +1,6 @@
 # forwards.tsv
 
-转发目标是任意 TCP 后端。脚本只需要知道入口端口和后端地址。
+转发目标是任意 TCP 或 UDP 后端。脚本只需要知道入口端口和后端地址。
 
 路径：
 
@@ -29,6 +29,8 @@ sudo lq entry expose-range --range 10001-10020 --relay-ip 10.198.1.1
 ```
 
 这会把该端口池全部 DNAT 到 `10.198.1.1`，保持原端口。需要更大范围时可配置 `10001-19999`。
+
+A 侧端口池默认同时生成 TCP 和 UDP DNAT。业务入口端口例如 `10001` 不受 EasyTier `8000-9000` 白名单限制；`8000-9000` 只用于 EasyTier 组网端口。
 
 B 利群主机添加后端：
 
@@ -75,11 +77,19 @@ sudo install -d -m 700 /etc/leikwan-toolkit/forwards
 - `name`：转发目标名称。
 - `entry_port`：公网入口端口，必须唯一。
 - `target_host`：后端 IP 或域名。
-- `target_port`：后端 TCP 端口。
+- `target_port`：后端业务端口。
 - `out_iface`：可选出口接口。
 - `route_table`：可选 PBR 表，例如 `T_CN2`。
 - `enabled`：`true` 或 `false`。
 - `comment`：备注。
+
+默认协议语义：
+
+- 旧 8 列格式继续兼容，不需要新增协议列。
+- 每一行默认同时创建 TCP 和 UDP 转发：`tcp entry_port -> target_port` 与 `udp entry_port -> target_port`。
+- 如果后端只有 TCP，UDP 规则存在也不会影响 TCP。
+- 如果后端支持 UDP，外部 UDP 可以走同一个 `entry_port`。
+- 以后如需单独控制协议，再增加可选协议字段。
 
 保留端口如 `22`、`80`、`443`、`8301` 默认会要求二次确认。
 
