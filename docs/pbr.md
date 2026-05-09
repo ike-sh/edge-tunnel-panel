@@ -8,9 +8,10 @@ PBR 用来把指定后端 IPv4 固定到某个出口线路，例如 `T_CN2` 或 
 IPv4 多出口策略路由 / PBR
 1. 添加静态 PBR
 2. 从现有转发目标添加 PBR
-3. 应用 PBR
-4. 查看 PBR
-0. 返回
+3. 删除 PBR 规则
+4. 应用 PBR
+5. 查看 PBR
+6. 返回
 ```
 
 ## 静态 PBR
@@ -40,6 +41,28 @@ IPv4 多出口策略路由 / PBR
 
 写入规则会记录来源转发名和 `target_host`。以后 `pbr_apply` 会重新解析来源域名；IP 变化时更新对应 PBR 规则。
 
+## 删除 PBR 规则
+
+使用第 3 项删除规则。脚本会先展示当前 PBR 规则列表：
+
+```text
+编号  目标网段                 路由表      来源
+1. 203.0.113.107/32         T_CN2      static
+2. 203.0.113.154/32         T_CN2      static
+3. 198.51.100.158/32        T_CN2      forward:Hinet tw.example.com
+```
+
+可以输入编号、完整 CIDR，或裸 IP。裸 IP 会按 `/32` 匹配。删除前会确认，确认后从 `static-routes.conf` 删除对应行并重新应用 PBR。
+
+如果规则来自 DDNS / forward，删除的是当前解析 IP 对应的 PBR 记录。若同一 CIDR 有多条不同路由表规则，按 CIDR 输入会要求改用编号，避免误删其他线路。
+
+也可以使用 CLI：
+
+```bash
+sudo lq pbr delete 203.0.113.154/32
+sudo lq --pbr-delete 203.0.113.154
+```
+
 ## 配置文件
 
 ```text
@@ -50,6 +73,7 @@ IPv4 多出口策略路由 / PBR
 
 ```text
 203.0.113.10/32 CN2
+203.0.113.10/32 CN2 static
 ```
 
 来自转发目标的动态规则格式：

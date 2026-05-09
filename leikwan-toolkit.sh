@@ -360,7 +360,9 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh forward list
   sudo bash leikwan-toolkit.sh forward apply-relay
   sudo bash leikwan-toolkit.sh forward apply-relay --auto-fix-route
+  sudo bash leikwan-toolkit.sh pbr delete 203.0.113.10/32
   sudo bash leikwan-toolkit.sh --pbr-apply
+  sudo bash leikwan-toolkit.sh --pbr-delete 203.0.113.10/32
   sudo bash leikwan-toolkit.sh --uninstall
   bash leikwan-toolkit.sh --help
   bash leikwan-toolkit.sh --version
@@ -3077,7 +3079,7 @@ pbr_apply() {
   pbr_init_rt_tables
   pbr_refresh_dynamic_rules
   [[ -f "$PBR_STATIC_CONF" ]] || { warn "暂无 PBR 静态规则。"; return 0; }
-  local cidr group _source_type _source_name _source_host table_id gw table_name normalized
+  local cidr group _source_type _source_name _source_host table_id gw table_name normalized apply_failed=0
   while ip rule del priority "$PBR_PRIORITY" 2>/dev/null; do :; done
   while read -r cidr group _source_type _source_name _source_host; do
     [[ -n "$cidr" && "$cidr" != \#* ]] || continue
@@ -3101,15 +3103,18 @@ pbr_apply() {
     if [[ -n "$gw" ]]; then
       if ! ip route replace default via "$gw" table "$table_id" 2>/dev/null; then
         fail "PBR 路由表 ${table_name} 默认路由写入失败：via ${gw}"
+        apply_failed=1
         continue
       fi
     fi
     if ! ip rule add to "$cidr" table "$table_id" priority "$PBR_PRIORITY" 2>/dev/null; then
       fail "PBR 应用失败：${cidr} -> ${table_name}"
+      apply_failed=1
       continue
     fi
     ok "PBR：${cidr} -> ${table_name}"
   done <"$PBR_STATIC_CONF"
+  return "$apply_failed"
 }
 
 pbr_select_group() {
@@ -3182,6 +3187,147 @@ pbr_add_from_forward() {
   fi
   pbr_apply
   info "如需同步转发目标 out_iface / route_table 元数据，请执行：lq forward apply-relay --auto-fix-route"
+}
+
+pbr_rows() {
+  [[ -f "$PBR_STATIC_CONF" ]] || return 0
+  local line line_no=0 cidr group source_type source_name rest normalized table_name source
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_no=$((line_no + 1))
+    line="${line//$'\r'/}"
+    line="$(normalize_menu_choice "$line")"
+    [[ -n "$line" && "$line" != \#* ]] || continue
+    cidr=""
+    group=""
+    source_type=""
+    source_name=""
+    rest=""
+    read -r cidr group source_type source_name rest <<<"$line"
+    [[ -n "$cidr" && -n "$group" ]] || continue
+    normalized="$(normalize_ipv4_cidr "$cidr" 2>/dev/null || true)"
+    [[ -n "$normalized" ]] || normalized="$cidr"
+    table_name="${group#T_}"
+    if [[ -z "$source_type" ]]; then
+      source="static"
+    elif [[ "$source_type" == "forward" && -n "$source_name" ]]; then
+      source="forward:${source_name}"
+      [[ -n "$rest" ]] && source="${source} ${rest}"
+    else
+      source="$source_type"
+      [[ -n "$source_name" ]] && source="${source} ${source_name}"
+      [[ -n "$rest" ]] && source="${source} ${rest}"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$line_no" "$normalized" "T_${table_name}" "$source"
+  done <"$PBR_STATIC_CONF"
+}
+
+pbr_rules_count() {
+  pbr_rows | awk 'END{print NR+0}'
+}
+
+display_pbr_rules() {
+  local numbered="${1:-no}" title="${2:-}"
+  [[ -n "$title" ]] && { echo; echo "$title"; }
+  if [[ "$numbered" == "numbered" ]]; then
+    printf '%s\n' "编号  目标网段                 路由表      来源"
+    pbr_rows | awk -F'\t' '{printf "%d. %-24s %-10s %s\n", ++i, $2, $3, $4}'
+  else
+    printf '%s\n' "目标网段                 路由表      来源"
+    pbr_rows | awk -F'\t' '{printf "%-24s %-10s %s\n", $2, $3, $4}'
+  fi
+}
+
+pbr_show() {
+  local count
+  echo
+  count="$(pbr_rules_count)"
+  if (( count == 0 )); then
+    info "当前没有 PBR 规则。"
+    return 0
+  fi
+  display_pbr_rules
+}
+
+resolve_pbr_rule_selection() {
+  local choice="$1" selected target count
+  choice="$(normalize_menu_choice "$choice")"
+  [[ -n "$choice" ]] || return 1
+  if [[ "$choice" =~ ^[0-9]+$ ]]; then
+    selected="$(pbr_rows | awk -F'\t' -v idx="$choice" 'NR==idx {print; exit}')"
+    [[ -n "$selected" ]] || return 2
+  else
+    target="$(normalize_ipv4_cidr "$choice" 2>/dev/null || true)"
+    [[ -n "$target" ]] || target="$choice"
+    selected="$(pbr_rows | awk -F'\t' -v cidr="$target" '$2==cidr {print}')"
+    count="$(printf '%s\n' "$selected" | awk 'NF {c++} END{print c+0}')"
+    (( count > 0 )) || return 4
+    (( count == 1 )) || return 3
+  fi
+  printf '%s\n' "$selected"
+}
+
+warn_pbr_selection_error() {
+  local rc="$1" choice="$2"
+  case "$rc" in
+    2) warn "编号无效，请重新选择。" ;;
+    3) warn "同一目标网段存在多条 PBR 规则，请输入编号精确选择。" ;;
+    *) warn "PBR 规则不存在：${choice}" ;;
+  esac
+}
+
+select_pbr_rule() {
+  local choice selected rc count
+  count="$(pbr_rules_count)"
+  if (( count == 0 )); then
+    warn "当前没有 PBR 规则可删除。" >&2
+    return 1
+  fi
+  display_pbr_rules numbered "当前 PBR 规则：" >&2
+  echo >&2
+  while true; do
+    choice="$(prompt_value "请输入编号或目标网段，直接回车返回")"
+    [[ -z "$choice" ]] && return 1
+    if selected="$(resolve_pbr_rule_selection "$choice")"; then
+      printf '%s\n' "$selected"
+      return 0
+    else
+      rc=$?
+      warn_pbr_selection_error "$rc" "$choice" >&2
+    fi
+  done
+}
+
+delete_pbr_rule() {
+  need_root_unless_dry_run
+  local selection="${1:-}" selected rc line_no cidr table _source tmp count
+  count="$(pbr_rules_count)"
+  if (( count == 0 )); then
+    warn "当前没有 PBR 规则可删除。"
+    return 0
+  fi
+  if [[ -n "$selection" ]]; then
+    if selected="$(resolve_pbr_rule_selection "$selection")"; then
+      :
+    else
+      rc=$?
+      warn_pbr_selection_error "$rc" "$selection"
+      return 0
+    fi
+  else
+    selected="$(select_pbr_rule)" || return 0
+  fi
+  IFS=$'\t' read -r line_no cidr table _source <<<"$selected"
+  prompt_yes_no "确认删除 PBR 规则 ${cidr} -> ${table}？" "N" || return 0
+  tmp="$(mktemp)"
+  awk -v del="$line_no" 'NR != del {print}' "$PBR_STATIC_CONF" >"$tmp"
+  write_file "$PBR_STATIC_CONF" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+  ok "已删除 PBR 规则：${cidr} -> ${table}"
+  if pbr_apply; then
+    ok "PBR 已重新应用"
+  else
+    warn "PBR 规则已删除，但重新应用失败。请稍后执行 PBR -> 应用 PBR。"
+  fi
 }
 
 generate_forward_outputs() {
@@ -3971,41 +4117,20 @@ pbr_menu() {
     echo; echo "${BOLD}IPv4 多出口策略路由 / PBR${RESET}"
     echo "1. 添加静态 PBR"
     echo "2. 从现有转发目标添加 PBR"
-    echo "3. 应用 PBR"
-    echo "4. 查看 PBR"
-    echo "0. 返回"
+    echo "3. 删除 PBR 规则"
+    echo "4. 应用 PBR"
+    echo "5. 查看 PBR"
+    echo "6. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) pbr_add_static ;;
       2) pbr_add_from_forward ;;
-      3) pbr_apply ;;
-      4) pbr_show ;;
-      0) return 0 ;;
+      3) delete_pbr_rule ;;
+      4) pbr_apply ;;
+      5) pbr_show ;;
+      6|0) return 0 ;;
     esac
   done
-}
-
-pbr_show() {
-  echo
-  if [[ ! -s "$PBR_STATIC_CONF" ]]; then
-    info "当前没有 PBR 规则。"
-    return 0
-  fi
-  printf '%s\n' "目标网段                 路由表      来源"
-  awk '
-    function pad(s, n) { return sprintf("%-" n "s", s) }
-    NF==0 {next}
-    $1 ~ /^#/ {next}
-    {
-      cidr=$1
-      group=$2
-      src="static"
-      if (NF >= 5 && $3 == "forward") {
-        src="forward: " $4
-      }
-      printf "%-24s %-10s %s\n", cidr, "T_" group, src
-    }
-  ' "$PBR_STATIC_CONF"
 }
 
 install_shortcuts() {
@@ -4290,10 +4415,19 @@ main() {
         *) fail "未知 entry 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
+    pbr)
+      case "${2:-}" in
+        delete) delete_pbr_rule "${3:-}" ;;
+        apply) pbr_apply ;;
+        show|list) pbr_show ;;
+        *) fail "未知 pbr 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
+      ;;
     --help|-h) print_help ;;
     --version|-v) echo "${PROJECT_NAME} ${TOOL_VERSION}" ;;
     --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
     --pbr-apply) pbr_apply ;;
+    --pbr-delete) delete_pbr_rule "${2:-}" ;;
     --uninstall) uninstall_new_mode ;;
     "") main_menu ;;
     *) fail "未知参数：$1"; print_help; exit 1 ;;

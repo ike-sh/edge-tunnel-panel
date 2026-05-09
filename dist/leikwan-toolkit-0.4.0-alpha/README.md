@@ -93,12 +93,15 @@ DDNS / 域名后端是支持的。`apply-relay` 每次都会重新解析域名�
 ```text
 1. 添加静态 PBR
 2. 从现有转发目标添加 PBR
-3. 应用 PBR
-4. 查看 PBR
-0. 返回
+3. 删除 PBR 规则
+4. 应用 PBR
+5. 查看 PBR
+6. 返回
 ```
 
 静态 PBR 只接受 IPv4 或 CIDR。域名 / DDNS 后端需要固定线路时，使用“从现有转发目标添加 PBR”，脚本会解析当前 IPv4 并写入 `resolved_ip/32 -> route_table`，后续应用 PBR 时会刷新来源域名。
+
+删除 PBR 规则会先展示当前规则列表，支持输入编号、CIDR 或裸 IP；裸 IP 会按 `/32` 匹配。删除后脚本会重新应用 PBR。来自 DDNS / forward 的规则删除的是当前解析 IP 对应的 PBR 记录；如果同一 CIDR 有多条不同路由表规则，请用编号精确删除。
 
 ## 路径迁移
 
