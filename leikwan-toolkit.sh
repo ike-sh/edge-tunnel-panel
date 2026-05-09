@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.0.1"
+TOOL_VERSION="1.0.2"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -11,6 +11,7 @@ VERBOSE_DOCTOR=0
 DEPS_APT_UPDATED=0
 DEPS_INSTALLED_THIS_RUN=""
 LOG_DISABLED=0
+MENU_ACTION_PAUSE_DONE=0
 
 LOG_FILE="/var/log/leikwan-toolkit.log"
 STATE_DIR="/etc/leikwan-toolkit"
@@ -180,10 +181,9 @@ clear_screen_if_interactive() {
 
 wait_enter_to_return() {
   is_interactive || return 0
-  printf '\n按回车返回菜单...'
+  printf '\n按回车继续...'
   local _answer
   IFS= read -r _answer || true
-  clear_screen_if_interactive
 }
 
 print_compact_header() {
@@ -209,14 +209,31 @@ menu_invalid_choice() {
   wait_enter_to_return
 }
 
-run_menu_action() {
+warn_and_pause() {
+  warn "$1"
+  pause_after_action
+}
+
+pause_after_action() {
+  if (( MENU_ACTION_PAUSE_DONE == 1 )); then
+    MENU_ACTION_PAUSE_DONE=0
+    return 0
+  fi
+  wait_enter_to_return
+}
+
+run_menu_action_pause() {
   local rc
   set +e
   "$@"
   rc=$?
   set -e
-  wait_enter_to_return
+  pause_after_action
   return "$rc"
+}
+
+run_menu_action() {
+  run_menu_action_pause "$@"
 }
 
 is_port() {
@@ -1406,6 +1423,67 @@ print_pairing_code() {
   printf '%s=%s\n' "$one_line_key" "$(pairing_base64 "$file")"
 }
 
+wait_pairing_code_confirm() {
+  local ans
+  is_interactive || return 0
+  echo
+  echo "请确认已经复制上面的单行码。"
+  echo "直接回车不会返回菜单。"
+  echo "输入 y 后回车：返回菜单"
+  echo "输入 r 后回车：重新显示单行码"
+  echo "输入 p 后回车：显示保存路径"
+  while true; do
+    read -r -p "请选择 [y/r/p]: " ans || ans=""
+    ans="$(normalize_menu_choice "$ans")"
+    ans="${ans,,}"
+    case "$ans" in
+      y|yes) return 0 ;;
+      r|redisplay) return 2 ;;
+      p|path) return 3 ;;
+      "") echo "为避免手滑，直接回车不会返回菜单。请输入 y 返回，或 r 重显。" ;;
+      *) echo "请输入 y / r / p。" ;;
+    esac
+  done
+}
+
+show_pairing_code_and_confirm() {
+  local title="$1" begin="$2" end="$3" file="$4" one_line_key="$5" next_step="${6:-}"
+  local rc
+  while true; do
+    print_pairing_code "$title" "$begin" "$end" "$file" "$one_line_key" "$next_step"
+    is_interactive || return 0
+    set +e
+    wait_pairing_code_confirm
+    rc=$?
+    set -e
+    case "$rc" in
+      0) MENU_ACTION_PAUSE_DONE=1; return 0 ;;
+      2) continue ;;
+      3) echo "保存路径：${file}" ;;
+    esac
+  done
+}
+
+wait_file_output_confirm() {
+  local label="$1" path="$2" ans
+  is_interactive || return 0
+  echo
+  echo "${label} 已输出。"
+  echo "输入 y 后回车：返回菜单"
+  echo "输入 p 后回车：显示保存路径"
+  while true; do
+    read -r -p "请选择 [y/p]: " ans || ans=""
+    ans="$(normalize_menu_choice "$ans")"
+    ans="${ans,,}"
+    case "$ans" in
+      y|yes) MENU_ACTION_PAUSE_DONE=1; return 0 ;;
+      p|path) echo "保存路径：${path}" ;;
+      "") echo "为避免手滑，直接回车不会返回菜单。请输入 y 返回。" ;;
+      *) echo "请输入 y / p。" ;;
+    esac
+  done
+}
+
 parse_pairing_raw() {
   local raw="$1" dest="$2" base64_key="$3" line payload
   : >"$dest"
@@ -2290,7 +2368,7 @@ SUGGESTED_EASYTIER_PORT=${suggested_port}" 600
   echo "- 公网入口：$(entry_label "$suggested_name")"
   echo "- EasyTier IP：${suggested_ip}"
   echo "- EasyTier 监听：$(easytier_protocols_display "$suggested_protocols")/${suggested_port}"
-  print_pairing_code "公网入口接入码" \
+  show_pairing_code_and_confirm "公网入口接入码" \
     "-----BEGIN LEIKWAN EASYTIER NETWORK-----" \
     "-----END LEIKWAN EASYTIER NETWORK-----" \
     "$NETWORK_PAIRING_FILE" \
@@ -2387,7 +2465,7 @@ ENABLED=true" 600
   info "如果 A 在家宽 / NAT 后面，请在路由器中同时映射 TCP 和 UDP ${port} 到本机。"
   info "如果只映射 TCP，则 UDP peer 不会生效，但 TCP 仍可用。"
   info "如果只映射 UDP，则 TCP peer 不会生效，但 UDP 仍可用。"
-  print_pairing_code "公网入口返回码" \
+  show_pairing_code_and_confirm "公网入口返回码" \
     "-----BEGIN LEIKWAN EASYTIER ENTRY-----" \
     "-----END LEIKWAN EASYTIER ENTRY-----" \
     "$ENTRY_PAIRING_FILE" \
@@ -2633,6 +2711,7 @@ bulk_entry_enable_menu() {
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已启用所有公网入口。"
         prompt_apply_relay_after_entry_change
+        pause_after_action
         return 0
         ;;
       2)
@@ -2642,6 +2721,7 @@ bulk_entry_enable_menu() {
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已禁用所有公网入口。"
         prompt_apply_relay_after_entry_change
+        pause_after_action
         return 0
         ;;
       3)
@@ -2650,6 +2730,7 @@ bulk_entry_enable_menu() {
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已只保留公网入口 enabled：${name}"
         prompt_apply_relay_after_entry_change
+        pause_after_action
         return 0
         ;;
       4|0|"") return 0 ;;
@@ -2703,6 +2784,7 @@ pending_entries_menu() {
             clear_pending_entry_exact "$name" "$et_ip" "$port"
             ok "已清理未完成接入码预占：${name} / ${et_ip} / ${port}"
           fi
+          pause_after_action
         fi
         ;;
       2)
@@ -2712,6 +2794,7 @@ pending_entries_menu() {
           rm -f "$PENDING_ENTRIES_TSV"
           ok "已清理所有未完成接入码预占。"
         fi
+        pause_after_action
         ;;
       0|"") return 0 ;;
       *) menu_invalid_choice ;;
@@ -3385,6 +3468,11 @@ export_forwards_tsv() {
   sed -n '1,200p' "$FORWARDS_TSV"
 }
 
+resolve_forward_targets_action() {
+  display_forward_selection_list all "当前转发目标："
+  resolve_forwards
+}
+
 resolve_forwards() {
   ensure_tsv_files
   validate_forwards_tsv || return 1
@@ -3831,10 +3919,10 @@ nftables_menu() {
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) nft_show_rules ;;
-      2) apply_nft_rules "cloud-entry" || warn "公网入口 nftables 规则未应用成功。" ;;
-      3) apply_nft_rules "leikwan-relay" || warn "利群转发 nftables 规则未应用成功。" ;;
-      4) cleanup_nftables_rules ;;
+      1) run_menu_action_pause nft_show_rules ;;
+      2) run_menu_action_pause apply_nft_rules "cloud-entry" || warn_and_pause "公网入口 nftables 规则未应用成功。" ;;
+      3) run_menu_action_pause apply_nft_rules "leikwan-relay" || warn_and_pause "利群转发 nftables 规则未应用成功。" ;;
+      4) run_menu_action_pause cleanup_nftables_rules ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -4208,6 +4296,7 @@ generate_forward_outputs() {
   write_file "$FORWARD_TXT" "$txt" 644
   write_file "$FORWARD_TSV" "$tsv" 644
   cat "$FORWARD_TXT"
+  wait_file_output_confirm "转发入口输出" "$FORWARD_TXT"
 }
 
 report() {
@@ -4680,9 +4769,9 @@ bbr_menu() {
     echo "1. 查看状态"; echo "2. 启用 BBR + fq"; echo "3. 恢复默认"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc 2>/dev/null || true ;;
-      2) write_file "$BBR_SYSCTL_CONF" $'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr' 644; modprobe tcp_bbr 2>/dev/null || true; sysctl --system ;;
-      3) backup_file "$BBR_SYSCTL_CONF"; rm -f "$BBR_SYSCTL_CONF"; sysctl --system ;;
+      1) sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc 2>/dev/null || true; pause_after_action ;;
+      2) write_file "$BBR_SYSCTL_CONF" $'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr' 644; modprobe tcp_bbr 2>/dev/null || true; sysctl --system; pause_after_action ;;
+      3) backup_file "$BBR_SYSCTL_CONF"; rm -f "$BBR_SYSCTL_CONF"; sysctl --system; pause_after_action ;;
       0) return 0 ;;
     esac
   done
@@ -4695,14 +4784,15 @@ link_test_menu() {
     echo "1. ping relay EasyTier IP"; echo "2. ping 所有入口 EasyTier IP"; echo "3. 测入口 EasyTier TCP/UDP"; echo "4. 测后端 target"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) ping_entry_et_ip "relay" "$RELAY_ET_IP" plain || true ;;
-      2) entries_rows | while IFS=$'\t' read -r n _h ip _proto _port _w e; do [[ "$e" == "true" ]] && ping_entry_et_ip "$n" "$ip" plain || true; done ;;
+      1) ping_entry_et_ip "relay" "$RELAY_ET_IP" plain || true; pause_after_action ;;
+      2) entries_rows | while IFS=$'\t' read -r n _h ip _proto _port _w e; do [[ "$e" == "true" ]] && ping_entry_et_ip "$n" "$ip" plain || true; done; pause_after_action ;;
       3)
-        ensure_nc_for_test || continue
+        ensure_nc_for_test || { pause_after_action; continue; }
         entries_rows | while IFS=$'\t' read -r n h ip proto port _w e; do [[ "$e" == "true" ]] && test_entry_row "$n" "$h" "$ip" "$proto" "$port" "$e" || true; done
+        pause_after_action
         ;;
       4)
-        ensure_nc_for_test || continue
+        ensure_nc_for_test || { pause_after_action; continue; }
         resolved_rows | while IFS=$'\t' read -r n _ep _th ti tp _oi _rt en _ts _comment; do
           [[ "$en" == "true" && -n "$ti" ]] || continue
           nc -vz -w 3 "$ti" "$tp" || true
@@ -4711,6 +4801,7 @@ link_test_menu() {
             *) warn "${n} target UDP 探测未确认。UDP 无连接探测可能不可靠，请结合业务实际测试。" ;;
           esac
         done
+        pause_after_action
         ;;
       0) return 0 ;;
     esac
@@ -4743,6 +4834,7 @@ generate_debug_report() {
   rm -f "$tmp"
   chmod 600 "$REPORT_FILE"
   ok "已生成脱敏故障报告：${REPORT_FILE}"
+  wait_file_output_confirm "脱敏故障报告" "$REPORT_FILE"
 }
 
 legacy_cleanup_menu() {
@@ -4815,6 +4907,7 @@ legacy_cleanup_menu() {
       0) return 0 ;;
     esac
     command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
+    [[ "$choice" =~ ^[1-7]$ ]] && pause_after_action
   done
 }
 
@@ -5041,8 +5134,8 @@ backup_restore_menu() {
     echo "1. 生成配置快照"; echo "2. 从快照恢复"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) backup_snapshot ;;
-      2) restore_snapshot ;;
+      1) run_menu_action_pause backup_snapshot ;;
+      2) run_menu_action_pause restore_snapshot ;;
       0) return 0 ;;
     esac
   done
@@ -5087,14 +5180,14 @@ entries_menu() {
     case "$choice" in
       1) run_menu_action quick_generate_network_pairing ;;
       2) run_menu_action quick_deploy_relay_from_entry_pairing ;;
-      3) add_entry ;;
-      4) edit_entry ;;
-      5) delete_entry ;;
-      6) set_entry_enabled ;;
-      7) set_entry_weight ;;
-      8) list_entries ;;
-      9) test_entries ;;
-      10) switch_primary_entry ;;
+      3) run_menu_action_pause add_entry ;;
+      4) run_menu_action_pause edit_entry ;;
+      5) run_menu_action_pause delete_entry ;;
+      6) run_menu_action_pause set_entry_enabled ;;
+      7) run_menu_action_pause set_entry_weight ;;
+      8) run_menu_action_pause list_entries ;;
+      9) run_menu_action_pause test_entries ;;
+      10) run_menu_action_pause switch_primary_entry ;;
       11) bulk_entry_enable_menu ;;
       12) pending_entries_menu ;;
       13|0) return 0 ;;
@@ -5120,16 +5213,16 @@ forwards_menu() {
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) add_forward ;;
-      2) edit_forward ;;
-      3) delete_forward ;;
-      4) list_forwards ;;
-      5) set_forward_enabled ;;
-      6) apply_nft_rules "leikwan-relay" || warn "利群转发 nftables 规则未应用成功。" ;;
-      7) display_forward_selection_list all "当前转发目标："; resolve_forwards ;;
-      8) test_forward ;;
-      9) import_forwards_tsv ;;
-      10) export_forwards_tsv ;;
+      1) run_menu_action_pause add_forward ;;
+      2) run_menu_action_pause edit_forward ;;
+      3) run_menu_action_pause delete_forward ;;
+      4) run_menu_action_pause list_forwards ;;
+      5) run_menu_action_pause set_forward_enabled ;;
+      6) run_menu_action_pause apply_nft_rules "leikwan-relay" || warn_and_pause "利群转发 nftables 规则未应用成功。" ;;
+      7) run_menu_action_pause resolve_forward_targets_action ;;
+      8) run_menu_action_pause test_forward ;;
+      9) run_menu_action_pause import_forwards_tsv ;;
+      10) run_menu_action_pause export_forwards_tsv ;;
       11) run_menu_action generate_forward_outputs ;;
       0) return 0 ;;
     esac
@@ -5148,11 +5241,11 @@ pbr_menu() {
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) pbr_add_static ;;
-      2) pbr_add_from_forward ;;
-      3) delete_pbr_rule ;;
-      4) pbr_apply ;;
-      5) pbr_show ;;
+      1) run_menu_action_pause pbr_add_static ;;
+      2) run_menu_action_pause pbr_add_from_forward ;;
+      3) run_menu_action_pause delete_pbr_rule ;;
+      4) run_menu_action_pause pbr_apply ;;
+      5) run_menu_action_pause pbr_show ;;
       6|0) return 0 ;;
     esac
   done
@@ -5306,12 +5399,12 @@ quick_networking_menu() {
     echo "提示：后端需要指定出口时，先配置 PBR，再添加或重应用转发目标。"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) run_menu_action fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
-      2) run_menu_action quick_generate_network_pairing || warn "生成 EasyTier 网络码未完成，请查看上方提示后重试。" ;;
-      3) run_menu_action quick_deploy_entry_from_network_pairing || warn "公网入口部署未完成，请查看上方提示后重试。" ;;
-      4) run_menu_action quick_deploy_relay_from_entry_pairing || warn "利群主机接入未完成，请查看上方提示后重试。" ;;
-      5) run_menu_action entry_expose_range || warn "公网入口端口池配置未完成，请查看上方提示后重试。" ;;
-      6) run_menu_action add_forward || warn "后端转发目标添加未完成，请查看上方提示后重试。" ;;
+      1) run_menu_action fix_dns_ipv4_first || warn_and_pause "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
+      2) run_menu_action quick_generate_network_pairing || warn_and_pause "生成 EasyTier 网络码未完成，请查看上方提示后重试。" ;;
+      3) run_menu_action quick_deploy_entry_from_network_pairing || warn_and_pause "公网入口部署未完成，请查看上方提示后重试。" ;;
+      4) run_menu_action quick_deploy_relay_from_entry_pairing || warn_and_pause "利群主机接入未完成，请查看上方提示后重试。" ;;
+      5) run_menu_action entry_expose_range || warn_and_pause "公网入口端口池配置未完成，请查看上方提示后重试。" ;;
+      6) run_menu_action add_forward || warn_and_pause "后端转发目标添加未完成，请查看上方提示后重试。" ;;
       7) pbr_menu ;;
       8) echo; print_quick_networking_steps; wait_enter_to_return ;;
       0) return 0 ;;
@@ -5338,7 +5431,7 @@ relay_host_menu() {
       2) entries_menu ;;
       3) forwards_menu ;;
       4) pbr_menu ;;
-      5) ipv6_lockdown ;;
+      5) run_menu_action_pause ipv6_lockdown ;;
       6) run_menu_action doctor ;;
       0) return 0 ;;
       "") menu_input_required ;;
@@ -5358,7 +5451,7 @@ entry_host_menu() {
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action quick_deploy_entry_from_network_pairing ;;
-      2) entry_expose_range ;;
+      2) run_menu_action_pause entry_expose_range ;;
       3)
         if [[ "$(detect_role)" == "leikwan-relay" ]]; then
           warn "当前机器检测为利群主机，不是公网入口机。"
@@ -5392,7 +5485,7 @@ advanced_menu() {
     case "$choice" in
       1) nftables_menu ;;
       2) link_test_menu ;;
-      3) run_menu_action fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
+      3) run_menu_action fix_dns_ipv4_first || warn_and_pause "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
       4) bbr_menu ;;
       5) run_menu_action doctor ;;
       6) backup_restore_menu ;;

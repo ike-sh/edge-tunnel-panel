@@ -1,6 +1,6 @@
 # 工作流
 
-本文说明 Leikwan Toolkit 1.0.1 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.0.2 的推荐操作顺序。
 
 ## 角色
 
@@ -38,6 +38,8 @@ public3 -> 公网3
 ```
 
 连续生成多个入口码时，脚本会写入 pending reservation，后续推荐会同时排除已保存入口和 pending 入口，因此会依次推荐 `public1 10.198.1.2 tcp+udp/8301`、`public2 10.198.1.3 tcp+udp/8302`、`public3 10.198.1.4 tcp+udp/8303`。
+
+连接码输出后需要输入 `y` 确认返回菜单；输入 `r` 可重新显示单行码，输入 `p` 可显示保存路径，直接回车不会返回菜单。
 
 A 的 ENTRY 返回码接回 B 后，会按 `ENTRY_ET_IP + EASYTIER_PORT` 清理对应 pending。ENTRY 名称和 pending 名称不同也允许保存。
 

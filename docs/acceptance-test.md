@@ -1,6 +1,6 @@
 # 验收清单
 
-本页用于 Leikwan Toolkit 1.0.1 正式版验收。
+本页用于 Leikwan Toolkit 1.0.2 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.0.1"
-leikwan-toolkit 1.0.1
+TOOL_VERSION="1.0.2"
+leikwan-toolkit 1.0.2
 ```
 
 ## 打包
@@ -29,8 +29,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.0.1.tar.gz
-dist/leikwan-toolkit-1.0.1.tar.gz.sha256
+dist/leikwan-toolkit-1.0.2.tar.gz
+dist/leikwan-toolkit-1.0.2.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -78,6 +78,8 @@ public2  203.0.113.20   10.198.1.3  tcp,udp  8302  100  true
 - 主菜单显示清晰 banner。
 - 子菜单不重复大 banner。
 - 菜单进入前会清屏；`LEIKWAN_NO_CLEAR=1 lq` 可禁用清屏。
+- 菜单动作输出必须停留，按回车后才继续。
+- NETWORK / ENTRY 连接码输出后，直接回车不能返回菜单；必须输入 `y`，输入 `r` 可重显，输入 `p` 可显示保存路径。
 - 快速组网说明简洁。
 - 生成 NETWORK / ENTRY 配对码后，单行码停留在最后一行，并提示按回车返回。
 - doctor、debug report、转发入口输出等长输出后等待回车返回菜单。
