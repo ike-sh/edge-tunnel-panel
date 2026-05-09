@@ -152,9 +152,10 @@ prompt_yes_no() {
     read -r -p "${prompt} ${suffix} " answer || answer=""
     answer="$(normalize_menu_choice "$answer")"
     answer="${answer:-$default}"
+    answer="${answer,,}"
     case "$answer" in
-      y|Y|yes|YES) return 0 ;;
-      n|N|no|NO) return 1 ;;
+      y|yes) return 0 ;;
+      n|no) return 1 ;;
       *) echo "请输入 y 或 n。" ;;
     esac
   done
@@ -4120,7 +4121,7 @@ pbr_menu() {
     echo "3. 删除 PBR 规则"
     echo "4. 应用 PBR"
     echo "5. 查看 PBR"
-    echo "6. 返回"
+    echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) pbr_add_static ;;

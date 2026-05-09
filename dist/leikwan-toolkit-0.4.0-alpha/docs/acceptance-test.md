@@ -139,7 +139,7 @@ Hinet 10002 -> tw.example.com(203.0.113.20):52936 eth1 - enabled
 3. 删除 PBR 规则
 4. 应用 PBR
 5. 查看 PBR
-6. 返回
+0. 返回
 ```
 
 静态 PBR 输入域名时，应提示改用“从现有转发目标添加 PBR”。从转发目标选择域名后端时，应解析当前 IP 并写入 `resolved_ip/32`，同时记录来源转发名和 `target_host`。
