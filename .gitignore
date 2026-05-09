@@ -1,0 +1,6 @@
+dist/
+*.tar.gz
+*.tar.gz.sha256
+*.log
+*.tmp
+leikwan-debug-report.txt

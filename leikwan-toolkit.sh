@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="0.4.1-alpha"
+TOOL_VERSION="1.0.0"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_AUTHOR="ike-sh"
@@ -11,6 +11,7 @@ DRY_RUN=0
 VERBOSE_DOCTOR=0
 DEPS_APT_UPDATED=0
 DEPS_INSTALLED_THIS_RUN=""
+LOG_DISABLED=0
 
 LOG_FILE="/var/log/leikwan-toolkit.log"
 STATE_DIR="/etc/leikwan-toolkit"
@@ -96,6 +97,7 @@ on_error() {
 trap 'on_error "$LINENO"' ERR
 
 log() {
+  (( LOG_DISABLED == 1 )) && return 0
   [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
   mkdir -p "$(dirname "$LOG_FILE")"
   printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE"
@@ -165,6 +167,36 @@ prompt_yes_no() {
 
 is_interactive() {
   [[ -t 0 && -t 1 ]]
+}
+
+clear_screen_if_interactive() {
+  [[ -t 1 ]] || return 0
+  printf '\033[H\033[2J'
+}
+
+wait_enter_to_return() {
+  is_interactive || return 0
+  printf '\n按回车返回菜单...'
+  local _answer
+  IFS= read -r _answer || true
+  clear_screen_if_interactive
+}
+
+print_compact_header() {
+  local title="$1"
+  echo
+  echo "${BOLD}${title}${RESET}"
+  echo "----------------------------------------"
+}
+
+run_menu_action() {
+  local rc
+  set +e
+  "$@"
+  rc=$?
+  set -e
+  wait_enter_to_return
+  return "$rc"
 }
 
 is_port() {
@@ -329,10 +361,43 @@ prompt_host() {
 safe_name() {
   local name="$1"
   name="$(normalize_menu_choice "$name")"
+  if [[ "$name" =~ ^公网([0-9]+)$ ]]; then
+    printf 'public%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
   name="${name// /-}"
   name="$(printf '%s' "$name" | sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^-+//; s/-+$//')"
   [[ -n "$name" ]] || name="default"
   printf '%s' "$name"
+}
+
+entry_display_name() {
+  local name="$1"
+  if [[ "$name" =~ ^public([0-9]+)$ ]]; then
+    printf '公网%s' "${BASH_REMATCH[1]}"
+  else
+    printf '%s' "$name"
+  fi
+}
+
+entry_label() {
+  local name="$1" display
+  display="$(entry_display_name "$name")"
+  if [[ "$display" != "$name" ]]; then
+    printf '%s(%s)' "$display" "$name"
+  else
+    printf '%s' "$name"
+  fi
+}
+
+normalize_entry_selector() {
+  local value="$1"
+  value="$(normalize_menu_choice "$value")"
+  if [[ "$value" =~ ^公网([0-9]+)$ ]]; then
+    printf 'public%s' "${BASH_REMATCH[1]}"
+  else
+    printf '%s' "$value"
+  fi
 }
 
 backup_file() {
@@ -1072,12 +1137,18 @@ install_local_easytier_binaries() {
 }
 
 install_easytier_binary() {
+  local mode="${1:-auto}"
   if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]] && easytier_validate_help; then
     if ! command -v jq >/dev/null 2>&1; then
       info "jq 缺失只影响 GitHub release metadata 获取，不影响当前已安装 EasyTier 运行。"
     fi
-    if prompt_yes_no "检测到可用 EasyTier 二进制，是否复用？" "Y"; then
-      ok "复用已安装 EasyTier。"
+    if [[ "$mode" == "repair" ]]; then
+      if ! prompt_yes_no "检测到可用 EasyTier 二进制，是否重新安装 / 修复？" "N"; then
+        ok "复用已安装 EasyTier：${EASYTIER_CORE_BIN}"
+        return 0
+      fi
+    else
+      ok "复用已安装 EasyTier：${EASYTIER_CORE_BIN}"
       return 0
     fi
   fi
@@ -1302,16 +1373,19 @@ decode_env_base64() {
 }
 
 print_pairing_code() {
-  local title="$1" begin="$2" end="$3" file="$4" one_line_key="$5"
+  local title="$1" begin="$2" end="$3" file="$4" one_line_key="$5" next_step="${6:-}"
   echo
-  echo "=================================================="
-  echo "【${title}】"
+  echo "${BOLD}${title}${RESET}"
+  echo "----------------------------------------"
   echo "$begin"
   cat "$file"
   echo "$end"
-  echo "=================================================="
+  if [[ -n "$next_step" ]]; then
+    echo
+    echo "下一步：${next_step}"
+  fi
   echo
-  echo "【一行配对码，复制这一行也可以】"
+  echo "单行码（复制这一行也可以）："
   printf '%s=%s\n' "$one_line_key" "$(pairing_base64 "$file")"
 }
 
@@ -1554,15 +1628,19 @@ display_entries() {
   printf '%s\n' "编号  名称            公网地址                 EasyTier IP    协议  端口   权重        启用"
   entries_rows_sorted | awk -F'\t' -v only="$only_enabled" '
     function proto_display(s) { return s=="tcp,udp" ? "tcp+udp" : s }
+    function display_name(n) {
+      if (n ~ /^public[0-9]+$/) return "公网" substr(n, 7) "(" n ")"
+      return n
+    }
     only=="enabled" && $7!="true" {next}
     {
-      printf "%d) %-12s %-24s %-14s %-7s %-6s weight=%-5s %s\n", ++i, $1, $2, $3, proto_display($4), $5, $6, ($7=="true" ? "enabled" : "disabled")
+      printf "%d) %-18s %-24s %-14s %-7s %-6s weight=%-5s %s\n", ++i, display_name($1), $2, $3, proto_display($4), $5, $6, ($7=="true" ? "enabled" : "disabled")
     }
   '
 }
 
 select_entry_name() {
-  local only_enabled="${1:-all}" prompt="${2:-请输入编号或名称，直接回车返回}" choice name count
+  local only_enabled="${1:-all}" prompt="${2:-请输入编号或名称，直接回车返回}" choice query name count
   ensure_tsv_files
   count="$(entries_rows | awk -F'\t' -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} {c++} END{print c+0}')"
   if (( count == 0 )); then
@@ -1576,7 +1654,8 @@ select_entry_name() {
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
       name="$(entries_rows_sorted | awk -F'\t' -v idx="$choice" -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} {i++} i==idx {print $1; exit}')"
     else
-      name="$(entries_rows | awk -F'\t' -v n="$choice" -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} $1==n {print $1; exit}')"
+      query="$(normalize_entry_selector "$choice")"
+      name="$(entries_rows | awk -F'\t' -v n="$query" -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} $1==n {print $1; exit}')"
     fi
     if [[ -n "$name" ]]; then
       printf '%s' "$name"
@@ -1815,10 +1894,14 @@ pending_entries_count() {
 
 display_pending_entries() {
   pending_entries_rows | awk -F'\t' '
+    function display_name(n) {
+      if (n ~ /^public[0-9]+$/) return "公网" substr(n, 7) "(" n ")"
+      return n
+    }
     BEGIN { print "编号  名称            EasyTier IP    协议      端口   created_at" }
     {
       proto=($3=="tcp,udp" ? "tcp+udp" : $3)
-      printf "%d) %-12s %-14s %-9s %-6s %s\n", ++i, $1, $2, proto, $4, ($5!="" ? $5 : "-")
+      printf "%d) %-18s %-14s %-9s %-6s %s\n", ++i, display_name($1), $2, proto, $4, ($5!="" ? $5 : "-")
     }
   '
 }
@@ -1949,27 +2032,15 @@ forward_exists() {
 }
 
 next_entry_name() {
-  local count candidate n
-  count="$(entry_reserved_count)"
-  case "$count" in
-    0) candidate="aliyun" ;;
-    1) candidate="home" ;;
-    2) candidate="tencent" ;;
-    *) candidate="entry$((count + 1))" ;;
-  esac
-  if ! entry_name_reserved "$candidate"; then
-    printf '%s' "$candidate"
-    return 0
-  fi
-  n=$((count + 1))
-  while true; do
-    candidate="entry${n}"
+  local candidate n
+  for ((n=1; n<=254; n++)); do
+    candidate="public${n}"
     if ! entry_name_reserved "$candidate"; then
       printf '%s' "$candidate"
       return 0
     fi
-    n=$((n + 1))
   done
+  return 1
 }
 
 next_entry_et_ip() {
@@ -2114,7 +2185,7 @@ quick_generate_network_pairing() {
   suggested_port="$(next_entry_easytier_port 2>/dev/null || printf '%s' "$EASYTIER_PORT_DEFAULT")"
   echo
   echo "${BOLD}新增公网入口建议：${RESET}"
-  echo "- 名称：${suggested_name}"
+  echo "- 名称：$(entry_label "$suggested_name")"
   echo "- EasyTier IP：${suggested_ip}"
   echo "- EasyTier 监听：$(easytier_protocols_display "$suggested_protocols") / ${suggested_port}"
   echo
@@ -2153,6 +2224,7 @@ EASYTIER_NETWORK_NAME=${network_name}
 EASYTIER_NETWORK_SECRET=${network_secret}
 RELAY_ET_IP=${RELAY_ET_IP}
 SUGGESTED_ENTRY_NAME=${suggested_name}
+SUGGESTED_ENTRY_DISPLAY_NAME=$(entry_display_name "$suggested_name")
 SUGGESTED_ENTRY_ET_IP=${suggested_ip}
 SUGGESTED_EASYTIER_PROTOCOLS=${suggested_protocols}
 SUGGESTED_EASYTIER_TCP_PORT=${suggested_port}
@@ -2160,12 +2232,17 @@ SUGGESTED_EASYTIER_UDP_PORT=${suggested_port}
 SUGGESTED_EASYTIER_PROTOCOL=${suggested_proto}
 SUGGESTED_EASYTIER_PORT=${suggested_port}" 600
   reserve_pending_entry "$suggested_name" "$suggested_ip" "$suggested_protocols" "$suggested_port"
-  print_pairing_code "复制下面整段到 A 公网入口机" \
+  echo
+  echo "${BOLD}公网入口接入码摘要${RESET}"
+  echo "- 公网入口：$(entry_label "$suggested_name")"
+  echo "- EasyTier IP：${suggested_ip}"
+  echo "- EasyTier 监听：$(easytier_protocols_display "$suggested_protocols")/${suggested_port}"
+  print_pairing_code "公网入口接入码" \
     "-----BEGIN LEIKWAN EASYTIER NETWORK-----" \
     "-----END LEIKWAN EASYTIER NETWORK-----" \
     "$NETWORK_PAIRING_FILE" \
-    "LEIKWAN_EASYTIER_NETWORK_BASE64"
-  info '下一步：去 A 公网入口机，进入"快速组网（分步提示）"，选择第 3 项，粘贴上面的网络码。'
+    "LEIKWAN_EASYTIER_NETWORK_BASE64" \
+    "去 A 公网入口机，进入快速组网，选择粘贴网络码部署入口。"
 }
 
 quick_deploy_entry_from_network_pairing() {
@@ -2211,6 +2288,7 @@ quick_deploy_entry_from_network_pairing() {
   legacy_proto="$(easytier_legacy_protocol "$proto")" || { rm -f "$tmp"; return 1; }
   write_file "$NETWORK_ENV" "ROLE=cloud-entry
 ENTRY_NAME=${name}
+ENTRY_DISPLAY_NAME=$(entry_display_name "$name")
 ENTRY_ET_IP=${et_ip}
 EASYTIER_NETWORK_NAME=${network_name}
 EASYTIER_NETWORK_SECRET=${network_secret}
@@ -2233,9 +2311,10 @@ EASYTIER_RELAY_ET_IP=${relay_ip}" 600
     if ss -lunH 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'; then ok "EasyTier UDP ${port} 已监听"; else warn "EasyTier UDP ${port} 未监听"; fi
   fi
   replace_entry_row "${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"100"$'\t'"true"
-  write_file "$ENTRY_PAIRING_FILE" "PAIRING_VERSION=0.4
+write_file "$ENTRY_PAIRING_FILE" "PAIRING_VERSION=0.4
 ROLE=cloud-entry
 ENTRY_NAME=${name}
+ENTRY_DISPLAY_NAME=$(entry_display_name "$name")
 ENTRY_PUBLIC_HOST=${public_host}
 ENTRY_ET_IP=${et_ip}
 EASYTIER_PROTOCOLS=${proto}
@@ -2246,15 +2325,21 @@ EASYTIER_PORT=${port}
 WEIGHT=100
 ENABLED=true" 600
   rm -f "$tmp"
-  print_pairing_code "复制下面整段回 B 利群主机" \
-    "-----BEGIN LEIKWAN EASYTIER ENTRY-----" \
-    "-----END LEIKWAN EASYTIER ENTRY-----" \
-    "$ENTRY_PAIRING_FILE" \
-    "LEIKWAN_EASYTIER_ENTRY_BASE64"
+  echo
+  echo "${BOLD}公网入口返回码摘要${RESET}"
+  echo "- 公网入口：$(entry_label "$name")"
+  echo "- 公网地址：${public_host}"
+  echo "- EasyTier IP：${et_ip}"
+  echo "- EasyTier 监听：$(easytier_protocols_display "$proto")/${port}"
   info "如果 A 在家宽 / NAT 后面，请在路由器中同时映射 TCP 和 UDP ${port} 到本机。"
   info "如果只映射 TCP，则 UDP peer 不会生效，但 TCP 仍可用。"
   info "如果只映射 UDP，则 TCP peer 不会生效，但 UDP 仍可用。"
-  info '下一步：回到 B 利群主机，快速组网 -> 4，粘贴上面的入口码。'
+  print_pairing_code "公网入口返回码" \
+    "-----BEGIN LEIKWAN EASYTIER ENTRY-----" \
+    "-----END LEIKWAN EASYTIER ENTRY-----" \
+    "$ENTRY_PAIRING_FILE" \
+    "LEIKWAN_EASYTIER_ENTRY_BASE64" \
+    "回到 B 利群主机，选择粘贴入口返回码完成接入。"
 }
 
 quick_deploy_relay_from_entry_pairing() {
@@ -2334,10 +2419,10 @@ pairing_menu() {
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) quick_generate_network_pairing ;;
-      2) quick_deploy_entry_from_network_pairing ;;
-      3) quick_deploy_relay_from_entry_pairing ;;
-      4) pairing_status ;;
+      1) run_menu_action quick_generate_network_pairing ;;
+      2) run_menu_action quick_deploy_entry_from_network_pairing ;;
+      3) run_menu_action quick_deploy_relay_from_entry_pairing ;;
+      4) run_menu_action pairing_status ;;
       0) return 0 ;;
       "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
@@ -2349,7 +2434,7 @@ add_entry() {
   need_root_unless_dry_run
   ensure_tsv_files
   local name public_host et_ip proto port weight enabled row default_ip default_port
-  name="$(safe_name "$(prompt_value "入口名称，例如 aliyun / tencent / home")")"
+  name="$(safe_name "$(prompt_value "入口名称（内部 ASCII，例如 public1 / public2）")")"
   entry_exists "$name" && warn "入口已存在，将覆盖。"
   public_host="$(prompt_host "入口公网 IP 或域名")"
   default_ip="$(next_entry_et_ip 2>/dev/null || printf '%s' "$ENTRY_ET_IP_DEFAULT")"
@@ -4014,7 +4099,7 @@ generate_forward_outputs() {
   validate_forwards_tsv || return 1
   mkdir -p "$OUTPUT_DIR"
   local txt tsv name entry_port target_host target_port out_iface route_table enabled comment
-  local e_name public_host et_ip proto port weight e_enabled tcp_health udp_health role rank
+  local e_name e_label public_host et_ip proto port weight e_enabled tcp_health udp_health role rank
   txt="【转发入口清单】"$'\n'
   tsv=$'target_name\tentry_name\tpublic_host\tentry_port\ttarget_host\ttarget_port\thealth\tweight'
   while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
@@ -4031,7 +4116,8 @@ generate_forward_outputs() {
         if nc -vz -w 2 "$public_host" "$entry_port" >/dev/null 2>&1; then tcp_health="UP"; else tcp_health="DOWN"; fi
         if nc -uvz -w 2 "$public_host" "$entry_port" >/dev/null 2>&1; then udp_health="PROBED"; fi
       fi
-      txt="${txt}* ${role} ${e_name}  ${public_host}:${entry_port}  TCP+UDP  状态：TCP=${tcp_health} UDP=${udp_health}  权重：${weight}"$'\n'
+      e_label="$(entry_label "$e_name")"
+      txt="${txt}* ${role} ${e_label}  ${public_host}:${entry_port}  TCP+UDP  状态：TCP=${tcp_health} UDP=${udp_health}  权重：${weight}"$'\n'
       tsv="${tsv}"$'\n'"${name}"$'\t'"${e_name}"$'\t'"${public_host}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${tcp_health}"$'\t'"${weight}"
     done < <(enabled_entries_sorted)
   done < <(forwards_rows_usv)
@@ -4744,6 +4830,7 @@ uninstall_new_mode() {
   prompt_yes_no "第一次确认：继续卸载全部？" "N" || return 0
   prompt_yes_no "第二次确认：确实删除本脚本生成的组件？" "N" || return 0
 
+  LOG_DISABLED=1
   set +e
   if command -v systemctl >/dev/null 2>&1; then
     safe_stop_disable_service "$EASYTIER_RELAY_SERVICE_NAME"
@@ -4762,6 +4849,7 @@ uninstall_new_mode() {
   safe_rm_file "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN" "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER" \
     "/root/leikwan-toolkit.sh" "$OLD_ROOT_SCRIPT" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF" "$LOG_FILE" "$OLD_LOG_FILE"
   safe_rm_dir "$STATE_DIR" "$OLD_STATE_DIR" "$BACKUP_DIR" "$OLD_BACKUP_DIR"
+  rm -f "$LOG_FILE" "$OLD_LOG_FILE" 2>/dev/null || true
   systemd_reload_reset_failed
   set -e
 
@@ -4790,12 +4878,13 @@ uninstall_new_mode() {
   uninstall_check_line "BBR sysctl" file "$BBR_SYSCTL_CONF"
   uninstall_check_line "DNS resolved 配置" file "$DNS_RESOLVED_CONF"
   ok "卸载流程已完成；如上方有 WARN，表示对应对象仍存在，需要按提示手动检查。"
+  rm -f "$LOG_FILE" "$OLD_LOG_FILE" 2>/dev/null || true
 }
 
 backup_snapshot() {
   need_root_unless_dry_run
   local dest
-  dest="${BACKUP_DIR}/leikwan-v0.4-snapshot.$(date '+%Y%m%d-%H%M%S').tar.gz"
+  dest="${BACKUP_DIR}/leikwan-1.0-snapshot.$(date '+%Y%m%d-%H%M%S').tar.gz"
   if (( DRY_RUN == 1 )); then
     echo "[DRY-RUN] tar -czf ${dest} ${STATE_DIR} ${FORWARD_SYSCTL}"
     return 0
@@ -4838,12 +4927,12 @@ easytier_menu() {
     echo "1. 安装 / 修复 EasyTier"; echo "2. B 生成网络码"; echo "3. A 粘贴网络码并部署入口"; echo "4. B 粘贴入口码并完成接入"; echo "5. 启动 / 重启 entry 服务"; echo "6. 启动 / 重启 relay 服务"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) install_easytier_binary ;;
-      2) quick_generate_network_pairing ;;
-      3) quick_deploy_entry_from_network_pairing ;;
-      4) quick_deploy_relay_from_entry_pairing ;;
-      5) apply_easytier_entry_services ;;
-      6) apply_easytier_relay_service ;;
+      1) run_menu_action install_easytier_binary repair ;;
+      2) run_menu_action quick_generate_network_pairing ;;
+      3) run_menu_action quick_deploy_entry_from_network_pairing ;;
+      4) run_menu_action quick_deploy_relay_from_entry_pairing ;;
+      5) run_menu_action apply_easytier_entry_services ;;
+      6) run_menu_action apply_easytier_relay_service ;;
       0) return 0 ;;
     esac
   done
@@ -4868,8 +4957,8 @@ entries_menu() {
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) quick_generate_network_pairing ;;
-      2) quick_deploy_relay_from_entry_pairing ;;
+      1) run_menu_action quick_generate_network_pairing ;;
+      2) run_menu_action quick_deploy_relay_from_entry_pairing ;;
       3) add_entry ;;
       4) edit_entry ;;
       5) delete_entry ;;
@@ -4913,7 +5002,7 @@ forwards_menu() {
       8) test_forward ;;
       9) import_forwards_tsv ;;
       10) export_forwards_tsv ;;
-      11) generate_forward_outputs ;;
+      11) run_menu_action generate_forward_outputs ;;
       0) return 0 ;;
     esac
   done
@@ -5024,50 +5113,48 @@ EOF
 }
 
 quick_networking_menu() {
-  local choice
+  local choice intro_shown=0
+  clear_screen_if_interactive
   while true; do
-    echo; echo "${BOLD}快速组网（分步提示）${RESET}"
-    echo "----------------------------------------"
-    echo "本向导用于帮助你按顺序完成："
-    echo
-    echo "A：公网入口机"
-    echo "B：利群主机"
-    echo "C：后端目标（TCP/UDP）"
-    echo
-    echo "推荐链路："
-    echo "外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标"
-    echo "----------------------------------------"
-    echo
-    echo "${BOLD}[重要提示]${RESET}"
-    echo "如果当前机器是利群主机，请先执行："
-    echo "高级功能 -> DNS / IPv4 优先修复"
-    echo
-    echo "原因："
-    echo "部分利群主机 IPv6 / DNS 默认环境可能导致 GitHub、raw.githubusercontent.com、GitHub release 下载失败。"
-    echo "先修复 IPv4 优先和 DNS，可以显著减少 EasyTier、release 包、脚本更新下载失败的问题。"
-    echo
-    echo "1. 我现在在利群主机：先执行 DNS / IPv4 优先修复"
-    echo "2. 我现在在利群主机：生成 / 新增公网入口网络码"
-    echo "3. 我现在在公网入口：粘贴利群网络码，部署本机入口"
-    echo "4. 我现在在利群主机：粘贴公网入口返回码，完成接入"
-    echo "5. 我现在在公网入口：配置入口端口池"
-    echo "6. 我现在在利群主机：添加后端转发目标"
-    echo "7. IPv4 多出口策略路由 / PBR"
-    echo "8. 查看完整分步说明"
+    if (( intro_shown == 0 )); then
+      print_compact_header "快速组网"
+      echo "B：利群主机，负责中转和后端转发"
+      echo "A：公网入口，可部署多台，用于接入公网流量"
+      echo "C：后端目标，支持 TCP/UDP 转发"
+      echo
+      echo "推荐顺序："
+      echo "1. B 修复 DNS / IPv4"
+      echo "2. B 生成公网入口网络码"
+      echo "3. A 粘贴网络码部署入口"
+      echo "4. B 粘贴 A 返回码完成接入"
+      echo "5. A 配置公网入口端口池"
+      echo "6. B 添加后端转发目标"
+      echo "----------------------------------------"
+      intro_shown=1
+    else
+      echo; echo "${BOLD}快速组网${RESET}"
+    fi
+    echo "1. B：修复 DNS / IPv4"
+    echo "2. B：生成公网入口网络码"
+    echo "3. A：粘贴网络码部署入口"
+    echo "4. B：粘贴入口返回码完成接入"
+    echo "5. A：配置入口端口池"
+    echo "6. B：添加后端转发目标"
+    echo "7. B：IPv4 PBR"
+    echo "8. 查看完整说明"
     echo "0. 返回"
     echo
-    echo "提示：如果后端目标需要走 CN2 / 9929 等指定出口，请先执行第 7 项添加 PBR，再执行第 6 项添加后端转发目标。"
-    echo "如果已经先执行第 6 项添加了后端转发，之后又添加 PBR，请重新执行：lq forward apply-relay --auto-fix-route"
+    echo "提示：后端需要指定出口时，先配置 PBR，再添加或重应用转发目标。"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
-      2) quick_generate_network_pairing || warn "生成 EasyTier 网络码未完成，请查看上方提示后重试。" ;;
-      3) quick_deploy_entry_from_network_pairing || warn "公网入口部署未完成，请查看上方提示后重试。" ;;
-      4) quick_deploy_relay_from_entry_pairing || warn "利群主机接入未完成，请查看上方提示后重试。" ;;
-      5) entry_expose_range || warn "公网入口端口池配置未完成，请查看上方提示后重试。" ;;
-      6) add_forward || warn "后端转发目标添加未完成，请查看上方提示后重试。" ;;
+      1) run_menu_action fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
+      2) run_menu_action quick_generate_network_pairing || warn "生成 EasyTier 网络码未完成，请查看上方提示后重试。" ;;
+      3) run_menu_action quick_deploy_entry_from_network_pairing || warn "公网入口部署未完成，请查看上方提示后重试。" ;;
+      4) run_menu_action quick_deploy_relay_from_entry_pairing || warn "利群主机接入未完成，请查看上方提示后重试。" ;;
+      5) run_menu_action entry_expose_range || warn "公网入口端口池配置未完成，请查看上方提示后重试。" ;;
+      6) run_menu_action add_forward || warn "后端转发目标添加未完成，请查看上方提示后重试。" ;;
       7) pbr_menu ;;
-      8) echo; print_quick_networking_steps ;;
+      8) echo; print_quick_networking_steps; wait_enter_to_return ;;
       0) return 0 ;;
       "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
@@ -5093,7 +5180,7 @@ relay_host_menu() {
       3) forwards_menu ;;
       4) pbr_menu ;;
       5) ipv6_lockdown ;;
-      6) doctor ;;
+      6) run_menu_action doctor ;;
       0) return 0 ;;
       "") echo "请输入选项编号。" ;;
       *) echo "无效选择。" ;;
@@ -5111,7 +5198,7 @@ entry_host_menu() {
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) quick_deploy_entry_from_network_pairing ;;
+      1) run_menu_action quick_deploy_entry_from_network_pairing ;;
       2) entry_expose_range ;;
       3)
         if [[ "$(detect_role)" == "leikwan-relay" ]]; then
@@ -5120,6 +5207,7 @@ entry_host_menu() {
         else
           doctor
         fi
+        wait_enter_to_return
         ;;
       0) return 0 ;;
       "") echo "请输入选项编号。" ;;
@@ -5145,11 +5233,11 @@ advanced_menu() {
     case "$choice" in
       1) nftables_menu ;;
       2) link_test_menu ;;
-      3) fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
+      3) run_menu_action fix_dns_ipv4_first || warn "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
       4) bbr_menu ;;
-      5) doctor ;;
+      5) run_menu_action doctor ;;
       6) backup_restore_menu ;;
-      7) generate_debug_report ;;
+      7) run_menu_action generate_debug_report ;;
       8) legacy_cleanup_menu ;;
       0) return 0 ;;
       "") echo "请输入选项编号。" ;;
@@ -5164,6 +5252,7 @@ main_menu() {
   ensure_tsv_files
   local choice
   while true; do
+    clear_screen_if_interactive
     echo; print_banner; echo
     echo "1. 快速组网（分步提示）"
     echo "2. 利群主机"
@@ -5178,7 +5267,7 @@ main_menu() {
       2) relay_host_menu ;;
       3) entry_host_menu ;;
       4) advanced_menu ;;
-      5) doctor ;;
+      5) run_menu_action doctor ;;
       6) uninstall_new_mode ;;
       0) exit 0 ;;
       "") echo "请输入选项编号。" ;;

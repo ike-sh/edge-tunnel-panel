@@ -1,105 +1,90 @@
-# EasyTier 快速配对
+# EasyTier 配对码
 
-快速配对只需要复制两段码。
+配对码用于在 B 利群主机和 A 公网入口之间传递 EasyTier network name、network secret、入口建议值和 ENTRY 返回信息。配对码包含敏感信息，不应公开。
 
-## 1. B 生成网络码
+## B 生成公网入口接入码
 
-在 `leikwan-relay`：
-
-```bash
-sudo lq pair relay-init
-```
-
-复制：
+B 生成 NETWORK 接入码时，会推荐下一个公网入口：
 
 ```text
------BEGIN LEIKWAN EASYTIER NETWORK-----
-...
------END LEIKWAN EASYTIER NETWORK-----
-```
-
-也可以复制一行 `LEIKWAN_EASYTIER_NETWORK_BASE64=...`。
-
-生成网络码前，脚本会读取现有 `entries.tsv` 并推荐唯一的公网入口名称、EasyTier IP 和 `8000-9000` 内监听端口。已有第一台入口时，第二台通常推荐：
-
-```text
-SUGGESTED_ENTRY_NAME=home
-SUGGESTED_ENTRY_ET_IP=10.198.1.3
+SUGGESTED_ENTRY_NAME=public1
+SUGGESTED_ENTRY_DISPLAY_NAME=公网1
+SUGGESTED_ENTRY_ET_IP=10.198.1.2
 SUGGESTED_EASYTIER_PROTOCOLS=tcp,udp
-SUGGESTED_EASYTIER_TCP_PORT=8302
-SUGGESTED_EASYTIER_UDP_PORT=8302
+SUGGESTED_EASYTIER_TCP_PORT=8301
+SUGGESTED_EASYTIER_UDP_PORT=8301
 SUGGESTED_EASYTIER_PROTOCOL=tcp
-SUGGESTED_EASYTIER_PORT=8302
+SUGGESTED_EASYTIER_PORT=8301
 ```
 
-新字段 `SUGGESTED_EASYTIER_PROTOCOLS` 优先，默认是 `tcp,udp`。旧网络码如果只有 `SUGGESTED_EASYTIER_PROTOCOL=tcp` 和 `SUGGESTED_EASYTIER_PORT=8301`，A 侧会继续按 TCP-only 部署。
+新字段 `SUGGESTED_EASYTIER_PROTOCOLS` 优先。旧网络码如果只有 `SUGGESTED_EASYTIER_PROTOCOL=tcp` 和 `SUGGESTED_EASYTIER_PORT=8301`，A 侧会继续按 TCP 单协议部署。
 
-生成网络码后，B 会把推荐值写入 `entries/pending-entries.tsv`。如果第一份入口码还没接回 B 就继续生成第二份，脚本会提示存在未完成入口码，并在确认后推荐下一个入口，避免 EasyTier IP / 端口重复。A 返回 ENTRY 后，B 会按 `ENTRY_ET_IP + EASYTIER_PORT` 识别这是完成 pending，而不是冲突；A 侧修改入口名称时，B 会按 ENTRY 返回名称保存并清理对应 pending。
+生成网络码后，B 会写入 pending reservation，避免连续生成时重复推荐 EasyTier IP 或端口。
 
-## 2. A 粘贴网络码并部署入口
+## A 粘贴网络码并部署入口
 
-在 `cloud-entry`：
+A 会读取网络码中的建议值，并允许修改：
 
-```bash
-sudo lq pair entry-join
-```
+- 本机公网入口名称
+- 本机 EasyTier IP
+- EasyTier 传输模式：`tcp+udp`、`tcp`、`udp`
+- EasyTier 监听端口
+- 本机公网 IP / 域名
 
-粘贴 B 的整段网络码。脚本会把网络码里的 `SUGGESTED_ENTRY_NAME`、`SUGGESTED_ENTRY_ET_IP`、`SUGGESTED_EASYTIER_PROTOCOLS`、`SUGGESTED_EASYTIER_PORT` 作为默认值，允许修改，但会校验 EasyTier IP 非空、TCP/UDP 监听端口位于 `8000-9000`。
-
-默认提示是：
+默认传输模式是 TCP+UDP，同端口监听：
 
 ```text
-EasyTier 传输模式 [tcp+udp]:
-EasyTier 监听端口（TCP+UDP，同端口，白名单 8000-9000） [8301]:
+tcp://0.0.0.0:8301
+udp://0.0.0.0:8301
 ```
 
-支持输入 `tcp+udp`、`dual`、`both`、`tcp,udp`、`tcp` 或 `udp`。`tcp+udp` 会让 A 的 `easytier-core` 同时监听 `tcp://0.0.0.0:PORT` 和 `udp://0.0.0.0:PORT`。
+EasyTier 组网端口应位于 `8000-9000`。这不是业务入口端口。
 
-完成后复制：
+## A 生成公网入口返回码
 
-```text
------BEGIN LEIKWAN EASYTIER ENTRY-----
-...
------END LEIKWAN EASYTIER ENTRY-----
-```
-
-ENTRY 码会写入新旧字段：
+A 部署成功后生成 ENTRY 返回码：
 
 ```text
+ENTRY_NAME=public1
+ENTRY_DISPLAY_NAME=公网1
+ENTRY_PUBLIC_HOST=203.0.113.10
+ENTRY_ET_IP=10.198.1.2
 EASYTIER_PROTOCOLS=tcp,udp
 EASYTIER_TCP_PORT=8301
 EASYTIER_UDP_PORT=8301
 EASYTIER_PROTOCOL=tcp
 EASYTIER_PORT=8301
+WEIGHT=100
+ENABLED=true
 ```
 
-B 侧优先读取 `EASYTIER_PROTOCOLS`。旧 ENTRY 码如果只有 `EASYTIER_PROTOCOL=tcp`，仍保持 TCP-only peer。
+B 接入 ENTRY 时优先读取 `EASYTIER_PROTOCOLS`。旧 ENTRY 如果只有 `EASYTIER_PROTOCOL=tcp`，仍保持 TCP 单协议 peer。
 
-## 3. B 粘贴入口码并接入
+## pending 与改名
 
-在 `leikwan-relay`：
+如果 pending 是：
 
-```bash
-sudo lq pair relay-join
+```text
+public2  10.198.1.3  tcp,udp  8302
 ```
 
-粘贴 A 的入口码。脚本会写入 `entries.tsv`，协议字段允许 `tcp`、`udp` 或 `tcp,udp`，并清理对应 pending。`tcp,udp` 会展开为两个 peer：`tcp://PUBLIC_HOST:PORT` 和 `udp://PUBLIC_HOST:PORT`。
+但 A 返回：
 
-保存 ENTRY 后脚本不会静默重启 relay，而是提示是否现在重启。选择立即应用后会重启 `easytier-relay.service` 并测试所有 enabled entries；选择 `N` 时请在维护窗口从 EasyTier 组网管理菜单重启 relay。
-
-多入口接入后，B 可以连接多个 enabled entry peer，但这不等于自动负载均衡。外部客户端仍然连接某个 A 的公网地址；`weight` 只用于输出排序和 PRIMARY / BACKUP 推荐。
-
-## 非交互导入
-
-```bash
-cat /root/network.env | sudo lq pair entry-join -
-cat /root/entry.env | sudo lq pair relay-join -
+```text
+ENTRY_NAME=shanghai
+ENTRY_ET_IP=10.198.1.3
+EASYTIER_PORT=8302
 ```
 
-配对码不会包含系统私钥。网络密钥会保存在本机配置中，公开故障报告前必须脱敏。
+B 会保存为 `shanghai`，并清理 `public2` pending。正式入口的 `entries.tsv` 冲突仍会被拒绝。
 
-## 端口说明
+## 输出顺序
 
-快速配对会从 `8301` 起自动寻找未使用端口，例如 `8301`、`8302`、`8303`。这是为了让 EasyTier TCP 和 UDP 连接都落在利群推荐 `8000-9000` 白名单端口段。TCP 和 UDP 默认使用同一个 EasyTier 端口。
+脚本输出配对码时会按以下顺序显示：
 
-EasyTier 组网端口不是业务入口端口。`8301` 用于 A/B EasyTier peer 建链；`10001` 这类业务入口端口用于外部客户端访问转发服务，需要在安全组或路由器上按实际端口开放 TCP+UDP。如果 UDP 不通，TCP 仍可工作；如果 TCP 受限，UDP 可能更稳定。
+1. 简短摘要
+2. 多行码
+3. 下一步提示
+4. 单行码
+
+单行码放在最后一行，方便在 SSH 终端中复制。
