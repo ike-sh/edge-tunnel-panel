@@ -93,7 +93,9 @@ A 部署后 systemd service 必须同时包含 `tcp://0.0.0.0:8301` 和 `udp://0
 1. B 上 `entries.tsv` 为空。
 2. 第一次生成推荐 `aliyun / 10.198.1.2 / tcp+udp / 8301`。
 3. 不粘贴 ENTRY，立刻第二次生成；确认继续后必须推荐 `home / 10.198.1.3 / tcp+udp / 8302`。
-4. `entries/pending-entries.tsv` 中不应重复预占同一个 EasyTier IP 或端口。
+4. 不粘贴第二份 ENTRY，立刻第三次生成；确认继续后必须推荐 `tencent / 10.198.1.4 / tcp+udp / 8303`。
+5. `entries/pending-entries.tsv` 中不应重复预占同一个 EasyTier IP 或端口。
+6. 如果 pending 为 `home 10.198.1.3 tcp,udp 8302`，但 A 返回 `ENTRY_NAME=shanghai`、`ENTRY_ET_IP=10.198.1.3`、`EASYTIER_PORT=8302`，B 必须保存 `shanghai` 并清理 `home` pending。
 
 新 A 若在“本机 EasyTier IP [10.198.1.3]”输入 `home.example.com`，应提示这是域名而不是 EasyTier 虚拟 IP，并提示 DDNS 应填在“本机公网 IP / 域名”；下一轮默认值仍是 `10.198.1.3`。
 
@@ -121,6 +123,7 @@ B 侧路径：
 9. 测试公网入口
 10. 切换主公网入口
 11. 批量启用 / 禁用公网入口
+12. 查看 / 清理未完成接入码
 0. 返回
 ```
 

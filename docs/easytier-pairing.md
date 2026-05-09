@@ -34,7 +34,7 @@ SUGGESTED_EASYTIER_PORT=8302
 
 新字段 `SUGGESTED_EASYTIER_PROTOCOLS` 优先，默认是 `tcp,udp`。旧网络码如果只有 `SUGGESTED_EASYTIER_PROTOCOL=tcp` 和 `SUGGESTED_EASYTIER_PORT=8301`，A 侧会继续按 TCP-only 部署。
 
-生成网络码后，B 会把推荐值写入 `entries/pending-entries.tsv`。如果第一份入口码还没接回 B 就继续生成第二份，脚本会提示存在未完成入口码，并在确认后推荐下一个入口，避免 EasyTier IP / 端口重复。
+生成网络码后，B 会把推荐值写入 `entries/pending-entries.tsv`。如果第一份入口码还没接回 B 就继续生成第二份，脚本会提示存在未完成入口码，并在确认后推荐下一个入口，避免 EasyTier IP / 端口重复。A 返回 ENTRY 后，B 会按 `ENTRY_ET_IP + EASYTIER_PORT` 识别这是完成 pending，而不是冲突；A 侧修改入口名称时，B 会按 ENTRY 返回名称保存并清理对应 pending。
 
 ## 2. A 粘贴网络码并部署入口
 

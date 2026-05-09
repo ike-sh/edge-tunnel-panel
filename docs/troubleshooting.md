@@ -76,7 +76,7 @@ B 粘贴 A 返回的 ENTRY 入口码，或在公网入口列表中手动添加�
 /etc/leikwan-toolkit/entries/pending-entries.tsv
 ```
 
-pending 会预占尚未接回 B 的入口名、EasyTier IP 和端口。误生成的旧 pending 超过 24 小时时，生成新码会提示清理。
+pending 会预占尚未接回 B 的入口名、EasyTier IP 和端口。A 返回 ENTRY 时，如果 `ENTRY_ET_IP + EASYTIER_PORT` 正好命中 pending，会视为完成接入并清理 pending；ENTRY 名称和 pending 名称不同也允许保存。误生成的旧 pending 超过 24 小时时，生成新码会提示清理，也可以在 `公网入口列表管理 -> 查看 / 清理未完成接入码` 手动处理。
 
 ## EasyTier 角色误操作
 

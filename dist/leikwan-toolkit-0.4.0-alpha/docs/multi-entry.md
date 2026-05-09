@@ -19,7 +19,7 @@ B 生成网络码时会读取 `entries.tsv` 并自动推荐唯一值：
 ```text
 第一台：aliyun  10.198.1.2  tcp+udp/8301
 第二台：home    10.198.1.3  tcp+udp/8302
-第三台：entry3  10.198.1.4  tcp+udp/8303
+第三台：tencent 10.198.1.4  tcp+udp/8303
 ```
 
 旧 TCP-only 入口不会被自动改写；只有新生成的入口默认使用 TCP+UDP。
@@ -30,7 +30,7 @@ B 生成网络码时会读取 `entries.tsv` 并自动推荐唯一值：
 /etc/leikwan-toolkit/entries/pending-entries.tsv
 ```
 
-pending 字段为 `name et_ip protocols port created_at`。后续推荐会同时排除已保存入口和 pending 入口；ENTRY 返回码接入后，对应 pending 自动删除。若存在超过 24 小时的 pending，脚本会提示清理。
+pending 字段为 `name et_ip protocols port created_at`。后续推荐会同时排除已保存入口和 pending 入口；ENTRY 返回码接入后，脚本按 `ENTRY_ET_IP + EASYTIER_PORT` 删除对应 pending。若 A 侧把推荐名称改掉，例如 pending 是 `home` 但 ENTRY 返回 `shanghai`，B 会保存为 `shanghai` 并清理 `home` pending。若存在超过 24 小时的 pending，脚本会提示清理，也可以在公网入口列表管理中手动查看 / 清理。
 
 ## entries.tsv
 
@@ -46,7 +46,7 @@ pending 字段为 `name et_ip protocols port created_at`。后续推荐会同时
 entry_name  public_host      et_ip        easytier_protocol  easytier_port  weight  enabled
 aliyun      192.0.2.10       10.198.1.2   tcp,udp            8301           100     true
 home        home.example.com 10.198.1.3   tcp                8302           100     true
-entry3      198.51.100.20    10.198.1.4   udp                8303           50      false
+tencent     198.51.100.20    10.198.1.4   udp                8303           50      false
 ```
 
 要求：

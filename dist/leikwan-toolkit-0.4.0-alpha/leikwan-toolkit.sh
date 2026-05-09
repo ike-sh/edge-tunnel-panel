@@ -518,14 +518,14 @@ install_packages() {
   if (( DEPS_APT_UPDATED == 0 )); then
     if ! apt-get update; then
       warn "apt-get update 失败，依赖无法自动安装：${missing[*]}"
-      warn "如果 apt 源返回 403，请换源或手动安装对应 deb 包后重试。"
+      warn "如果 apt 源返回 403 或 mirror sync in progress，请换源、稍后重试，或手动安装对应 deb 包后重试。"
       return 1
     fi
     DEPS_APT_UPDATED=1
   fi
   if ! apt-get install -y "${missing[@]}"; then
     warn "apt 安装依赖失败：${missing[*]}"
-    warn "如果 apt 源返回 403，请换源或手动安装对应 deb 包后重试。"
+    warn "如果 apt 源返回 403 或 mirror sync in progress，请换源、稍后重试，或手动安装对应 deb 包后重试。"
     return 1
   fi
   for pkg in "${missing[@]}"; do
@@ -726,17 +726,17 @@ easytier_asset_names() {
   case "$arch" in
     x86_64)
       printf '%s\n' \
-        "easytier_${no_v}_linux_amd64.tar.gz" \
-        "easytier-${version}-linux-amd64.tar.gz" \
         "easytier-linux-x86_64-${version}.zip" \
-        "easytier-linux-amd64-${version}.zip"
+        "easytier-linux-amd64-${version}.zip" \
+        "easytier_${no_v}_linux_amd64.tar.gz" \
+        "easytier-${version}-linux-amd64.tar.gz"
       ;;
     aarch64)
       printf '%s\n' \
-        "easytier_${no_v}_linux_arm64.tar.gz" \
-        "easytier-${version}-linux-arm64.tar.gz" \
         "easytier-linux-aarch64-${version}.zip" \
-        "easytier-linux-arm64-${version}.zip"
+        "easytier-linux-arm64-${version}.zip" \
+        "easytier_${no_v}_linux_arm64.tar.gz" \
+        "easytier-${version}-linux-arm64.tar.gz"
       ;;
   esac
 }
@@ -1080,7 +1080,7 @@ install_easytier_binary() {
   fi
   if ! install_packages curl jq ca-certificates tar unzip; then
     warn "依赖安装未完成，将在已有工具条件下继续尝试。"
-    warn "如果 apt 源返回 403，请换源或手动安装 curl/jq/tar/unzip/ca-certificates。"
+    warn "如果 apt 源返回 403 或 mirror sync in progress，请换源、稍后重试，或手动安装 curl/jq/tar/unzip/ca-certificates。"
   fi
   if ! command -v curl >/dev/null 2>&1; then
     fail "缺少 curl，无法自动下载 EasyTier。请先安装 curl 或上传本地二进制。"
@@ -1867,7 +1867,7 @@ prompt_pending_entries_before_generation() {
   local count
   count="$(pending_entries_count)"
   (( count > 0 )) || return 0
-  warn "检测到未完成的公网入口接入码："
+  info "当前未完成的公网入口接入码："
   display_pending_entries
   if pending_entries_have_stale; then
     warn "存在超过 24 小时的未完成入口接入码。"
@@ -1887,7 +1887,7 @@ reserve_pending_entry() {
   created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   tmp="$(mktemp)"
   pending_entries_rows | awk -F'\t' -v n="$name" -v ip="$et_ip" -v p="$port" '
-    $1==n || $2==ip || $4==p {next}
+    $1==n || ($2==ip && $4==p) {next}
     {print}
   ' >"$tmp"
   printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$et_ip" "$protocols" "$port" "$created_at" >>"$tmp"
@@ -1900,7 +1900,23 @@ clear_pending_entry_reservation() {
   [[ -f "$PENDING_ENTRIES_TSV" ]] || return 0
   tmp="$(mktemp)"
   pending_entries_rows | awk -F'\t' -v n="$name" -v ip="$et_ip" -v p="$port" '
-    $1==n || $2==ip || $4==p {next}
+    $1==n || ($2==ip && $4==p) {next}
+    {print}
+  ' >"$tmp"
+  if [[ -s "$tmp" ]]; then
+    write_file "$PENDING_ENTRIES_TSV" "$(cat "$tmp")" 600
+  else
+    rm -f "$PENDING_ENTRIES_TSV"
+  fi
+  rm -f "$tmp"
+}
+
+clear_pending_entry_exact() {
+  local name="$1" et_ip="$2" port="$3" tmp
+  [[ -f "$PENDING_ENTRIES_TSV" ]] || return 0
+  tmp="$(mktemp)"
+  pending_entries_rows | awk -F'\t' -v n="$name" -v ip="$et_ip" -v p="$port" '
+    $1==n && $2==ip && $4==p {next}
     {print}
   ' >"$tmp"
   if [[ -s "$tmp" ]]; then
@@ -1922,6 +1938,7 @@ next_entry_name() {
   case "$count" in
     0) candidate="aliyun" ;;
     1) candidate="home" ;;
+    2) candidate="tencent" ;;
     *) candidate="entry$((count + 1))" ;;
   esac
   if ! entry_name_reserved "$candidate"; then
@@ -1977,7 +1994,7 @@ relay_network_env_ready() {
   [[ "$role" == "leikwan-relay" && -n "$network_name" && -n "$network_secret" ]]
 }
 
-validate_unique_entry_fields() {
+validate_entry_official_fields() {
   local name="$1" et_ip="$2" port="$3" current_name="${4:-}"
   [[ -n "$name" ]] || { warn "公网入口名称不能为空。"; return 1; }
   [[ -n "$et_ip" ]] || { warn "EasyTier IP 不能为空。"; return 1; }
@@ -1995,27 +2012,43 @@ validate_unique_entry_fields() {
     warn "公网入口名称已存在：${name}"
     return 1
   fi
-  if pending_entries_rows | awk -F'\t' -v n="$name" -v cur="$current_name" '$1==n && $1!=cur {found=1} END{exit !found}'; then
-    warn "公网入口名称已被未完成接入码预占：${name}"
-    return 1
-  fi
   if entries_rows | awk -F'\t' -v ip="$et_ip" -v cur="$current_name" '$3==ip && $1!=cur {found=1} END{exit !found}'; then
     warn "EasyTier IP 已被使用：${et_ip}"
-    return 1
-  fi
-  if pending_entries_rows | awk -F'\t' -v ip="$et_ip" -v cur="$current_name" '$2==ip && $1!=cur {found=1} END{exit !found}'; then
-    warn "EasyTier IP 已被未完成接入码预占：${et_ip}"
     return 1
   fi
   if entries_rows | awk -F'\t' -v p="$port" -v cur="$current_name" '$5==p && $1!=cur {found=1} END{exit !found}'; then
     warn "EasyTier 端口已被使用：${port}"
     return 1
   fi
-  if pending_entries_rows | awk -F'\t' -v p="$port" -v cur="$current_name" '$4==p && $1!=cur {found=1} END{exit !found}'; then
+  return 0
+}
+
+validate_unique_entry_fields() {
+  local name="$1" et_ip="$2" port="$3" current_name="${4:-}"
+  validate_entry_official_fields "$name" "$et_ip" "$port" "$current_name" || return 1
+  if pending_entries_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}'; then
+    warn "公网入口名称已被未完成接入码预占：${name}"
+    return 1
+  fi
+  if pending_entries_rows | awk -F'\t' -v ip="$et_ip" '$2==ip {found=1} END{exit !found}'; then
+    warn "EasyTier IP 已被未完成接入码预占：${et_ip}"
+    return 1
+  fi
+  if pending_entries_rows | awk -F'\t' -v p="$port" '$4==p {found=1} END{exit !found}'; then
     warn "EasyTier 端口已被未完成接入码预占：${port}"
     return 1
   fi
   return 0
+}
+
+pending_entry_by_ip_port() {
+  local et_ip="$1" port="$2"
+  pending_entries_rows | awk -F'\t' -v ip="$et_ip" -v p="$port" '$2==ip && $4==p {print; exit}'
+}
+
+pending_entry_by_name() {
+  local name="$1"
+  pending_entries_rows | awk -F'\t' -v n="$name" '$1==n {print; exit}'
 }
 
 replace_entry_row() {
@@ -2085,7 +2118,7 @@ quick_generate_network_pairing() {
       fi
     done
   else
-    validate_unique_entry_fields "$suggested_name" "$suggested_ip" "$suggested_port" "" || return 1
+    validate_unique_entry_fields "$suggested_name" "$suggested_ip" "$suggested_port" "" || return 0
   fi
   if (( has_network == 0 )); then
     write_file "$NETWORK_ENV" "ROLE=leikwan-relay
@@ -2212,29 +2245,54 @@ quick_deploy_relay_from_entry_pairing() {
   need_root_unless_dry_run
   ensure_base_dirs
   guard_relay_join_role || return 0
-  [[ -f "$NETWORK_ENV" ]] || { fail "缺少 ${NETWORK_ENV}，请先在 B 执行 pair relay-init。"; return 1; }
+  [[ -f "$NETWORK_ENV" ]] || { fail "缺少 ${NETWORK_ENV}，请先在 B 执行 pair relay-init。"; return 0; }
   local source="${1:-}" tmp role name public_host et_ip proto port weight enabled row
+  local pending_match pending_same_name pending_name pending_et_ip _pending_proto pending_port _pending_created_at
+  local same_name pending_same_et_ip pending_same_proto pending_same_port _pending_same_created_at
   tmp="$(mktemp)"
-  read_pairing_code "$tmp" "A 公网入口机" "-----END LEIKWAN EASYTIER ENTRY-----" "LEIKWAN_EASYTIER_ENTRY_BASE64" "$source" || { rm -f "$tmp"; return 1; }
+  read_pairing_code "$tmp" "A 公网入口机" "-----END LEIKWAN EASYTIER ENTRY-----" "LEIKWAN_EASYTIER_ENTRY_BASE64" "$source" || { rm -f "$tmp"; return 0; }
   role="$(env_file_get "$tmp" ROLE)"
   case "$role" in
     cloud-entry) ;;
-    leikwan-relay) fail "你粘贴的是网络码，需要在 A 公网入口选择第 3 项。"; rm -f "$tmp"; return 1 ;;
-    *) fail "这不是 EasyTier 入口码，请确认粘贴的是 A 生成的那段。"; rm -f "$tmp"; return 1 ;;
+    leikwan-relay) fail "你粘贴的是网络码，需要在 A 公网入口选择第 3 项。"; rm -f "$tmp"; return 0 ;;
+    *) fail "这不是 EasyTier 入口码，请确认粘贴的是 A 生成的那段。"; rm -f "$tmp"; return 0 ;;
   esac
-  require_pairing_fields "$tmp" PAIRING_VERSION ROLE ENTRY_NAME ENTRY_PUBLIC_HOST ENTRY_ET_IP || { rm -f "$tmp"; return 1; }
+  require_pairing_fields "$tmp" PAIRING_VERSION ROLE ENTRY_NAME ENTRY_PUBLIC_HOST ENTRY_ET_IP || { rm -f "$tmp"; return 0; }
   name="$(safe_name "$(env_file_get "$tmp" ENTRY_NAME)")"
   public_host="$(env_file_get "$tmp" ENTRY_PUBLIC_HOST)"
   et_ip="$(env_file_get "$tmp" ENTRY_ET_IP)"
-  proto="$(easytier_protocols_from_env "$tmp" EASYTIER_PROTOCOLS EASYTIER_PROTOCOL "$EASYTIER_PROTOCOLS_DEFAULT")" || { fail "入口码里的 EasyTier 传输模式无效。"; rm -f "$tmp"; return 1; }
-  port="$(easytier_port_from_env "$tmp" "$proto" EASYTIER_TCP_PORT EASYTIER_UDP_PORT EASYTIER_PORT)" || { rm -f "$tmp"; return 1; }
-  validate_unique_entry_fields "$name" "$et_ip" "$port" "$name" || { rm -f "$tmp"; return 1; }
+  proto="$(easytier_protocols_from_env "$tmp" EASYTIER_PROTOCOLS EASYTIER_PROTOCOL "$EASYTIER_PROTOCOLS_DEFAULT")" || { fail "入口码里的 EasyTier 传输模式无效。"; rm -f "$tmp"; return 0; }
+  port="$(easytier_port_from_env "$tmp" "$proto" EASYTIER_TCP_PORT EASYTIER_UDP_PORT EASYTIER_PORT)" || { rm -f "$tmp"; return 0; }
+  pending_match="$(pending_entry_by_ip_port "$et_ip" "$port")"
+  pending_same_name="$(pending_entry_by_name "$name")"
+  if [[ -n "$pending_same_name" ]]; then
+    IFS=$'\t' read -r same_name pending_same_et_ip pending_same_proto pending_same_port _pending_same_created_at <<<"$pending_same_name"
+    if [[ "$pending_same_et_ip" != "$et_ip" || "$pending_same_port" != "$port" ]]; then
+      warn "未完成接入码同名但 EasyTier IP / 端口不同：${same_name} ${pending_same_et_ip} $(easytier_protocols_display "$pending_same_proto")/${pending_same_port}"
+      warn "ENTRY 返回码为：${name} ${et_ip}/${port}。"
+      if ! prompt_yes_no "是否忽略这条 pending 并继续保存 ENTRY？" "N"; then
+        rm -f "$tmp"
+        return 0
+      fi
+    fi
+  fi
+  if ! validate_entry_official_fields "$name" "$et_ip" "$port" "$name"; then
+    rm -f "$tmp"
+    return 0
+  fi
   weight="$(env_file_get "$tmp" WEIGHT)"; weight="${weight:-100}"
   enabled="$(env_file_get "$tmp" ENABLED)"; enabled="${enabled:-true}"
   confirm_summary "relay 接入入口摘要" "入口名称：${name}\n入口公网：${public_host}:${port}\n入口 EasyTier 监听：$(easytier_protocols_display "$proto")/${port}\n入口 EasyTier IP：${et_ip}\nRelay EasyTier IP：${RELAY_ET_IP}" || { rm -f "$tmp"; return 0; }
   row="${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
   replace_entry_row "$row"
-  clear_pending_entry_reservation "$name" "$et_ip" "$port"
+  if [[ -n "$pending_match" ]]; then
+    IFS=$'\t' read -r pending_name pending_et_ip _pending_proto pending_port _pending_created_at <<<"$pending_match"
+    clear_pending_entry_exact "$pending_name" "$pending_et_ip" "$pending_port"
+    ok "已清理未完成接入码预占：${pending_name} / ${pending_et_ip} / ${pending_port}"
+    if [[ "$pending_name" != "$name" ]]; then
+      info "ENTRY 名称 ${name} 与 pending 名称 ${pending_name} 不同，已按返回码名称保存。"
+    fi
+  fi
   ok "已保存入口配置：${name}。"
   prompt_apply_relay_after_entry_change || { rm -f "$tmp"; return 1; }
   info "下一步：在 A 公网入口配置端口池后，回到 B 利群主机添加后端转发目标。"
@@ -2442,6 +2500,68 @@ bulk_entry_enable_menu() {
         return 0
         ;;
       4|0|"") return 0 ;;
+      *) warn "无效选择。" ;;
+    esac
+  done
+}
+
+select_pending_entry() {
+  local count choice row
+  count="$(pending_entries_count)"
+  (( count > 0 )) || { warn "当前没有未完成接入码。" >&2; return 1; }
+  echo >&2
+  echo "未完成接入码：" >&2
+  display_pending_entries >&2
+  echo >&2
+  choice="$(prompt_menu_choice "请输入编号、名称或 EasyTier IP，直接回车返回:")"
+  choice="$(normalize_menu_choice "$choice")"
+  [[ -n "$choice" ]] || return 1
+  if [[ "$choice" =~ ^[0-9]+$ ]]; then
+    row="$(pending_entries_rows | awk -v n="$choice" 'NR==n {print; found=1} END{exit !found}')"
+    [[ -n "$row" ]] || { warn "编号无效，请重新选择。" >&2; return 1; }
+  else
+    row="$(pending_entries_rows | awk -F'\t' -v q="$choice" '$1==q || $2==q {print; found=1; exit} END{exit !found}')"
+    [[ -n "$row" ]] || { warn "未完成接入码不存在：${choice}" >&2; return 1; }
+  fi
+  printf '%s\n' "$row"
+}
+
+pending_entries_menu() {
+  need_root_unless_dry_run
+  ensure_base_dirs
+  local choice row name et_ip proto port created_at count
+  while true; do
+    echo
+    if (( $(pending_entries_count) > 0 )); then
+      echo "${BOLD}未完成接入码：${RESET}"
+      display_pending_entries
+    else
+      warn "当前没有未完成接入码。"
+    fi
+    echo
+    echo "1. 清理指定未完成接入码"
+    echo "2. 清理所有未完成接入码"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1)
+        if row="$(select_pending_entry)"; then
+          IFS=$'\t' read -r name et_ip proto port created_at <<<"$row"
+          if prompt_yes_no "确认清理未完成接入码预占 ${name} / ${et_ip} / ${port}？" "N"; then
+            clear_pending_entry_exact "$name" "$et_ip" "$port"
+            ok "已清理未完成接入码预占：${name} / ${et_ip} / ${port}"
+          fi
+        fi
+        ;;
+      2)
+        count="$(pending_entries_count)"
+        (( count > 0 )) || { warn "当前没有未完成接入码可清理。"; continue; }
+        if prompt_yes_no "确认清理所有未完成接入码预占？" "N"; then
+          rm -f "$PENDING_ENTRIES_TSV"
+          ok "已清理所有未完成接入码预占。"
+        fi
+        ;;
+      0|"") return 0 ;;
       *) warn "无效选择。" ;;
     esac
   done
@@ -4628,6 +4748,7 @@ entries_menu() {
     echo "9. 测试公网入口"
     echo "10. 切换主公网入口"
     echo "11. 批量启用 / 禁用公网入口"
+    echo "12. 查看 / 清理未完成接入码"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -4642,7 +4763,8 @@ entries_menu() {
       9) test_entries ;;
       10) switch_primary_entry ;;
       11) bulk_entry_enable_menu ;;
-      12|0) return 0 ;;
+      12) pending_entries_menu ;;
+      13|0) return 0 ;;
     esac
   done
 }

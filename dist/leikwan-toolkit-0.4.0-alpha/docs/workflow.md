@@ -51,7 +51,7 @@ curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leik
 
 B 侧菜单 `公网入口列表管理` 的“手动添加公网入口（高级）”只适合明确知道 `entries.tsv` 字段含义的用户。
 
-连续生成多个入口码时，脚本会把已推荐但尚未接回 B 的入口写入 `entries/pending-entries.tsv`。后续推荐会同时排除 `entries.tsv` 和 pending 记录，所以可以连续生成 `aliyun 10.198.1.2 tcp+udp/8301`、`home 10.198.1.3 tcp+udp/8302`，不会重复。A 的 ENTRY 码接回 B 后，对应 pending 会自动清理。
+连续生成多个入口码时，脚本会把已推荐但尚未接回 B 的入口写入 `entries/pending-entries.tsv`。后续推荐会同时排除 `entries.tsv` 和 pending 记录，所以可以连续生成 `aliyun 10.198.1.2 tcp+udp/8301`、`home 10.198.1.3 tcp+udp/8302`、`tencent 10.198.1.4 tcp+udp/8303`，不会重复。A 的 ENTRY 码接回 B 后，会按 `ENTRY_ET_IP + EASYTIER_PORT` 清理对应 pending；如果 A 侧改了入口名称，则按 ENTRY 返回名称保存。
 
 ## 公网入口列表管理
 
@@ -67,6 +67,7 @@ B 侧菜单 `公网入口列表管理` 的“手动添加公网入口（高级�
 9. 测试公网入口
 10. 切换主公网入口
 11. 批量启用 / 禁用公网入口
+12. 查看 / 清理未完成接入码
 0. 返回
 ```
 

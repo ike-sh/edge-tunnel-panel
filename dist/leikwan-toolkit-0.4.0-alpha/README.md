@@ -71,7 +71,7 @@ GitHub : https://github.com/ike-sh/leikwan-toolkit
 4. B 执行第 4 项，粘贴 A 返回的 ENTRY 入口码；默认只保存 `entries.tsv`，不会自动重启 relay。
 5. B 进入 `利群主机 -> 公网入口列表管理` 查看或测试入口。
 
-连续生成多个公网入口接入码时，脚本会写入 `entries/pending-entries.tsv` 作为预占记录。第一份未接回 B 前，再生成第二份会提示存在未完成接入码；确认继续后会推荐下一个入口名、EasyTier IP 和端口，避免重复使用 `aliyun / 10.198.1.2 / 8301`。
+连续生成多个公网入口接入码时，脚本会写入 `entries/pending-entries.tsv` 作为预占记录。第一份未接回 B 前，再生成第二份会提示存在未完成接入码；确认继续后会推荐下一个入口名、EasyTier IP 和端口，避免重复使用 `aliyun / 10.198.1.2 / 8301`。A 返回 ENTRY 时会按 `ENTRY_ET_IP + EASYTIER_PORT` 完成并清理对应 pending；即使 A 侧把默认名称 `home` 改成 `shanghai`，也会按返回码名称保存。可在 `公网入口列表管理 -> 查看 / 清理未完成接入码` 手动查看或清理 pending。
 
 如果需要立即应用新入口，脚本会明确提示重启 EasyTier relay 会短暂中断所有已接入入口，并要求用户确认；建议在维护窗口执行。
 
