@@ -1,6 +1,6 @@
 # 验收清单
 
-本页用于 Leikwan Toolkit 1.0.0 正式版验收。
+本页用于 Leikwan Toolkit 1.0.1 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.0.0"
-leikwan-toolkit 1.0.0
+TOOL_VERSION="1.0.1"
+leikwan-toolkit 1.0.1
 ```
 
 ## 打包
@@ -29,8 +29,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.0.0.tar.gz
-dist/leikwan-toolkit-1.0.0.tar.gz.sha256
+dist/leikwan-toolkit-1.0.1.tar.gz
+dist/leikwan-toolkit-1.0.1.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -41,9 +41,10 @@ release 包不得包含旧入口文件：
 
 1. B 生成公网入口接入码，默认推荐 `public1 / 公网1 / 10.198.1.2 / tcp+udp / 8301`。
 2. 不粘贴 ENTRY，继续生成第二份，推荐 `public2 / 公网2 / 10.198.1.3 / tcp+udp / 8302`。
-3. A 粘贴网络码部署入口，systemd service 同时包含 TCP 和 UDP listener。
-4. A 返回 ENTRY 后，B 能保存入口并清理 pending。
-5. ENTRY 名称和 pending 名称不同也能保存并清理命中的 pending。
+3. 如果已有旧入口 `aliyun -> 10.198.1.2/8301` 和 `home -> 10.198.1.3/8302`，下一台必须推荐 `public3 / 公网3 / 10.198.1.4 / 8303`。
+4. A 粘贴网络码部署入口，systemd service 同时包含 TCP 和 UDP listener。
+5. A 返回 ENTRY 后，B 能保存入口并清理 pending。
+6. ENTRY 名称和 pending 名称不同也能保存并清理命中的 pending。
 
 ## 多公网入口
 
@@ -76,6 +77,7 @@ public2  203.0.113.20   10.198.1.3  tcp,udp  8302  100  true
 
 - 主菜单显示清晰 banner。
 - 子菜单不重复大 banner。
+- 菜单进入前会清屏；`LEIKWAN_NO_CLEAR=1 lq` 可禁用清屏。
 - 快速组网说明简洁。
 - 生成 NETWORK / ENTRY 配对码后，单行码停留在最后一行，并提示按回车返回。
 - doctor、debug report、转发入口输出等长输出后等待回车返回菜单。

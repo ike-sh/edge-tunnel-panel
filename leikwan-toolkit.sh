@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.0.0"
+TOOL_VERSION="1.0.1"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
-PROJECT_AUTHOR="ike-sh"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
 
 DRY_RUN=0
@@ -170,8 +169,13 @@ is_interactive() {
 }
 
 clear_screen_if_interactive() {
+  [[ "${LEIKWAN_NO_CLEAR:-0}" == "1" ]] && return 0
   [[ -t 1 ]] || return 0
-  printf '\033[H\033[2J'
+  if command -v tput >/dev/null 2>&1 && [[ -n "${TERM:-}" && "${TERM:-}" != "dumb" ]]; then
+    tput clear || printf '\033[H\033[2J'
+  else
+    printf '\033[H\033[2J'
+  fi
 }
 
 wait_enter_to_return() {
@@ -187,6 +191,22 @@ print_compact_header() {
   echo
   echo "${BOLD}${title}${RESET}"
   echo "----------------------------------------"
+}
+
+print_menu_header() {
+  local title="$1"
+  clear_screen_if_interactive
+  print_compact_header "$title"
+}
+
+menu_input_required() {
+  warn "请输入选项编号。"
+  wait_enter_to_return
+}
+
+menu_invalid_choice() {
+  warn "无效选择。"
+  wait_enter_to_return
 }
 
 run_menu_action() {
@@ -451,13 +471,10 @@ confirm_summary() {
 
 print_banner() {
   cat <<EOF
-╔════════════════════════════════════════════════════════════════════╗
-║ Leikwan Toolkit                                                   ║
-║ ${PROJECT_TITLE}                                                  ║
-║ Author : ${PROJECT_AUTHOR}                                                   ║
-║ Version: ${TOOL_VERSION}                                              ║
-║ GitHub : ${PROJECT_GITHUB}             ║
-╚════════════════════════════════════════════════════════════════════╝
+Leikwan Toolkit ${TOOL_VERSION}
+${PROJECT_TITLE}
+GitHub: ${PROJECT_GITHUB}
+-------------------------------------------------
 EOF
 }
 
@@ -2032,21 +2049,16 @@ forward_exists() {
 }
 
 next_entry_name() {
-  local candidate n
-  for ((n=1; n<=254; n++)); do
-    candidate="public${n}"
-    if ! entry_name_reserved "$candidate"; then
-      printf '%s' "$candidate"
-      return 0
-    fi
-  done
-  return 1
+  local slot
+  slot="$(next_entry_slot)" || return 1
+  printf 'public%s' "$slot"
 }
 
 next_entry_et_ip() {
-  local prefix="10.198.1" last ip
-  for ((last=2; last<=254; last++)); do
-    ip="${prefix}.${last}"
+  local prefix="10.198.1" slot ip
+  slot="$(next_entry_slot)" || return 1
+  for ((; slot<=253; slot++)); do
+    ip="${prefix}.$((slot + 1))"
     if ! entry_et_ip_reserved "$ip"; then
       printf '%s' "$ip"
       return 0
@@ -2056,8 +2068,11 @@ next_entry_et_ip() {
 }
 
 next_entry_easytier_port() {
-  local port
-  for ((port=DEFAULT_EASYTIER_PORT; port<=FAST_PORT_RANGE_END; port++)); do
+  local slot port
+  slot="$(next_entry_slot)" || return 1
+  for ((; slot<=253; slot++)); do
+    port=$((DEFAULT_EASYTIER_PORT + slot - 1))
+    (( port <= FAST_PORT_RANGE_END )) || break
     if ! entry_easytier_port_reserved "$port"; then
       printf '%s' "$port"
       return 0
@@ -2070,6 +2085,44 @@ next_entry_easytier_port() {
     fi
   done
   return 1
+}
+
+entry_slot_from_fields() {
+  local name="$1" et_ip="$2" port="$3" slot
+  if [[ "$name" =~ ^public([0-9]+)$ ]]; then
+    slot="${BASH_REMATCH[1]}"
+    (( slot >= 1 && slot <= 253 )) && printf '%s\n' "$slot"
+  fi
+  if [[ "$et_ip" =~ ^10\.198\.1\.([0-9]+)$ ]]; then
+    slot=$((BASH_REMATCH[1] - 1))
+    (( slot >= 1 && slot <= 253 )) && printf '%s\n' "$slot"
+  fi
+  if [[ "$port" =~ ^[0-9]+$ ]]; then
+    slot=$((port - DEFAULT_EASYTIER_PORT + 1))
+    (( slot >= 1 && slot <= 253 )) && printf '%s\n' "$slot"
+  fi
+}
+
+entry_reserved_slots() {
+  local name public_host et_ip proto port weight enabled created_at
+  while IFS=$'\t' read -r name public_host et_ip proto port weight enabled; do
+    entry_slot_from_fields "$name" "$et_ip" "$port"
+  done < <(entries_rows)
+  while IFS=$'\t' read -r name et_ip proto port created_at; do
+    entry_slot_from_fields "$name" "$et_ip" "$port"
+  done < <(pending_entries_rows)
+}
+
+highest_reserved_entry_slot() {
+  entry_reserved_slots | awk 'BEGIN{m=0} $1 ~ /^[0-9]+$/ && $1>m {m=$1} END{print m+0}'
+}
+
+next_entry_slot() {
+  local slot
+  slot="$(highest_reserved_entry_slot)"
+  slot=$((slot + 1))
+  (( slot >= 1 && slot <= 253 )) || return 1
+  printf '%s' "$slot"
 }
 
 relay_network_env_ready() {
@@ -2411,7 +2464,7 @@ pairing_status() {
 pairing_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}快速配对${RESET}"
+    print_menu_header "快速配对"
     echo "1. 在 B 运行：生成给 A 的网络码"
     echo "2. 在 A 运行：粘贴 B 的网络码，部署 A"
     echo "3. 在 B 运行：粘贴 A 的入口码，完成接入"
@@ -2424,8 +2477,8 @@ pairing_menu() {
       3) run_menu_action quick_deploy_relay_from_entry_pairing ;;
       4) run_menu_action pairing_status ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -2557,7 +2610,7 @@ switch_primary_entry() {
       prompt_apply_relay_after_entry_change
       ;;
     3|0|"") return 0 ;;
-    *) warn "无效选择。" ;;
+    *) menu_invalid_choice ;;
   esac
 }
 
@@ -2568,8 +2621,7 @@ bulk_entry_enable_menu() {
   count="$(entries_rows | awk 'END{print NR+0}')"
   (( count > 0 )) || { warn "当前没有公网入口。"; return 0; }
   while true; do
-    echo
-    echo "${BOLD}批量操作：${RESET}"
+    print_menu_header "批量操作"
     echo "1. 启用所有公网入口"
     echo "2. 禁用所有公网入口"
     echo "3. 只保留一个入口 enabled，其它全部 disabled"
@@ -2601,7 +2653,7 @@ bulk_entry_enable_menu() {
         return 0
         ;;
       4|0|"") return 0 ;;
-      *) warn "无效选择。" ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -2632,9 +2684,8 @@ pending_entries_menu() {
   ensure_base_dirs
   local choice row name et_ip proto port created_at count
   while true; do
-    echo
+    print_menu_header "未完成接入码"
     if (( $(pending_entries_count) > 0 )); then
-      echo "${BOLD}未完成接入码：${RESET}"
       display_pending_entries
     else
       warn "当前没有未完成接入码。"
@@ -2663,7 +2714,7 @@ pending_entries_menu() {
         fi
         ;;
       0|"") return 0 ;;
-      *) warn "无效选择。" ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -2747,16 +2798,46 @@ test_entries() {
   done < <(entries_rows | awk -F'\t' -v n="$name" '$1==n')
 }
 
+entry_connectivity_ready_once() {
+  local name="$1" public_host="$2" et_ip="$3" proto="$4" port="$5"
+  local peer_ok=1 ping_ok=1 tcp_ok=0
+  wait_entry_peer_visible "$name" "$public_host" "$et_ip" "$proto" "$port" 1 0 && peer_ok=0
+  ping -c 1 -W 2 "$et_ip" >/dev/null 2>&1 && ping_ok=0
+  if easytier_protocols_has "$proto" tcp; then
+    [[ "$(tcp_reachable_status "$public_host" "$port")" == "0" ]] || tcp_ok=1
+  fi
+  (( ping_ok == 0 && tcp_ok == 0 )) && return 0
+  (( peer_ok == 0 && ping_ok == 0 )) && return 0
+  return 1
+}
+
+test_enabled_entry_with_retry() {
+  local name="$1" public_host="$2" et_ip="$3" proto="$4" port="$5" enabled="$6" attempts="${7:-10}" interval="${8:-3}"
+  local i
+  echo
+  emit_entry_peer_targets "$name" "$public_host" "$proto" "$port" plain
+  for ((i=1; i<=attempts; i++)); do
+    info "等待入口 ${name} 连通：第 ${i}/${attempts} 次..."
+    if entry_connectivity_ready_once "$name" "$public_host" "$et_ip" "$proto" "$port"; then
+      ok "入口 ${name} 已连通。"
+      check_entry_peer_connectivity "$name" "$public_host" "$et_ip" "$proto" "$port" plain || true
+      test_entry_row "$name" "$public_host" "$et_ip" "$proto" "$port" "$enabled" no
+      return 0
+    fi
+    (( i < attempts )) && sleep "$interval"
+  done
+  check_entry_peer_connectivity "$name" "$public_host" "$et_ip" "$proto" "$port" plain || true
+  test_entry_row "$name" "$public_host" "$et_ip" "$proto" "$port" "$enabled" no
+}
+
 test_all_enabled_entries() {
+  local attempts="${1:-10}" interval="${2:-3}"
   local name public_host et_ip proto port _weight enabled tested=0
   ensure_nc_for_test || true
   while IFS=$'\t' read -r name public_host et_ip proto port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
     tested=1
-    echo
-    emit_entry_peer_targets "$name" "$public_host" "$proto" "$port" plain
-    check_entry_peer_connectivity "$name" "$public_host" "$et_ip" "$proto" "$port" plain || true
-    test_entry_row "$name" "$public_host" "$et_ip" "$proto" "$port" "$enabled" no
+    test_enabled_entry_with_retry "$name" "$public_host" "$et_ip" "$proto" "$port" "$enabled" "$attempts" "$interval"
   done < <(entries_rows)
   (( tested == 1 )) || warn "没有 enabled 公网入口可测试。"
 }
@@ -3742,7 +3823,7 @@ cleanup_nftables_rules() {
 nftables_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}nftables 规则管理${RESET}"
+    print_menu_header "nftables 规则管理"
     echo "1. 查看当前 nftables 规则"
     echo "2. 重新应用公网入口规则"
     echo "3. 重新应用利群转发规则"
@@ -3755,8 +3836,8 @@ nftables_menu() {
       3) apply_nft_rules "leikwan-relay" || warn "利群转发 nftables 规则未应用成功。" ;;
       4) cleanup_nftables_rules ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -4258,6 +4339,46 @@ report_entry_policy_summary() {
   fi
 }
 
+doctor_recheck_relay_dnat_rules() {
+  local name entry_port target_host target_ip target_port out_iface route_table enabled _last_resolved_at comment
+  local dnat_missing=0
+  if nft_has_dnat_rules; then
+    report OK "nftables DNAT 规则复查：存在"
+  else
+    report WARN "nftables DNAT 规则复查：仍未发现 DNAT"
+    return 1
+  fi
+  resolve_forwards >/dev/null 2>&1 || { report WARN "resolved.tsv 复查失败，无法逐条确认 DNAT。"; return 1; }
+  while IFS=$'\034' read -r name entry_port target_host target_ip target_port out_iface route_table enabled _last_resolved_at comment; do
+    [[ "$enabled" == "true" && -n "$target_ip" ]] || continue
+    if ! nft_has_relay_dnat tcp "$entry_port" "$target_ip" "$target_port"; then
+      report WARN "${name} relay TCP DNAT 复查仍缺失"
+      dnat_missing=1
+    fi
+    if ! nft_has_relay_dnat udp "$entry_port" "$target_ip" "$target_port"; then
+      report WARN "${name} relay UDP DNAT 复查仍缺失"
+      dnat_missing=1
+    fi
+  done < <(resolved_rows_usv)
+  (( dnat_missing == 0 )) && report OK "转发 DNAT 规则复查通过"
+  return "$dnat_missing"
+}
+
+doctor_offer_forward_rule_fix() {
+  local fix_needed="$1"
+  (( fix_needed == 1 )) || return 0
+  report INFO "检测到转发规则可能是旧版本模板，请执行：lq forward apply-relay --auto-fix-route"
+  is_interactive || return 0
+  if prompt_yes_no "是否立即重新应用转发规则并同步 route_table？" "Y"; then
+    if apply_nft_rules "leikwan-relay" 1; then
+      report OK "已重新应用转发规则并同步 route_table。"
+      doctor_recheck_relay_dnat_rules || true
+    else
+      report WARN "转发规则重新应用失败，请稍后执行：lq forward apply-relay --auto-fix-route"
+    fi
+  fi
+}
+
 doctor_cloud() {
   report OK "角色：cloud-entry"
   local entry_ip proto port iface service_name relay_ip start end
@@ -4325,6 +4446,7 @@ doctor_relay() {
   report OK "角色：leikwan-relay"
   local iface entries forwards name public_host et_ip proto port _weight enabled target_ip target_port
   local entry_port target_host out_iface route_table comment
+  local forward_rule_fix_needed=0
   if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then
     report OK "EasyTier binary 存在"
     report INFO "easytier-core: ${EASYTIER_CORE_BIN}"
@@ -4360,8 +4482,11 @@ doctor_relay() {
   if sysctl -n net.ipv4.ip_forward 2>/dev/null | grep -qx 1; then report OK "net.ipv4.ip_forward=1"; else report WARN "net.ipv4.ip_forward 未启用"; fi
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
     report OK "nftables table inet leikwan_forward 存在"
-    if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; fi
+    if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; forward_rule_fix_needed=1; fi
     report_mss_clamp_status
+    if mss_clamp_enabled && ! nft_has_mss_clamp; then
+      forward_rule_fix_needed=1
+    fi
   else
     report WARN "nftables 项目表不存在"
   fi
@@ -4401,17 +4526,20 @@ doctor_relay() {
           report OK "${name} relay TCP DNAT 正常"
         else
           report FAIL "${name} relay TCP DNAT 缺失：应为 tcp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
+          forward_rule_fix_needed=1
         fi
         if nft_has_relay_dnat udp "$entry_port" "$target_ip" "$target_port"; then
           report OK "${name} relay UDP DNAT 正常"
         else
           report WARN "${name} relay UDP DNAT 缺失：应为 udp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
+          forward_rule_fix_needed=1
         fi
       fi
     done < <(resolved_rows_usv)
   else
     report FAIL "resolved.tsv 更新失败，请检查 target_host 解析。"
   fi
+  doctor_offer_forward_rule_fix "$forward_rule_fix_needed"
   [[ -f "$NETWORK_PAIRING_FILE" ]] && report OK "relay 网络码：已生成"
 }
 
@@ -4548,7 +4676,7 @@ ipv6_lockdown() {
 bbr_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}BBR / 系统优化${RESET}"
+    print_menu_header "BBR / 系统优化"
     echo "1. 查看状态"; echo "2. 启用 BBR + fq"; echo "3. 恢复默认"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -4563,7 +4691,7 @@ bbr_menu() {
 link_test_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}链路测试${RESET}"
+    print_menu_header "链路测试"
     echo "1. ping relay EasyTier IP"; echo "2. ping 所有入口 EasyTier IP"; echo "3. 测入口 EasyTier TCP/UDP"; echo "4. 测后端 target"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -4621,7 +4749,7 @@ legacy_cleanup_menu() {
   need_root
   local choice
   while true; do
-    echo; echo "${BOLD}legacy 清理（默认不执行）${RESET}"
+    print_menu_header "legacy 清理（默认不执行）"
     echo "1. 清理旧内核隧道残留"
     echo "2. 清理旧 UDP 加速残留"
     echo "3. 清理旧端口代理残留"
@@ -4909,7 +5037,7 @@ restore_snapshot() {
 backup_restore_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}备份 / 恢复${RESET}"
+    print_menu_header "备份 / 恢复"
     echo "1. 生成配置快照"; echo "2. 从快照恢复"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -4923,7 +5051,7 @@ backup_restore_menu() {
 easytier_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}EasyTier 组网管理${RESET}"
+    print_menu_header "EasyTier 组网管理"
     echo "1. 安装 / 修复 EasyTier"; echo "2. B 生成网络码"; echo "3. A 粘贴网络码并部署入口"; echo "4. B 粘贴入口码并完成接入"; echo "5. 启动 / 重启 entry 服务"; echo "6. 启动 / 重启 relay 服务"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -4941,7 +5069,7 @@ easytier_menu() {
 entries_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}公网入口列表管理（B 侧）${RESET}"
+    print_menu_header "公网入口列表管理（B 侧）"
     echo "1. 生成新公网入口接入码"
     echo "2. 粘贴公网入口返回码并接入"
     echo "3. 手动添加公网入口（高级）"
@@ -4977,7 +5105,7 @@ entries_menu() {
 forwards_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}转发目标管理${RESET}"
+    print_menu_header "转发目标管理"
     echo "1. 添加转发目标"
     echo "2. 修改转发目标"
     echo "3. 删除转发目标"
@@ -5011,7 +5139,7 @@ forwards_menu() {
 pbr_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}IPv4 多出口策略路由 / PBR${RESET}"
+    print_menu_header "IPv4 多出口策略路由 / PBR"
     echo "1. 添加静态 PBR"
     echo "2. 从现有转发目标添加 PBR"
     echo "3. 删除 PBR 规则"
@@ -5033,12 +5161,43 @@ pbr_menu() {
 install_shortcuts() {
   need_root_unless_dry_run
   local script_path content
-  script_path="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+  if [[ -f /root/leikwan-toolkit.sh ]]; then
+    script_path="$(readlink -f /root/leikwan-toolkit.sh 2>/dev/null || printf '%s' /root/leikwan-toolkit.sh)"
+  else
+    script_path="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+  fi
   content="#!/usr/bin/env bash
 # Managed by leikwan-toolkit
 exec bash ${script_path@Q} \"\$@\""
-  write_file "$SHORTCUT_LQ" "$content" 755
-  write_file "$SHORTCUT_LQ_UPPER" "$content" 755
+  install_shortcut_if_needed "$SHORTCUT_LQ" "$script_path" "$content"
+  install_shortcut_if_needed "$SHORTCUT_LQ_UPPER" "$script_path" "$content"
+}
+
+shortcut_is_current() {
+  local shortcut="$1" script_path="$2" content="$3" tmp rc
+  if [[ -L "$shortcut" ]]; then
+    [[ "$(readlink -f "$shortcut" 2>/dev/null || true)" == "$script_path" ]]
+    return
+  fi
+  [[ -f "$shortcut" ]] || return 1
+  tmp="$(mktemp)"
+  printf '%s\n' "$content" >"$tmp"
+  cmp -s "$tmp" "$shortcut"
+  rc=$?
+  rm -f "$tmp"
+  return "$rc"
+}
+
+install_shortcut_if_needed() {
+  local shortcut="$1" script_path="$2" content="$3"
+  if shortcut_is_current "$shortcut" "$script_path" "$content"; then
+    return 0
+  fi
+  if [[ -L "$shortcut" ]]; then
+    backup_file "$shortcut"
+    (( DRY_RUN == 1 )) || rm -f "$shortcut"
+  fi
+  write_file "$shortcut" "$content" 755
 }
 
 print_quick_networking_steps() {
@@ -5114,8 +5273,8 @@ EOF
 
 quick_networking_menu() {
   local choice intro_shown=0
-  clear_screen_if_interactive
   while true; do
+    clear_screen_if_interactive
     if (( intro_shown == 0 )); then
       print_compact_header "快速组网"
       echo "B：利群主机，负责中转和后端转发"
@@ -5132,7 +5291,7 @@ quick_networking_menu() {
       echo "----------------------------------------"
       intro_shown=1
     else
-      echo; echo "${BOLD}快速组网${RESET}"
+      print_compact_header "快速组网"
     fi
     echo "1. B：修复 DNS / IPv4"
     echo "2. B：生成公网入口网络码"
@@ -5156,8 +5315,8 @@ quick_networking_menu() {
       7) pbr_menu ;;
       8) echo; print_quick_networking_steps; wait_enter_to_return ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -5165,7 +5324,7 @@ quick_networking_menu() {
 relay_host_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}利群主机${RESET}"
+    print_menu_header "利群主机"
     echo "1. EasyTier 组网管理"
     echo "2. 公网入口列表管理"
     echo "3. 转发目标管理"
@@ -5182,8 +5341,8 @@ relay_host_menu() {
       5) ipv6_lockdown ;;
       6) run_menu_action doctor ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -5191,7 +5350,7 @@ relay_host_menu() {
 entry_host_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}公网入口（A 本机）${RESET}"
+    print_menu_header "公网入口（A 本机）"
     echo "1. 粘贴利群网络码，部署本机入口"
     echo "2. 配置本机入口端口池"
     echo "3. 查看本机公网入口状态"
@@ -5210,8 +5369,8 @@ entry_host_menu() {
         wait_enter_to_return
         ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -5219,7 +5378,7 @@ entry_host_menu() {
 advanced_menu() {
   local choice
   while true; do
-    echo; echo "${BOLD}高级功能${RESET}"
+    print_menu_header "高级功能"
     echo "1. nftables 规则管理"
     echo "2. 链路测试"
     echo "3. DNS / IPv4 优先修复"
@@ -5240,8 +5399,8 @@ advanced_menu() {
       7) run_menu_action generate_debug_report ;;
       8) legacy_cleanup_menu ;;
       0) return 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -5253,7 +5412,7 @@ main_menu() {
   local choice
   while true; do
     clear_screen_if_interactive
-    echo; print_banner; echo
+    print_banner
     echo "1. 快速组网（分步提示）"
     echo "2. 利群主机"
     echo "3. 公网入口"
@@ -5270,8 +5429,8 @@ main_menu() {
       5) run_menu_action doctor ;;
       6) uninstall_new_mode ;;
       0) exit 0 ;;
-      "") echo "请输入选项编号。" ;;
-      *) echo "无效选择。" ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }

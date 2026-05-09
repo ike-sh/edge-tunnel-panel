@@ -2,7 +2,7 @@
 
 Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 构建公网入口和中转主机之间的虚拟网络，并使用 nftables 在中转主机上管理 TCP/UDP 转发。
 
-当前版本：`1.0.0`
+当前版本：`1.0.1`
 
 ## 功能特性
 
@@ -94,7 +94,7 @@ public3 -> 公网3
 
 脚本会在中文 UI 中显示 `公网1(public1)` 这类名称，systemd 和 TSV 内部仍使用 ASCII 名称，避免兼容问题。旧入口名仍兼容，例如用户已有的 `aliyun`、`home` 可以继续读取、修改、删除、启用禁用和切换主入口。
 
-连续生成多个公网入口接入码时，脚本会写入 `entries/pending-entries.tsv` 预占推荐值，避免重复使用 EasyTier IP 或端口。A 的 ENTRY 返回码接回 B 后，会按 `ENTRY_ET_IP + EASYTIER_PORT` 清理对应 pending。即使 A 侧改了入口名称，也会按返回码名称保存。
+连续生成多个公网入口接入码时，脚本会写入 `entries/pending-entries.tsv` 预占推荐值，避免重复使用 EasyTier IP 或端口。推荐名称会按已占用的 EasyTier IP / 端口序号递增；例如旧入口 `aliyun=10.198.1.2/8301`、`home=10.198.1.3/8302` 已存在时，下一台会推荐 `public3 / 公网3 / 10.198.1.4 / 8303`。A 的 ENTRY 返回码接回 B 后，会按 `ENTRY_ET_IP + EASYTIER_PORT` 清理对应 pending。即使 A 侧改了入口名称，也会按返回码名称保存。
 
 ## PBR
 
@@ -121,6 +121,12 @@ lq pbr show
 lq forward list
 lq forward apply-relay --auto-fix-route
 lq --uninstall
+```
+
+交互菜单默认会在进入菜单前清屏，保持 SSH 页面干净。调试时可临时禁用清屏：
+
+```bash
+LEIKWAN_NO_CLEAR=1 lq
 ```
 
 ## 升级
@@ -164,11 +170,11 @@ lq --uninstall
 
 ## Release
 
-当前正式版本：`1.0.0`
+当前正式版本：`1.0.1`
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.0.0.tar.gz
-leikwan-toolkit-1.0.0.tar.gz.sha256
+leikwan-toolkit-1.0.1.tar.gz
+leikwan-toolkit-1.0.1.tar.gz.sha256
 ```

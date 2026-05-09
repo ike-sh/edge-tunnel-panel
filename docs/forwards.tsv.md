@@ -16,7 +16,7 @@ service-a  10001  203.0.113.30    37592        eth1       T_CN2        true     
 service-b  10002  target.example  37593                   T_9929       true     backup-target
 ```
 
-默认推荐用菜单或 `lq forward` 命令，不要手写 TSV。Leikwan Toolkit 1.0.0 的转发模型是：
+默认推荐用菜单或 `lq forward` 命令，不要手写 TSV。Leikwan Toolkit 1.0.1 的转发模型是：
 
 - A 公网入口机只配置一次入口端口池。
 - B 利群主机负责所有后端目标的新增 / 修改 / 删除 / 应用。
