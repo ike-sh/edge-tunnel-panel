@@ -1,6 +1,6 @@
-# 故障排查
+﻿# 故障排查
 
-Leikwan Toolkit 1.0.7 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.1.0 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -133,6 +133,32 @@ lq --doctor
 升级脚本后，如果 doctor 发现 nftables 表存在但没有任何 DNAT、只有部分 TCP/UDP DNAT 缺失，或启用了 MSS clamp 但规则未渲染，会提示这可能是旧版本模板。交互菜单会询问是否立即执行 `lq forward apply-relay --auto-fix-route` 并复查；非交互 `lq --doctor` 只提示命令，不会自动修改 nftables。
 
 从现有转发目标添加 PBR 时，脚本会默认询问是否立即执行上述同步。
+
+## DDNS 后端刷新
+
+域名后端目标可使用 DDNS 自动刷新：
+
+```bash
+lq ddns status
+lq ddns run
+lq ddns enable
+lq ddns logs
+```
+
+如果 `lq ddns run` 显示 IP 未变化，不会重应用 nftables。如果显示解析变化，会更新 `resolved.tsv` 并安全重应用转发规则。解析失败时会保留旧 IP。
+
+PBR 默认不会自动迁移。域名 IP 变化后，可执行：
+
+```bash
+lq pbr sync-from-forwards
+```
+
+日志路径：
+
+```text
+/var/log/leikwan-ddns-refresh.log
+/etc/leikwan-toolkit/status/last-ddns.env
+```
 
 ## 脱敏报告
 

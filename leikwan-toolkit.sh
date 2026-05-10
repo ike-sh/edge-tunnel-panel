@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.0.7"
+TOOL_VERSION="1.1.0"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -18,6 +18,7 @@ REPORT_WARN_COUNT=0
 REPORT_FAIL_COUNT=0
 PORT_CHECK_RESULT="ok"
 STATUS_OVERVIEW_RESULT="ok"
+LEIKWAN_GLOBAL_LOCK_TOKEN=""
 
 LOG_FILE="/var/log/leikwan-toolkit.log"
 STATE_DIR="/etc/leikwan-toolkit"
@@ -38,6 +39,14 @@ SNAPSHOT_DIR="${STATE_DIR}/snapshots"
 AUTO_SNAPSHOT_DIR="${SNAPSHOT_DIR}/auto"
 REPORT_FILE="/root/leikwan-debug-report.txt"
 APPLY_RELAY_LOG="/root/lq-apply-relay.log"
+DDNS_CONFIG="${STATE_DIR}/ddns.env"
+DDNS_LOG_FILE="/var/log/leikwan-ddns-refresh.log"
+DDNS_STATUS_FILE="${STATUS_DIR}/last-ddns.env"
+DDNS_SERVICE_NAME="leikwan-ddns-refresh"
+DDNS_SERVICE="/etc/systemd/system/${DDNS_SERVICE_NAME}.service"
+DDNS_TIMER="/etc/systemd/system/${DDNS_SERVICE_NAME}.timer"
+LEIKWAN_LOCK_PATH="/run/leikwan-toolkit.lock"
+DDNS_LOCK_PATH="/run/leikwan-ddns-refresh.lock"
 
 ENTRIES_TSV="${ENTRIES_DIR}/entries.tsv"
 PENDING_ENTRIES_TSV="${ENTRIES_DIR}/pending-entries.tsv"
@@ -87,6 +96,11 @@ FORWARD_SYSCTL="/etc/sysctl.d/99-leikwan-forward.conf"
 PBR_STATIC_CONF="${PBR_DIR}/static-routes.conf"
 PBR_RT_TABLES="/etc/iproute2/rt_tables"
 PBR_PRIORITY="15000"
+DDNS_REFRESH_INTERVAL_DEFAULT="5min"
+DDNS_AUTO_APPLY_DEFAULT="true"
+DDNS_AUTO_FIX_ROUTE_DEFAULT="false"
+DDNS_AUTO_SYNC_PBR_DEFAULT="false"
+DDNS_KEEP_OLD_ON_FAIL_DEFAULT="true"
 
 BBR_SYSCTL_CONF="/etc/sysctl.d/99-leikwan-bbr.conf"
 DNS_RESOLVED_CONF="/etc/systemd/resolved.conf.d/99-leikwan-dns.conf"
@@ -643,6 +657,13 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh forward apply-relay
   sudo bash leikwan-toolkit.sh forward apply-relay --auto-fix-route
   sudo bash leikwan-toolkit.sh pbr delete 203.0.113.10/32
+  sudo bash leikwan-toolkit.sh pbr sync-from-forwards
+  sudo bash leikwan-toolkit.sh ddns run
+  sudo bash leikwan-toolkit.sh ddns status
+  sudo bash leikwan-toolkit.sh ddns enable
+  sudo bash leikwan-toolkit.sh ddns disable
+  sudo bash leikwan-toolkit.sh ddns logs
+  sudo bash leikwan-toolkit.sh --ddns-run
   sudo bash leikwan-toolkit.sh --pbr-apply
   sudo bash leikwan-toolkit.sh --pbr-delete 203.0.113.10/32
   sudo bash leikwan-toolkit.sh --uninstall
@@ -654,6 +675,7 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   传输层使用 EasyTier，转发层使用 nftables。
   默认 EasyTier 虚拟网段：${ET_NET}，relay：${RELAY_ET_IP}。
   默认 EasyTier 传输：TCP+UDP / ${DEFAULT_EASYTIER_PORT}，位于利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。
+  DDNS 自动刷新可监控域名后端 IP 变化，并安全重应用转发规则。
   不部署后端协议，不生成代理客户端链接。
 
 一键安装：
@@ -829,6 +851,56 @@ status_result_display() {
     fail) printf 'FAIL' ;;
     *) printf '%s' "${1:-unknown}" ;;
   esac
+}
+
+lock_acquire() {
+  local lock_path="$1" label="$2" out_var="$3" fd token lock_dir
+  if command -v flock >/dev/null 2>&1; then
+    exec {fd}>"$lock_path"
+    if flock -n "$fd"; then
+      printf -v "$out_var" 'flock:%s:%s' "$fd" "$lock_path"
+      return 0
+    fi
+    eval "exec ${fd}>&-"
+  else
+    lock_dir="${lock_path}.d"
+    if mkdir "$lock_dir" 2>/dev/null; then
+      printf '%s\n' "$$" >"${lock_dir}/pid" 2>/dev/null || true
+      printf -v "$out_var" 'mkdir:%s' "$lock_dir"
+      return 0
+    fi
+  fi
+  warn "已有 Leikwan 任务运行中，跳过本次 ${label}。"
+  return 1
+}
+
+lock_release() {
+  local token="$1" rest fd lock_dir
+  [[ -n "$token" ]] || return 0
+  case "$token" in
+    flock:*)
+      rest="${token#flock:}"
+      fd="${rest%%:*}"
+      eval "exec ${fd}>&-" 2>/dev/null || true
+      ;;
+    mkdir:*)
+      lock_dir="${token#mkdir:}"
+      rm -rf "$lock_dir"
+      ;;
+  esac
+}
+
+global_lock_acquire() {
+  if [[ -n "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    return 0
+  fi
+  lock_acquire "$LEIKWAN_LOCK_PATH" "任务" LEIKWAN_GLOBAL_LOCK_TOKEN
+}
+
+global_lock_release() {
+  [[ -n "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]] || return 0
+  lock_release "$LEIKWAN_GLOBAL_LOCK_TOKEN"
+  LEIKWAN_GLOBAL_LOCK_TOKEN=""
 }
 
 ensure_nc_for_test() {
@@ -3866,6 +3938,360 @@ resolved_rows_usv() {
   resolved_rows | awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} NF>=9 {print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10}'
 }
 
+ddns_config_value() {
+  local key="$1" default="$2" value
+  value="$(env_file_get "$DDNS_CONFIG" "$key")"
+  printf '%s' "${value:-$default}"
+}
+
+ddns_config_bool() {
+  local key="$1" default="$2" value
+  value="$(ddns_config_value "$key" "$default")"
+  case "${value,,}" in
+    true|yes|1|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ddns_write_config() {
+  local interval="${1:-$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")}"
+  local auto_apply="${2:-$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")}"
+  local auto_fix="${3:-$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")}"
+  local auto_sync_pbr="${4:-$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")}"
+  local keep_old="${5:-$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")}"
+  write_file "$DDNS_CONFIG" "DDNS_REFRESH_INTERVAL=${interval}
+DDNS_AUTO_APPLY=${auto_apply}
+DDNS_AUTO_FIX_ROUTE=${auto_fix}
+DDNS_AUTO_SYNC_PBR=${auto_sync_pbr}
+DDNS_KEEP_OLD_ON_FAIL=${keep_old}" 600
+}
+
+ddns_ensure_config() {
+  [[ -f "$DDNS_CONFIG" ]] || ddns_write_config "$DDNS_REFRESH_INTERVAL_DEFAULT" "$DDNS_AUTO_APPLY_DEFAULT" "$DDNS_AUTO_FIX_ROUTE_DEFAULT" "$DDNS_AUTO_SYNC_PBR_DEFAULT" "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT"
+}
+
+ddns_emit() {
+  local level="$1" msg="$2" line
+  case "$level" in
+    OK) line="[OK] ${msg}" ;;
+    WARN) line="[WARN] ${msg}" ;;
+    FAIL) line="[FAIL] ${msg}" ;;
+    *) line="[INFO] ${msg}" ;;
+  esac
+  echo "$line"
+  if (( DRY_RUN == 0 )) && [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    mkdir -p "$(dirname "$DDNS_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] %s\n' "$(status_now)" "$line" >>"$DDNS_LOG_FILE" 2>/dev/null || true
+  fi
+}
+
+ddns_write_last_status() {
+  local result="$1" changed="$2" failed="$3" changed_count="$4" failed_count="$5"
+  (( DRY_RUN == 1 )) && return 0
+  [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
+  mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
+  {
+    printf 'LAST_DDNS_TIME=%s\n' "$(status_now)"
+    printf 'LAST_DDNS_RESULT=%s\n' "$result"
+    printf 'LAST_DDNS_CHANGED=%s\n' "$changed"
+    printf 'LAST_DDNS_FAILED=%s\n' "$failed"
+    printf 'LAST_DDNS_CHANGED_COUNT=%s\n' "$changed_count"
+    printf 'LAST_DDNS_FAILED_COUNT=%s\n' "$failed_count"
+    printf 'LAST_DDNS_VERSION=%s\n' "$TOOL_VERSION"
+  } >"$DDNS_STATUS_FILE"
+  chmod 600 "$DDNS_STATUS_FILE" 2>/dev/null || true
+}
+
+ddns_domain_forward_count() {
+  forwards_rows | awk -F'\t' '
+    $7=="true" && $3 !~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/ && $3 ~ /[A-Za-z]/ { c++ }
+    END { print c+0 }
+  '
+}
+
+ddns_timer_state() {
+  local timer_state
+  timer_state="$(systemd_active_state "${DDNS_SERVICE_NAME}.timer" 2>/dev/null || true)"
+  [[ -n "$timer_state" ]] || timer_state="disabled"
+  [[ "$timer_state" == "inactive" ]] && timer_state="disabled"
+  printf '%s' "$timer_state"
+}
+
+ddns_auto_snapshot() {
+  local dest
+  need_root_unless_dry_run
+  dest="${AUTO_SNAPSHOT_DIR}/auto-before-ddns-apply-$(snapshot_timestamp).tar.gz"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] create auto snapshot ${dest}"
+    return 0
+  fi
+  ensure_base_dirs
+  if create_snapshot_archive "$dest"; then
+    ddns_emit OK "已创建 DDNS 自动快照：${dest}"
+    prune_auto_snapshots
+    return 0
+  fi
+  ddns_emit WARN "DDNS 自动快照创建失败，跳过自动应用。"
+  return 1
+}
+
+ddns_refresh_once() {
+  need_root_unless_dry_run
+  ensure_base_dirs
+  ddns_ensure_config
+  local ddns_lock="" changed="" failed="" result="ok" content resolved_at
+  local name entry_port target_host target_port out_iface route_table enabled comment old_ip target_ip domain_count=0 forward_count=0 changed_count=0 failed_count=0 need_apply=0
+  local auto_apply auto_fix auto_sync_pbr
+  if ! lock_acquire "$DDNS_LOCK_PATH" "DDNS 刷新" ddns_lock; then
+    ddns_write_last_status "skipped" "" "" 0 0
+    return 0
+  fi
+  if ! global_lock_acquire; then
+    lock_release "$ddns_lock"
+    ddns_write_last_status "skipped" "" "" 0 0
+    return 0
+  fi
+  ddns_emit INFO "DDNS 刷新开始。"
+  validate_forwards_tsv >/dev/null || { ddns_emit FAIL "forwards.tsv 校验失败。"; ddns_write_last_status "fail" "" "forwards.tsv" 0 1; global_lock_release; lock_release "$ddns_lock"; return 1; }
+  resolved_at="$(status_now)"
+  content=$'# name\tentry_port\ttarget_host\tresolved_ip\ttarget_port\tout_iface\troute_table\tenabled\tlast_resolved_at\tcomment'
+  auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
+  auto_fix="$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")"
+  auto_sync_pbr="$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")"
+  while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
+    forward_count=$((forward_count + 1))
+    old_ip="$(last_resolved_ip_for_forward "$name")"
+    target_ip=""
+    if is_ipv4 "$target_host"; then
+      target_ip="$target_host"
+    elif [[ "$enabled" == "true" && "$target_host" =~ [A-Za-z] ]]; then
+      domain_count=$((domain_count + 1))
+      target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+      if [[ -z "$target_ip" ]]; then
+        failed_count=$((failed_count + 1))
+        failed="${failed:+${failed},}${name}"
+        if [[ -n "$old_ip" ]]; then
+          ddns_emit WARN "${name} 解析失败，保留旧 IP：${old_ip}"
+          target_ip="$old_ip"
+        else
+          ddns_emit WARN "${name} 解析失败，且没有旧 IP：${target_host}"
+          continue
+        fi
+      elif [[ -n "$old_ip" && "$old_ip" == "$target_ip" ]]; then
+        ddns_emit OK "${name} 解析未变化：${target_ip}"
+      elif [[ -n "$old_ip" && "$old_ip" != "$target_ip" ]]; then
+        changed_count=$((changed_count + 1))
+        changed="${changed:+${changed},}${name}"
+        need_apply=1
+        ddns_emit WARN "${name} 解析变化：${old_ip} -> ${target_ip}"
+        if [[ -n "$route_table" && "$route_table" != "-" ]]; then
+          ddns_emit INFO "${name} 的解析 IP 已变化，PBR 可能需要同步。"
+          ddns_emit INFO "可执行：lq pbr sync-from-forwards"
+        fi
+      else
+        changed_count=$((changed_count + 1))
+        changed="${changed:+${changed},}${name}"
+        need_apply=1
+        ddns_emit OK "${name} 初次解析：${target_ip}"
+        if [[ -n "$route_table" && "$route_table" != "-" ]]; then
+          ddns_emit INFO "${name} 初次写入 resolved IP，PBR 可能需要同步。"
+          ddns_emit INFO "可执行：lq pbr sync-from-forwards"
+        fi
+      fi
+    else
+      target_ip="$old_ip"
+      if [[ -z "$target_ip" && "$target_host" =~ [A-Za-z] ]]; then
+        target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+      fi
+    fi
+    [[ -n "$target_ip" ]] || continue
+    content="${content}"$'\n'"${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_ip}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${resolved_at}"$'\t'"${comment}"
+  done < <(forwards_rows_usv)
+  ddns_emit INFO "forwards=${forward_count}，域名后端=${domain_count}，changed=${changed_count}，failed=${failed_count}"
+  write_file "$RESOLVED_TSV" "$content" 600
+  if (( need_apply == 1 )) && [[ "${auto_apply,,}" == "true" ]]; then
+    if ddns_auto_snapshot; then
+      ddns_emit INFO "检测到域名后端变化，正在安全重应用 nftables 转发规则。"
+      if apply_nft_rules "leikwan-relay" "$([[ "${auto_fix,,}" == "true" ]] && printf '1' || printf '0')"; then
+        ddns_emit OK "已重应用 nftables 转发规则。"
+      else
+        result="fail"
+        ddns_emit WARN "nftables 转发规则重应用失败。"
+      fi
+      if [[ "${auto_sync_pbr,,}" == "true" ]]; then
+        ddns_emit INFO "DDNS_AUTO_SYNC_PBR=true，正在同步 forward 来源 PBR。"
+        pbr_sync_from_forwards || result="warn"
+      fi
+    else
+      result="warn"
+    fi
+  elif (( need_apply == 1 )); then
+    result="warn"
+    ddns_emit WARN "检测到域名后端变化，但 DDNS_AUTO_APPLY=${auto_apply}，未自动应用。"
+  else
+    ddns_emit OK "没有域名后端发生变化，无需重应用规则。"
+  fi
+  if (( failed_count > 0 )) && [[ "$result" == "ok" ]]; then
+    result="warn"
+  fi
+  ddns_write_last_status "$result" "$changed" "$failed" "$changed_count" "$failed_count"
+  ddns_emit INFO "DDNS 刷新结束：$(status_result_display "$result")。"
+  global_lock_release
+  lock_release "$ddns_lock"
+}
+
+render_ddns_service() {
+  cat <<EOF
+# Managed by leikwan-toolkit ${TOOL_VERSION}
+[Unit]
+Description=Leikwan DDNS backend refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/leikwan-toolkit.sh ddns run --non-interactive
+EOF
+}
+
+render_ddns_timer() {
+  local interval
+  interval="$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")"
+  cat <<EOF
+# Managed by leikwan-toolkit ${TOOL_VERSION}
+[Unit]
+Description=Leikwan DDNS backend refresh timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${interval}
+Unit=${DDNS_SERVICE_NAME}.service
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+ddns_install_units() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  write_file "$DDNS_SERVICE" "$(render_ddns_service)" 644
+  write_file "$DDNS_TIMER" "$(render_ddns_timer)" 644
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || warn "systemd daemon-reload 失败。"
+  fi
+}
+
+ddns_enable_timer() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  ddns_install_units
+  info "将每 $(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT") 刷新 enabled 转发目标中的域名后端。"
+  warn "如果域名 IP 变化，将自动重应用 nftables 转发规则。"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable --now "${DDNS_SERVICE_NAME}.timer"
+    ok "DDNS 自动刷新 timer 已启用。"
+  else
+    warn "未找到 systemctl，无法启用 DDNS timer。"
+    return 1
+  fi
+}
+
+ddns_disable_timer() {
+  need_root_unless_dry_run
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now "${DDNS_SERVICE_NAME}.timer" 2>/dev/null || true
+    ok "DDNS 自动刷新 timer 已禁用。"
+  else
+    warn "未找到 systemctl，无法禁用 DDNS timer。"
+  fi
+}
+
+ddns_status() {
+  local timer_state interval auto_apply auto_sync_pbr last_time last_result changed_count failed_count domain_count
+  timer_state="$(ddns_timer_state)"
+  interval="$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")"
+  auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
+  auto_sync_pbr="$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")"
+  last_time="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_TIME)"
+  last_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  changed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_CHANGED_COUNT)"
+  failed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FAILED_COUNT)"
+  domain_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
+  echo "DDNS 自动刷新状态"
+  echo "----------------------------------------"
+  echo "timer: ${timer_state}"
+  echo "interval: ${interval}"
+  echo "auto apply: ${auto_apply}"
+  echo "auto sync pbr: ${auto_sync_pbr}"
+  echo "domain forwards: ${domain_count}"
+  echo "last run: ${last_time:-"-"}"
+  echo "last result: ${last_result:-"-"}"
+  echo "changed targets: ${changed_count:-0}"
+  echo "failed targets: ${failed_count:-0}"
+}
+
+ddns_logs() {
+  if [[ -f "$DDNS_LOG_FILE" ]]; then
+    tail -n 100 "$DDNS_LOG_FILE"
+  else
+    info "暂无 DDNS 刷新日志：${DDNS_LOG_FILE}"
+  fi
+}
+
+ddns_set_interval() {
+  need_root_unless_dry_run
+  local choice interval
+  echo
+  echo "选择 DDNS 刷新间隔："
+  echo "1. 5min"
+  echo "2. 10min"
+  echo "3. 30min"
+  echo "4. 1h"
+  echo "0. 返回"
+  choice="$(prompt_menu_choice "请选择：")"
+  case "$choice" in
+    1) interval="5min" ;;
+    2) interval="10min" ;;
+    3) interval="30min" ;;
+    4) interval="1h" ;;
+    0|"") return 0 ;;
+    *) warn "无效选择。"; return 0 ;;
+  esac
+  ddns_write_config "$interval"
+  ddns_install_units
+  ok "DDNS 刷新间隔已设置为：${interval}"
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled --quiet "${DDNS_SERVICE_NAME}.timer" 2>/dev/null; then
+    systemctl restart "${DDNS_SERVICE_NAME}.timer" || warn "DDNS timer 重启失败，请稍后手动检查。"
+  fi
+}
+
+ddns_menu() {
+  local choice
+  while true; do
+    print_menu_header "DDNS 后端自动刷新"
+    echo "1. 立即刷新一次"
+    echo "2. 启用自动刷新"
+    echo "3. 禁用自动刷新"
+    echo "4. 查看自动刷新状态"
+    echo "5. 查看刷新日志"
+    echo "6. 设置刷新间隔"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause ddns_refresh_once ;;
+      2) run_menu_action_pause ddns_enable_timer ;;
+      3) run_menu_action_pause ddns_disable_timer ;;
+      4) run_menu_action_pause ddns_status ;;
+      5) run_menu_action_pause ddns_logs ;;
+      6) run_menu_action_pause ddns_set_interval ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
 configure_forward_sysctl() {
   write_file "$FORWARD_SYSCTL" "net.ipv4.ip_forward=1" 644
   (( DRY_RUN == 1 )) || sysctl --system >/dev/null || true
@@ -4243,6 +4669,21 @@ apply_relay_rules_menu() {
 }
 
 apply_nft_rules() {
+  local rc release_global_lock=0
+  need_root_unless_dry_run
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 1
+    release_global_lock=1
+  fi
+  set +e
+  apply_nft_rules_impl "$@"
+  rc=$?
+  set -e
+  (( release_global_lock == 1 )) && global_lock_release
+  return "$rc"
+}
+
+apply_nft_rules_impl() {
   local role="$1" auto_fix_route="${2:-0}" content tmp old enabled_count=-1 relay_ip start end proto
   local rollback
   APPLY_NFT_LAST_STATUS=""
@@ -4748,6 +5189,62 @@ delete_pbr_rule() {
   else
     warn "PBR 规则已删除，但重新应用失败。请稍后执行 PBR -> 应用 PBR。"
   fi
+}
+
+pbr_rule_key_exists() {
+  local file="$1" cidr="$2" group="$3"
+  [[ -f "$file" ]] || return 1
+  awk -v cidr="$cidr" -v group="${group#T_}" '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      g=$2
+      sub(/^T_/, "", g)
+      if ($1 == cidr && g == group) found=1
+    }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
+pbr_sync_from_forwards() {
+  need_root_unless_dry_run
+  ensure_tsv_files >/dev/null
+  resolve_forwards >/dev/null 2>&1 || true
+  mkdir -p "$PBR_DIR"
+  [[ -f "$PBR_STATIC_CONF" ]] || : >"$PBR_STATIC_CONF"
+  local tmp name _entry_port target_host target_ip _target_port _out_iface route_table enabled _resolved_at _comment
+  local cidr group synced=0 skipped=0 candidates=0
+  tmp="$(mktemp)"
+  awk '
+    /^[[:space:]]*($|#)/ { print; next }
+    $3 == "forward" { next }
+    { print }
+  ' "$PBR_STATIC_CONF" >"$tmp"
+
+  while IFS=$'\034' read -r name _entry_port target_host target_ip _target_port _out_iface route_table enabled _resolved_at _comment; do
+    [[ "$enabled" == "true" ]] || continue
+    [[ -n "$target_ip" ]] || continue
+    [[ -n "$route_table" && "$route_table" != "-" ]] || continue
+    candidates=$((candidates + 1))
+    cidr="${target_ip}/32"
+    group="${route_table#T_}"
+    if pbr_rule_key_exists "$tmp" "$cidr" "$group"; then
+      skipped=$((skipped + 1))
+      info "PBR 已存在，跳过 forward:${name} ${cidr} -> T_${group}"
+      continue
+    fi
+    printf '%s %s forward %s %s\n' "$cidr" "$group" "$name" "$target_host" >>"$tmp"
+    synced=$((synced + 1))
+    ok "已同步 forward PBR：${name} ${cidr} -> T_${group}"
+  done < <(resolved_rows_usv)
+
+  write_file "$PBR_STATIC_CONF" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+  if (( candidates == 0 )); then
+    info "没有需要同步 PBR 的 enabled 转发目标。"
+  else
+    info "PBR 同步完成：新增 ${synced}，已存在 ${skipped}。"
+  fi
+  pbr_apply
 }
 
 generate_forward_outputs() {
@@ -5354,6 +5851,7 @@ status_mss_summary() {
 status_overview_relay() {
   local service_state relay_ip entries_total entries_enabled forwards_total forwards_enabled
   local primary_row primary_name primary_proto primary_port pbr_count last_apply last_doctor
+  local ddns_timer ddns_last_time ddns_last_result ddns_changed_count ddns_failed_count ddns_domain_count
   service_state="$(systemd_active_state "${EASYTIER_RELAY_SERVICE_NAME}.service" || true)"
   [[ "$service_state" == "active" ]] || status_mark_result warn
   relay_ip="$(current_relay_et_ip)"
@@ -5373,6 +5871,12 @@ status_overview_relay() {
   pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
   last_apply="$(status_cache_summary apply)"
   last_doctor="$(status_cache_summary doctor)"
+  ddns_timer="$(ddns_timer_state)"
+  ddns_last_time="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_TIME)"
+  ddns_last_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  ddns_changed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_CHANGED_COUNT)"
+  ddns_failed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FAILED_COUNT)"
+  ddns_domain_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
   echo "角色: leikwan-relay"
   echo "EasyTier: relay ${service_state}"
   echo "Relay IP: ${relay_ip}"
@@ -5386,6 +5890,16 @@ status_overview_relay() {
   echo "PBR 规则: ${pbr_count}"
   echo "nftables: $(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")"
   echo "MSS clamp: $(status_mss_summary)"
+  echo "DDNS 自动刷新: ${ddns_timer}"
+  if [[ -n "$ddns_last_time" ]]; then
+    echo "最近 DDNS: ${ddns_last_time} / $(status_result_display "$ddns_last_result")"
+    echo "域名后端: ${ddns_changed_count:-0} changed / ${ddns_failed_count:-0} failed"
+  else
+    echo "最近 DDNS: -"
+  fi
+  if (( ddns_domain_count > 0 )) && [[ "$ddns_timer" != "active" ]]; then
+    echo "[INFO] 检测到域名后端目标，可在转发目标管理中启用 DDNS 自动刷新。"
+  fi
   echo "最近应用: ${last_apply}"
   echo "最近诊断: ${last_doctor}"
 }
@@ -5693,11 +6207,17 @@ generate_debug_report() {
     ip -br addr || true
     ip route || true
     ip rule || true
-    systemctl --no-pager --full status "$EASYTIER_RELAY_SERVICE_NAME" 'easytier-entry-*' "$NFT_SERVICE_NAME" 2>&1 || true
+    systemctl --no-pager --full status "$EASYTIER_RELAY_SERVICE_NAME" 'easytier-entry-*' "$NFT_SERVICE_NAME" "${DDNS_SERVICE_NAME}.service" "${DDNS_SERVICE_NAME}.timer" 2>&1 || true
     ss -lntup || true
     nft list table inet leikwan_forward 2>&1 || true
     "$EASYTIER_CLI_BIN" peer 2>&1 || true
     doctor || true
+    echo "ddns.env:"
+    [[ -f "$DDNS_CONFIG" ]] && sed -n '1,120p' "$DDNS_CONFIG"
+    echo "last-ddns.env:"
+    [[ -f "$DDNS_STATUS_FILE" ]] && sed -n '1,120p' "$DDNS_STATUS_FILE"
+    echo "ddns log tail:"
+    [[ -f "$DDNS_LOG_FILE" ]] && tail -n 100 "$DDNS_LOG_FILE"
     echo "outputs:"
     [[ -f "$FORWARD_TSV" ]] && sed -n '1,120p' "$FORWARD_TSV"
   } >"$tmp" 2>&1
@@ -5932,19 +6452,21 @@ uninstall_new_mode() {
   if command -v systemctl >/dev/null 2>&1; then
     safe_stop_disable_service "$EASYTIER_RELAY_SERVICE_NAME"
     safe_stop_disable_service "$NFT_SERVICE_NAME"
+    safe_stop_disable_service "${DDNS_SERVICE_NAME}.timer"
+    safe_stop_disable_service "${DDNS_SERVICE_NAME}.service"
     safe_stop_disable_service "leikwan-mss-clamp.service"
     cleanup_easytier_entry_units
   else
     warn "未找到 systemctl，跳过 systemd 服务停止。"
   fi
-  safe_rm_file "$EASYTIER_RELAY_SERVICE" "$NFT_SERVICE" "/etc/systemd/system/leikwan-mss-clamp.service"
+  safe_rm_file "$EASYTIER_RELAY_SERVICE" "$NFT_SERVICE" "$DDNS_SERVICE" "$DDNS_TIMER" "/etc/systemd/system/leikwan-mss-clamp.service"
   if command -v nft >/dev/null 2>&1; then
     nft delete table inet leikwan_forward 2>/dev/null || true
     nft delete table inet lq_mss 2>/dev/null || true
   fi
   cleanup_leikwan_policy_routes
   safe_rm_file "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN" "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER" \
-    "/root/leikwan-toolkit.sh" "$OLD_ROOT_SCRIPT" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF" "$LOG_FILE" "$OLD_LOG_FILE"
+    "/root/leikwan-toolkit.sh" "$OLD_ROOT_SCRIPT" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF" "$LOG_FILE" "$OLD_LOG_FILE" "$DDNS_LOG_FILE"
   safe_rm_dir "$STATE_DIR" "$OLD_STATE_DIR" "$BACKUP_DIR" "$OLD_BACKUP_DIR"
   rm -f "$LOG_FILE" "$OLD_LOG_FILE" 2>/dev/null || true
   systemd_reload_reset_failed
@@ -5956,6 +6478,8 @@ uninstall_new_mode() {
   uninstall_check_line "旧 MSS 临时表" nft lq_mss
   uninstall_check_line "EasyTier relay 服务" service "${EASYTIER_RELAY_SERVICE_NAME}.service"
   uninstall_check_line "nft 持久化服务" service "${NFT_SERVICE_NAME}.service"
+  uninstall_check_line "DDNS refresh 服务" service "${DDNS_SERVICE_NAME}.service"
+  uninstall_check_line "DDNS refresh timer" file "$DDNS_TIMER"
   uninstall_check_line "MSS clamp 旧服务" service "leikwan-mss-clamp.service"
   uninstall_check_line "EasyTier core" file "$EASYTIER_CORE_BIN"
   uninstall_check_line "EasyTier cli" file "$EASYTIER_CLI_BIN"
@@ -5971,6 +6495,7 @@ uninstall_new_mode() {
   uninstall_check_line "旧备份目录" dir "$OLD_BACKUP_DIR"
   uninstall_check_line "日志文件" file "$LOG_FILE"
   uninstall_check_line "旧日志文件" file "$OLD_LOG_FILE"
+  uninstall_check_line "DDNS 日志文件" file "$DDNS_LOG_FILE"
   uninstall_check_line "IPv4 转发 sysctl" file "$FORWARD_SYSCTL"
   uninstall_check_line "BBR sysctl" file "$BBR_SYSCTL_CONF"
   uninstall_check_line "DNS resolved 配置" file "$DNS_RESOLVED_CONF"
@@ -6294,6 +6819,7 @@ forwards_menu() {
     echo "9. 导入 forwards.tsv（高级）"
     echo "10. 导出 forwards.tsv"
     echo "11. 生成转发入口输出"
+    echo "12. DDNS 后端自动刷新"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -6308,6 +6834,7 @@ forwards_menu() {
       9) run_menu_action_pause import_forwards_tsv ;;
       10) run_menu_action_pause export_forwards_tsv ;;
       11) run_menu_action generate_forward_outputs ;;
+      12) ddns_menu ;;
       0) return 0 ;;
     esac
   done
@@ -6664,7 +7191,18 @@ main() {
         delete) delete_pbr_rule "${3:-}" ;;
         apply) pbr_apply ;;
         show|list) pbr_show ;;
+        sync-from-forwards) pbr_sync_from_forwards ;;
         *) fail "未知 pbr 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
+      ;;
+    ddns)
+      case "${2:-}" in
+        run) ddns_refresh_once ;;
+        status) ddns_status ;;
+        enable) ddns_enable_timer ;;
+        disable) ddns_disable_timer ;;
+        logs) ddns_logs ;;
+        *) fail "未知 ddns 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
     --help|-h) print_help ;;
@@ -6672,6 +7210,7 @@ main() {
     --status) status_overview ;;
     --port-check) port_check ;;
     --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
+    --ddns-run) ddns_refresh_once ;;
     --pbr-apply) pbr_apply ;;
     --pbr-delete) delete_pbr_rule "${2:-}" ;;
     --uninstall) uninstall_new_mode ;;

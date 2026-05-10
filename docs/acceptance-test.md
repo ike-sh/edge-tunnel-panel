@@ -1,6 +1,6 @@
-# 验收清单
+﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.0.7 正式版验收。
+本页用于 Leikwan Toolkit 1.1.0 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.0.7"
-leikwan-toolkit 1.0.7
+TOOL_VERSION="1.1.0"
+leikwan-toolkit 1.1.0
 ```
 
 ## 打包
@@ -29,8 +29,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.0.7.tar.gz
-dist/leikwan-toolkit-1.0.7.tar.gz.sha256
+dist/leikwan-toolkit-1.1.0.tar.gz
+dist/leikwan-toolkit-1.1.0.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -71,7 +71,41 @@ public2  203.0.113.20   10.198.1.3  tcp,udp  8302  100  true
 - B 侧转发目标必须生成 TCP+UDP DNAT。
 - PBR 菜单显示 `0. 返回`。
 - 从现有转发目标添加 PBR 后，默认询问是否立即同步转发规则和 `route_table` 元数据。
+- `lq pbr sync-from-forwards` 能根据当前 resolved IP 同步 forward 来源 PBR，且不删除 static PBR。
 - 删除 PBR 支持编号、CIDR 和裸 IP。
+
+## DDNS 自动刷新
+
+```bash
+lq ddns status
+lq ddns run
+lq --ddns-run
+```
+
+期望：
+
+- 不清屏，不等待回车。
+- 能识别 enabled 转发目标中的域名后端。
+- IP 未变化时不重应用 nftables。
+- IP 变化时更新 `resolved.tsv`，创建 `auto-before-ddns-apply-*.tar.gz` 快照并安全重应用 nftables。
+- 解析失败时保留旧 resolved IP。
+
+启用 timer：
+
+```bash
+lq ddns enable
+systemctl status leikwan-ddns-refresh.timer
+lq ddns status
+```
+
+检查：
+
+```bash
+tail -n 100 /var/log/leikwan-ddns-refresh.log
+cat /etc/leikwan-toolkit/status/last-ddns.env
+```
+
+期望日志包含开始 / 结束、changed / failed 统计，不包含 EasyTier secret。
 
 ## 状态总览与缓存
 

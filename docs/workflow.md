@@ -1,6 +1,6 @@
-# 工作流
+﻿# 工作流
 
-本文说明 Leikwan Toolkit 1.0.7 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.1.0 的推荐操作顺序。
 
 ## 角色
 
@@ -128,6 +128,23 @@ lq forward apply-relay --auto-fix-route
 ```
 
 从现有转发目标添加 PBR 后，脚本会默认询问是否立即执行上述同步。
+
+## DDNS 后端自动刷新
+
+如果后端目标是 DDNS 域名，建议在转发目标稳定后启用自动刷新：
+
+```bash
+lq ddns enable
+lq ddns status
+```
+
+脚本会定期检查 enabled 转发目标中的域名后端。解析 IP 变化时，会更新 `resolved.tsv`、创建自动快照并安全重应用 nftables 转发规则；解析失败时保留旧 IP。
+
+PBR 默认不会自动同步。域名 IP 变化后，可执行：
+
+```bash
+lq pbr sync-from-forwards
+```
 
 ## 诊断
 

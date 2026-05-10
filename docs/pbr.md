@@ -1,4 +1,4 @@
-# IPv4 多出口策略路由 / PBR
+﻿# IPv4 多出口策略路由 / PBR
 
 PBR 用来把指定后端 IPv4 固定到某个出口线路，例如 `T_CN2` 或 `T_9929`。它只处理 IPv4，不接管整机默认路由。
 
@@ -40,6 +40,14 @@ IPv4 多出口策略路由 / PBR
 5. 选择线路组：`CN2 -> T_CN2`、`9929 -> T_9929` 或自定义路由表。
 
 写入规则会记录来源转发名和 `target_host`。以后 `pbr_apply` 会重新解析来源域名；IP 变化时更新对应 PBR 规则。
+
+也可以用 1.1.0 的同步命令按当前 enabled forwards 重建 forward 来源 PBR：
+
+```bash
+sudo lq pbr sync-from-forwards
+```
+
+它会删除旧的 `forward <name> <host>` 来源规则，再按当前 `resolved.tsv` 和 `route_table` 生成新的 `/32` 规则。用户手动写入的 `static` PBR 不会被删除。
 
 ## 删除 PBR 规则
 

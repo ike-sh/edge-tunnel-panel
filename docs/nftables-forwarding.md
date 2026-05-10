@@ -1,6 +1,6 @@
-# nftables 转发
+﻿# nftables 转发
 
-Leikwan Toolkit 1.0.7 只管理本项目自己的表：
+Leikwan Toolkit 1.1.0 只管理本项目自己的表：
 
 ```text
 table inet leikwan_forward
@@ -59,6 +59,8 @@ udp 10.198.1.1:ENTRY_PORT -> TARGET_HOST:TARGET_PORT
 ```text
 /etc/leikwan-toolkit/forwards/resolved.tsv
 ```
+
+启用 DDNS 自动刷新后，timer 会监控 enabled 域名后端。解析 IP 变化时，脚本会更新 `resolved.tsv` 并使用同一套安全 apply-relay 逻辑重渲染 nftables；IP 未变化时不会重复应用规则。
 
 ## TCP MSS clamp
 

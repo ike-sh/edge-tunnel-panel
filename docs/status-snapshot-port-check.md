@@ -1,6 +1,6 @@
-# 状态、快照与端口预检
+﻿# 状态、快照与端口预检
 
-本文记录 1.0.7 新增的三个基础能力。
+本文记录状态总览、快照 / 回滚、端口预检，以及 1.1.0 起的 DDNS 状态集成。
 
 ## 状态总览
 
@@ -22,6 +22,20 @@ lq --status
 ```
 
 缓存只记录时间、动作、结果和版本，不写 EasyTier secret。
+
+1.1.0 起，B 利群主机状态总览还会显示 DDNS 自动刷新：
+
+```text
+DDNS 自动刷新: active / disabled
+最近 DDNS: 2026-05-10 04:12:00 / OK
+域名后端: 1 changed / 0 failed
+```
+
+DDNS 最近状态缓存：
+
+```text
+/etc/leikwan-toolkit/status/last-ddns.env
+```
 
 ## 配置快照 / 回滚
 
