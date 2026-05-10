@@ -1,6 +1,6 @@
 ﻿# EasyTier 组网
 
-Leikwan Toolkit 1.2.1 使用 EasyTier 作为 A 公网入口机和 B 利群主机之间的虚拟网络。脚本只管理 EasyTier 组网和 nftables 四层 TCP/UDP 转发，不部署后端代理协议。
+Leikwan Toolkit 1.3.0 使用 EasyTier 作为 A 公网入口机和 B 利群主机之间的虚拟网络。脚本只管理 EasyTier 组网和 nftables 四层 TCP/UDP 转发，不部署后端代理协议。
 
 默认地址：
 

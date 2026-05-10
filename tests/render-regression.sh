@@ -54,4 +54,12 @@ assert_render 1 80
 assert_render 0 80
 assert_render 0 160
 
+export LEIKWAN_NO_CLEAR=1
+menu_out="$(print_init_wizard_menu)"
+grep -q "Leikwan 初始化向导" <<<"$menu_out"
+grep -q "B：利群主机" <<<"$menu_out"
+ops_out="$(print_operations_center_menu)"
+grep -q "运维命令中心" <<<"$ops_out"
+grep -q "查看状态总览" <<<"$ops_out"
+
 echo "[OK] render regression passed"

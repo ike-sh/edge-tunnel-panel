@@ -1,6 +1,6 @@
 # 测试与 release 验证
 
-Leikwan Toolkit 1.2.1 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
+Leikwan Toolkit 1.3.0 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
 
 ## 一键验证
 
@@ -41,7 +41,7 @@ bash tests/redaction-regression.sh
 
 - `smoke.sh`：基础语法、版本、帮助和关键 CLI 参数识别。
 - `cli-regression.sh`：只读 CLI 在空状态目录下不触发全局 trap。
-- `render-regression.sh`：模拟 TSV，检查表格和紧凑渲染。
+- `render-regression.sh`：模拟 TSV，检查表格、紧凑渲染、初始化向导菜单和运维命令中心菜单。
 - `package-regression.sh`：检查 release 包内容边界。
 - `redaction-regression.sh`：检查脱敏、端点 HTML 转义、恶意 tar 拒绝。
 
@@ -74,3 +74,13 @@ lq config export --redacted
 nohup lq forward apply-relay --auto-fix-route >/root/lq-apply-relay.log 2>&1 &
 lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
 ```
+
+初始化向导回归：
+
+```bash
+lq init --dry-run
+lq init --plan
+lq plan
+```
+
+这些命令必须不清屏、不等待回车、不写文件、不触发全局 trap。

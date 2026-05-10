@@ -35,6 +35,9 @@ run_cli() {
 
 run_cli --version
 run_cli --help
+run_cli init --dry-run
+run_cli init --plan
+run_cli plan
 run_cli status
 run_cli --status
 run_cli port check

@@ -1,6 +1,6 @@
 ﻿# 架构说明
 
-Leikwan Toolkit 1.2.1 使用 EasyTier + nftables 构建三段式 TCP/UDP 转发链路。
+Leikwan Toolkit 1.3.0 使用 EasyTier + nftables 构建三段式 TCP/UDP 转发链路。
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标

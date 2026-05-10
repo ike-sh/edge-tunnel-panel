@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-当前版本：`1.2.1`
+当前版本：`1.3.0`
 
 ## 项目简介
 
@@ -31,7 +31,8 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 ## 快速安装
 
 ```bash
-curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq
+curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh
+lq init
 ```
 
 安装后入口：
@@ -47,6 +48,8 @@ curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leik
 ```bash
 lq --version
 ```
+
+首次部署、重装恢复或不确定当前机器角色时，优先执行 `lq init`。它会先让你选择 B 利群主机、A 公网入口、从配置包恢复或仅检查状态。
 
 ## 三机角色说明
 
@@ -83,6 +86,9 @@ lq
 ## 常用命令
 
 ```bash
+lq init
+lq init --dry-run
+lq plan
 lq status
 lq --status
 lq --doctor
@@ -128,6 +134,8 @@ bash scripts/verify-release.sh
 
 ## 功能模块
 
+`init` 是首次初始化向导，`wizard` 和 `quickstart` 是别名。`lq init --dry-run` / `lq plan` 只输出计划，不写文件、不启动服务、不应用 nftables / PBR。主菜单和运维命令中心会把状态、诊断、端口预检、端点输出、配置导入导出、DDNS 和自更新聚合到更短路径。
+
 `status` 是轻量日常总览：读取配置、状态缓存、systemd 状态和 nftables 表，不做大规模探测，也不自动修改系统。`doctor` 是详细诊断，适合部署后或故障时运行。
 
 配置快照位于 `/etc/leikwan-toolkit/snapshots/`，自动快照位于 `/etc/leikwan-toolkit/snapshots/auto/`。删除入口、删除转发目标、重新应用转发规则、恢复快照、配置导入等高危操作前会自动快照。
@@ -166,6 +174,8 @@ tail -f /root/lq-apply-relay.log
 ## 文档索引
 
 - [工作流](docs/workflow.md)
+- [初始化向导](docs/init-wizard.md)
+- [运维命令中心](docs/operations-center.md)
 - [DDNS 自动刷新](docs/ddns-refresh.md)
 - [PBR](docs/pbr.md)
 - [配置迁移](docs/config-migration.md)
@@ -182,6 +192,6 @@ tail -f /root/lq-apply-relay.log
 Release 包名：
 
 ```text
-leikwan-toolkit-1.2.1.tar.gz
-leikwan-toolkit-1.2.1.tar.gz.sha256
+leikwan-toolkit-1.3.0.tar.gz
+leikwan-toolkit-1.3.0.tar.gz.sha256
 ```

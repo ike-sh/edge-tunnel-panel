@@ -1,6 +1,6 @@
 ﻿# DDNS 后端 / PBR / 公网入口自动刷新
 
-Leikwan Toolkit 1.2.1 的 DDNS 刷新覆盖三类对象：
+Leikwan Toolkit 1.3.0 的 DDNS 刷新覆盖三类对象：
 
 - 转发目标：`forwards.tsv` 的 `target_host`
 - 公网入口：`entries.tsv` 的 `public_host`
@@ -27,6 +27,7 @@ lq --ddns-run
 
 ```text
 利群主机 -> 转发目标管理 -> DDNS 后端 / PBR / 公网入口自动刷新
+运维命令中心 -> DDNS 自动刷新
 ```
 
 ## 配置文件

@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.2.1 正式版验收。
+本页用于 Leikwan Toolkit 1.3.0 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.2.1"
-leikwan-toolkit 1.2.1
+TOOL_VERSION="1.3.0"
+leikwan-toolkit 1.3.0
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.2.1.tar.gz
-dist/leikwan-toolkit-1.2.1.tar.gz.sha256
+dist/leikwan-toolkit-1.3.0.tar.gz
+dist/leikwan-toolkit-1.3.0.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -54,6 +54,23 @@ bash scripts/verify-release.sh
 ```text
 [OK] release verification passed
 ```
+
+## 初始化向导
+
+```bash
+lq init --dry-run
+lq init --plan
+lq plan
+```
+
+期望：
+
+- 输出初始化计划。
+- 不修改系统。
+- 不清屏、不等待回车。
+- 不触发全局 trap。
+
+交互执行 `lq` 后，主菜单应包含“初始化 / 快速组网”和“运维命令中心”。初始化向导可以选择 B 利群主机、A 公网入口、从配置包恢复或仅检查状态。
 
 ## 快速组网
 

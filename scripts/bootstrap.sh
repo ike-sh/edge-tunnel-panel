@@ -134,12 +134,15 @@ install_tool() {
   ok "脚本：${INSTALL_PATH}"
   ok "快捷命令：${SHORTCUT_PATH}"
   ok "快捷命令：${SHORTCUT_PATH_UPPER}"
+  echo
+  echo "下一步："
+  echo "  lq init      # 启动初始化向导"
+  echo "  lq status    # 查看当前状态"
 }
 
 maybe_run_menu() {
   case "$RUN_MENU_MODE" in
     no-run)
-      echo "请执行：lq"
       return 0
       ;;
     run)
@@ -150,7 +153,7 @@ maybe_run_menu() {
       return 0
       ;;
     auto)
-      echo "请执行：lq"
+      return 0
       ;;
   esac
 }

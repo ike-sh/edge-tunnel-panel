@@ -1,10 +1,21 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.2.1 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.3.0 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
 ```
+
+## 首次排查
+
+首次部署、重装恢复或不确定当前机器角色时，先运行：
+
+```bash
+lq init --dry-run
+lq status
+```
+
+`lq init --dry-run` 只输出初始化计划，不写文件。`lq status` 会显示角色、角色来源、角色混合 WARN 和下一步建议。
 
 ## 一键诊断
 

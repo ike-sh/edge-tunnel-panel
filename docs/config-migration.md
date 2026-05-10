@@ -1,6 +1,6 @@
 ﻿# 配置导入 / 导出 / 迁移包
 
-Leikwan Toolkit 1.2.1 增加配置包，用于备份、迁移和排错。
+Leikwan Toolkit 1.3.0 增加配置包，用于备份、迁移和排错。
 
 ## 完整包和脱敏包
 
@@ -64,6 +64,14 @@ inspect 只读取配置包，不导入、不修改系统。它会显示导出时
 ```bash
 lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
 ```
+
+首次恢复新机器时也可以从初始化向导进入：
+
+```bash
+lq init
+```
+
+选择“从配置包恢复”后，脚本会先 inspect，再复用 `lq config import` 的导入、安全校验和自动快照逻辑。
 
 导入前会：
 

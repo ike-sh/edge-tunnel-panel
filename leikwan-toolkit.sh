@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.2.1"
+TOOL_VERSION="1.3.0"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -673,6 +673,10 @@ ${PROJECT_NAME} ${TOOL_VERSION}
 
 用法：
   sudo bash leikwan-toolkit.sh
+  sudo bash leikwan-toolkit.sh init [--dry-run|--plan]
+  sudo bash leikwan-toolkit.sh wizard
+  sudo bash leikwan-toolkit.sh quickstart
+  sudo bash leikwan-toolkit.sh plan
   sudo bash leikwan-toolkit.sh status
   sudo bash leikwan-toolkit.sh --status
   sudo bash leikwan-toolkit.sh --doctor
@@ -5133,11 +5137,83 @@ EOF
 }
 
 detect_role() {
-  if systemctl list-unit-files --type=service --no-legend "${EASYTIER_RELAY_SERVICE_NAME}.service" 2>/dev/null | grep -q .; then echo "leikwan-relay"; return; fi
-  if et_ip_present "$RELAY_ET_IP"; then echo "leikwan-relay"; return; fi
-  if systemctl list-unit-files --type=service --no-legend 'easytier-entry-*.service' 2>/dev/null | grep -q .; then echo "cloud-entry"; return; fi
-  if [[ -f "$ENTRY_PAIRING_FILE" ]]; then echo "cloud-entry"; return; fi
-  echo "unknown"
+  detect_leikwan_role
+}
+
+role_has_service() {
+  local pattern="$1"
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl list-unit-files --type=service --no-legend "$pattern" 2>/dev/null | grep -q .
+}
+
+detect_leikwan_role() {
+  local env_role relay_score=0 entry_score=0
+  env_role="$(env_file_get "$NETWORK_ENV" ROLE)"
+  [[ "$env_role" == "leikwan-relay" ]] && relay_score=$((relay_score + 3))
+  [[ "$env_role" == "cloud-entry" ]] && entry_score=$((entry_score + 3))
+  role_has_service "${EASYTIER_RELAY_SERVICE_NAME}.service" && relay_score=$((relay_score + 2))
+  role_has_service 'easytier-entry-*.service' && entry_score=$((entry_score + 2))
+  et_ip_present "$RELAY_ET_IP" && relay_score=$((relay_score + 1))
+  [[ -f "$ENTRY_PAIRING_FILE" || -f "$ENTRY_EXPOSE_ENV" ]] && entry_score=$((entry_score + 1))
+  if entries_rows | awk 'NR==1 {found=1} END{exit !found}'; then relay_score=$((relay_score + 1)); fi
+  if forwards_rows | awk 'NR==1 {found=1} END{exit !found}'; then relay_score=$((relay_score + 1)); fi
+  if pbr_rules_count >/dev/null 2>&1 && (( $(pbr_rules_count 2>/dev/null || printf '0') > 0 )); then relay_score=$((relay_score + 1)); fi
+  if (( relay_score > 0 && entry_score > 0 )); then
+    if (( relay_score >= entry_score )); then printf 'leikwan-relay'; else printf 'cloud-entry'; fi
+  elif (( relay_score > 0 )); then
+    printf 'leikwan-relay'
+  elif (( entry_score > 0 )); then
+    printf 'cloud-entry'
+  else
+    printf 'unknown'
+  fi
+}
+
+role_summary() {
+  local env_role sources=() relay=0 entry=0 role
+  env_role="$(env_file_get "$NETWORK_ENV" ROLE)"
+  if [[ "$env_role" == "leikwan-relay" ]]; then sources+=("network.env"); relay=1; fi
+  if [[ "$env_role" == "cloud-entry" ]]; then sources+=("network.env"); entry=1; fi
+  if role_has_service "${EASYTIER_RELAY_SERVICE_NAME}.service"; then sources+=("easytier-relay.service"); relay=1; fi
+  if role_has_service 'easytier-entry-*.service'; then sources+=("entry service"); entry=1; fi
+  if [[ -f "$ENTRY_PAIRING_FILE" || -f "$ENTRY_EXPOSE_ENV" ]]; then sources+=("entry env"); entry=1; fi
+  if entries_rows | awk 'NR==1 {found=1} END{exit !found}'; then sources+=("entries.tsv"); relay=1; fi
+  if forwards_rows | awk 'NR==1 {found=1} END{exit !found}'; then sources+=("forwards.tsv"); relay=1; fi
+  role="$(detect_leikwan_role)"
+  local joined="无" mixed="false" src
+  if (( ${#sources[@]} > 0 )); then
+    joined=""
+    for src in "${sources[@]}"; do
+      joined="${joined:+${joined} + }${src}"
+    done
+  fi
+  (( relay == 1 && entry == 1 )) && mixed="true"
+  printf '%s\t%s\t%s\n' "$role" "$joined" "$mixed"
+}
+
+ensure_role_or_warn() {
+  local expected="$1" summary role source mixed expected_text actual_text
+  summary="$(role_summary)"
+  IFS=$'\t' read -r role source mixed <<<"$summary"
+  [[ "$expected" == "$role" || "$role" == "unknown" ]] && return 0
+  case "$expected" in
+    leikwan-relay) expected_text="B 利群主机" ;;
+    cloud-entry) expected_text="A 公网入口" ;;
+    *) expected_text="$expected" ;;
+  esac
+  case "$role" in
+    leikwan-relay) actual_text="B 利群主机" ;;
+    cloud-entry) actual_text="A 公网入口" ;;
+    *) actual_text="$role" ;;
+  esac
+  warn "当前机器检测为 ${actual_text}，你正在进入 ${expected_text} 操作。"
+  warn "角色来源：${source}"
+  [[ "$mixed" == "true" ]] && warn "检测到角色混合：relay + entry。"
+  if is_interactive; then
+    prompt_yes_no "是否仍然继续？" "N"
+  else
+    return 1
+  fi
 }
 
 current_entry_et_ip() {
@@ -7788,13 +7864,54 @@ status_overview_entry() {
   echo "最近诊断: ${last_doctor}"
 }
 
+status_next_steps() {
+  local role="$1" entries_enabled forwards_enabled
+  echo "下一步建议:"
+  case "$role" in
+    leikwan-relay)
+      entries_enabled="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+      forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+      if (( entries_enabled == 0 )); then
+        echo "- 尚未添加公网入口：执行 lq init 或 利群主机 -> 公网入口列表管理"
+      fi
+      if (( forwards_enabled == 0 )); then
+        echo "- 尚未添加转发目标：执行 利群主机 -> 转发目标管理"
+      fi
+      if (( entries_enabled > 0 && forwards_enabled > 0 )); then
+        echo "- 当前状态正常。"
+        echo "- 可执行 lq output generate 生成端点输出。"
+      fi
+      ;;
+    cloud-entry)
+      if [[ ! -f "$ENTRY_PAIRING_FILE" && ! -f "$NETWORK_ENV" ]]; then
+        echo "- 请粘贴 B 生成的公网入口接入码。"
+        echo "- 部署完成后将 ENTRY 返回码复制回 B。"
+      else
+        echo "- 当前公网入口已配置。"
+        echo "- 可执行 lq status 或 lq --doctor 检查入口状态。"
+      fi
+      ;;
+    *)
+      echo "- 首次部署建议执行 lq init。"
+      echo "- 如已有迁移包，可执行 lq config inspect 后导入。"
+      ;;
+  esac
+}
+
 status_overview() {
-  local role
+  local role role_info role_source role_mixed
   STATUS_OVERVIEW_RESULT="ok"
-  role="$(detect_role)"
+  role_info="$(role_summary)"
+  IFS=$'\t' read -r role role_source role_mixed <<<"$role_info"
   echo "Leikwan 状态总览"
   echo "----------------------------------------"
   echo "脚本版本: ${TOOL_VERSION}"
+  echo "角色来源: ${role_source:-无}"
+  if [[ "$role_mixed" == "true" ]]; then
+    echo "[WARN] 检测到角色混合：relay + entry"
+    echo "[INFO] 请确认这是否为高级部署，否则建议执行 lq --doctor。"
+    status_mark_result warn
+  fi
   echo "最近更新: $(update_status_line)"
   case "$role" in
     leikwan-relay) status_overview_relay ;;
@@ -7809,6 +7926,7 @@ status_overview() {
   echo "最近配置导出: $(named_status_summary "${STATUS_DIR}/last-config-export.env" LAST_CONFIG_EXPORT)"
   echo "最近配置导入: $(named_status_summary "${STATUS_DIR}/last-config-import.env" LAST_CONFIG_IMPORT)"
   echo "最近端点输出: $(named_status_summary "${STATUS_DIR}/last-output.env" LAST_OUTPUT)"
+  status_next_steps "$role"
   echo "整体状态: $(status_result_display "$STATUS_OVERVIEW_RESULT")"
   write_status_cache status "$STATUS_OVERVIEW_RESULT"
   if [[ "$STATUS_OVERVIEW_RESULT" == "ok" ]]; then
@@ -8907,8 +9025,216 @@ quick_networking_menu() {
   done
 }
 
+init_plan() {
+  local role_info role role_source entries_count forwards_count pbr_count
+  role_info="$(role_summary)"
+  IFS=$'\t' read -r role role_source _mixed <<<"$role_info"
+  entries_count="$(entries_rows | awk 'END{print NR+0}')"
+  forwards_count="$(forwards_rows | awk 'END{print NR+0}')"
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  echo "Leikwan 初始化计划"
+  echo "----------------------------------------"
+  case "$role" in
+    leikwan-relay) echo "角色: B 利群主机 / 中转主机" ;;
+    cloud-entry) echo "角色: A 公网入口" ;;
+    *) echo "角色: 待选择（B 利群主机 / A 公网入口 / 配置包恢复）" ;;
+  esac
+  echo "角色来源: ${role_source:-无}"
+  echo "已有配置: entries=${entries_count} forwards=${forwards_count} pbr=${pbr_count}"
+  echo "将执行:"
+  echo "[1] 环境预检"
+  echo "[2] 检查 DNS / IPv4"
+  echo "[3] 安装依赖 curl jq tar unzip nftables"
+  echo "[4] 安装 / 修复 EasyTier"
+  echo "[5] 生成或粘贴公网入口接入码"
+  echo "[6] 可选添加后端转发目标 / PBR / DDNS"
+  echo
+  echo "不会执行:"
+  echo "- 不会覆盖已有 network.env"
+  echo "- 不会重启 relay，除非用户确认"
+  echo "- 不会清空 entries / forwards / pbr"
+  echo "- --dry-run / --plan 不写文件、不启动服务、不应用 nftables / PBR"
+  if (( entries_count + forwards_count + pbr_count > 0 )); then
+    echo "[INFO] 检测到已有配置，初始化会进入维护模式并保留现有配置。"
+  fi
+}
+
+init_step_action() {
+  local title="$1"
+  shift
+  echo
+  echo "[INFO] ${title}"
+  run_menu_action_pause "$@"
+}
+
+init_relay_wizard() {
+  local choice entries_count forwards_count pbr_count
+  ensure_role_or_warn leikwan-relay || return 0
+  while true; do
+    entries_count="$(entries_rows | awk 'END{print NR+0}')"
+    forwards_count="$(forwards_rows | awk 'END{print NR+0}')"
+    pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+    print_menu_header "B 利群主机初始化"
+    if (( entries_count + forwards_count + pbr_count > 0 )) || relay_network_env_ready; then
+      info "检测到已有利群主机配置，将进入维护模式，不会重新初始化 network.env。"
+    fi
+    echo "1. 环境预检"
+    echo "2. 修复 DNS / IPv4 优先"
+    echo "3. 安装 / 修复 EasyTier"
+    echo "4. 生成第一个公网入口接入码"
+    echo "5. 添加后端转发目标"
+    echo "6. 可选：配置 PBR"
+    echo "7. 可选：启用 DDNS 自动刷新"
+    echo "8. 查看状态总览"
+    echo "9. 查看初始化计划"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) init_step_action "将读取当前配置、端口和状态，不修改系统。" status_overview ;;
+      2) init_step_action "将检查并修复 DNS / IPv4 优先配置，执行前会确认。" fix_dns_ipv4_first ;;
+      3) init_step_action "将安装或修复 EasyTier 二进制，执行前会确认下载来源。" install_easytier_binary repair ;;
+      4) init_step_action "将复用现有 network name / secret 生成公网入口接入码，不覆盖 network.env。" quick_generate_network_pairing ;;
+      5) init_step_action "将添加后端转发目标，端口冲突会被预检拦截。" add_forward ;;
+      6) pbr_menu ;;
+      7) ddns_menu ;;
+      8) init_step_action "将显示 B 利群主机状态总览。" status_overview ;;
+      9) init_step_action "仅展示计划，不修改系统。" init_plan ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
+init_entry_wizard() {
+  local choice
+  ensure_role_or_warn cloud-entry || return 0
+  while true; do
+    print_menu_header "A 公网入口初始化"
+    if [[ "$(detect_leikwan_role)" == "cloud-entry" ]]; then
+      info "检测到当前机器已有公网入口配置，将进入维护模式，不会重复破坏配置。"
+    fi
+    echo "1. 环境预检"
+    echo "2. 粘贴 B 生成的公网入口接入码"
+    echo "3. 安装 / 修复 EasyTier"
+    echo "4. 部署 entry service"
+    echo "5. 配置公网入口端口池"
+    echo "6. 生成入口返回码"
+    echo "7. 查看本机公网入口状态"
+    echo "8. 查看初始化计划"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) init_step_action "将读取当前入口配置和状态，不修改系统。" status_overview ;;
+      2|4|6) init_step_action "将粘贴 B 生成的网络码并部署入口；EasyTier IP 必须是 10.x 虚拟 IP，DDNS 域名应填写为公网地址 / 域名。" quick_deploy_entry_from_network_pairing ;;
+      3) init_step_action "将安装或修复 EasyTier 二进制，执行前会确认下载来源。" install_easytier_binary repair ;;
+      5) init_step_action "将配置 A 侧公网入口端口池 TCP+UDP DNAT。" entry_expose_range ;;
+      7) init_step_action "将显示 A 公网入口状态总览，并提示 DDNS 是否一致。" status_overview ;;
+      8) init_step_action "仅展示计划，不修改系统。" init_plan ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
+init_import_wizard() {
+  local pkg
+  print_menu_header "配置包恢复"
+  pkg="$(prompt_value "请输入配置包路径")"
+  [[ -n "$pkg" ]] || return 0
+  init_step_action "将 inspect 配置包，不导入、不修改系统。" config_inspect "$pkg" || return 0
+  init_step_action "将复用 config import，导入前自动快照并保留安全边界检查。" config_import "$pkg"
+  if prompt_yes_no "是否立即执行 doctor？" "N"; then
+    run_menu_action_pause run_doctor_interactive
+  else
+    run_menu_action_pause status_overview
+  fi
+}
+
+init_status_only() {
+  init_step_action "仅查看当前状态，不修改系统。" status_overview
+}
+
+print_init_wizard_menu() {
+  print_menu_header "Leikwan 初始化向导"
+  echo "这台机器准备用作："
+  echo
+  echo "1. B：利群主机 / 中转主机"
+  echo "2. A：公网入口"
+  echo "3. 从配置包恢复"
+  echo "4. 仅检查当前状态"
+  echo "0. 返回"
+}
+
+# shellcheck disable=SC2120
+init_wizard() {
+  local choice plan_only=0 arg
+  while (($# > 0)); do
+    arg="$1"
+    case "$arg" in
+      --dry-run|--plan) DRY_RUN=1; plan_only=1; shift ;;
+      *) fail "未知 init 参数：${arg}"; return 1 ;;
+    esac
+  done
+  if (( plan_only == 1 )) || ! is_interactive; then
+    init_plan
+    return 0
+  fi
+  while true; do
+    print_init_wizard_menu
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) init_relay_wizard ;;
+      2) init_entry_wizard ;;
+      3) init_import_wizard ;;
+      4) init_status_only ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
+print_operations_center_menu() {
+  print_menu_header "运维命令中心"
+  echo "1. 查看状态总览"
+  echo "2. 一键诊断"
+  echo "3. 自动修复常见问题"
+  echo "4. 重新应用转发规则"
+  echo "5. 检查端口冲突"
+  echo "6. 生成端点输出"
+  echo "7. 配置导出 / 导入"
+  echo "8. DDNS 自动刷新"
+  echo "9. 自更新"
+  echo "0. 返回"
+}
+
+operations_center_menu() {
+  local choice
+  while true; do
+    print_operations_center_menu
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause status_overview ;;
+      2) run_menu_action run_doctor_interactive ;;
+      3) run_menu_action_pause fix_dns_ipv4_first ;;
+      4) apply_relay_rules_menu ;;
+      5) run_menu_action_pause port_check ;;
+      6) run_menu_action_pause generate_forward_outputs ;;
+      7) config_menu ;;
+      8) ddns_menu ;;
+      9) update_menu ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
 relay_host_menu() {
   local choice
+  ensure_role_or_warn leikwan-relay || return 0
   while true; do
     print_menu_header "利群主机"
     echo "1. EasyTier 组网管理"
@@ -8937,6 +9263,7 @@ relay_host_menu() {
 
 entry_host_menu() {
   local choice
+  ensure_role_or_warn cloud-entry || return 0
   while true; do
     print_menu_header "公网入口（A 本机）"
     echo "1. 粘贴利群网络码，部署本机入口"
@@ -9011,23 +9338,26 @@ main_menu() {
   while true; do
     clear_screen_if_interactive
     print_banner
-    echo "1. 快速组网（分步提示）"
+    echo "1. 初始化 / 快速组网"
     echo "2. 利群主机"
     echo "3. 公网入口"
-    echo "4. 高级功能"
-    echo "5. 状态总览"
-    echo "6. 一键诊断"
-    echo "7. 卸载全部"
+    echo "4. 状态总览"
+    echo "5. 运维命令中心"
+    echo "6. 高级功能"
+    echo "7. 一键诊断"
+    echo "8. 卸载全部"
     echo "0. 退出"
     choice="$(prompt_menu_choice "请选择：")"
+    # shellcheck disable=SC2119
     case "$choice" in
-      1) quick_networking_menu ;;
+      1) init_wizard ;;
       2) relay_host_menu ;;
       3) entry_host_menu ;;
-      4) advanced_menu ;;
-      5) run_menu_action_pause status_overview ;;
-      6) run_menu_action run_doctor_interactive ;;
-      7) uninstall_new_mode ;;
+      4) run_menu_action_pause status_overview ;;
+      5) operations_center_menu ;;
+      6) advanced_menu ;;
+      7) run_menu_action run_doctor_interactive ;;
+      8) uninstall_new_mode ;;
       0) exit 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -9038,6 +9368,13 @@ main_menu() {
 main() {
   while [[ "${1:-}" == "--dry-run" ]]; do DRY_RUN=1; shift; done
   case "${1:-}" in
+    init|wizard|quickstart)
+      shift
+      run_cli_action init_wizard "$@"
+      ;;
+    plan)
+      run_cli_action init_plan
+      ;;
     status)
       run_cli_action status_overview
       ;;

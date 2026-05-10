@@ -60,14 +60,14 @@ echo "Package: ${PACKAGE_PATH}"
 echo "SHA256:  ${SHA_PATH}"
 echo
 echo "安全一键安装："
-echo "curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq"
+echo "curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq init"
 echo
 echo "管道安装（只安装，不自动进菜单）："
 echo "curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh | bash"
-echo "lq"
+echo "lq init"
 echo
 echo "下载到本地再执行："
-echo "curl -fsSL -o /root/leikwan-toolkit.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/LQ && lq"
+echo "curl -fsSL -o /root/leikwan-toolkit.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/LQ && lq init"
 echo
 echo "Release 包安装："
-echo "curl -fsSL -o /tmp/leikwan-toolkit.tar.gz https://github.com/ike-sh/leikwan-toolkit/releases/latest/download/leikwan-toolkit-${PACKAGE_VERSION}.tar.gz && tar -xzf /tmp/leikwan-toolkit.tar.gz -C /root && cp /root/leikwan-toolkit-${PACKAGE_VERSION}/leikwan-toolkit.sh /root/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/LQ && lq"
+echo "curl -fsSL -o /tmp/leikwan-toolkit.tar.gz https://github.com/ike-sh/leikwan-toolkit/releases/latest/download/leikwan-toolkit-${PACKAGE_VERSION}.tar.gz && tar -xzf /tmp/leikwan-toolkit.tar.gz -C /root && cp /root/leikwan-toolkit-${PACKAGE_VERSION}/leikwan-toolkit.sh /root/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/LQ && lq init"
