@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.0.2"
+TOOL_VERSION="1.0.3"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -12,6 +12,7 @@ DEPS_APT_UPDATED=0
 DEPS_INSTALLED_THIS_RUN=""
 LOG_DISABLED=0
 MENU_ACTION_PAUSE_DONE=0
+DOCTOR_INTERACTIVE_FIX=0
 
 LOG_FILE="/var/log/leikwan-toolkit.log"
 STATE_DIR="/etc/leikwan-toolkit"
@@ -1928,20 +1929,44 @@ enabled_forwards_count() {
   forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}'
 }
 
+nft_project_table_text() {
+  nft list table inet leikwan_forward 2>/dev/null || true
+}
+
 nft_has_dnat_rules() {
-  nft list table inet leikwan_forward 2>/dev/null | grep -q ' dnat '
+  nft_project_table_text | awk '
+    {
+      line = " " $0 " "
+      gsub(/[[:space:]]+/, " ", line)
+      if (line ~ / dnat( |$)/) found = 1
+    }
+    END { exit !found }
+  '
 }
 
 nft_has_cloud_dnat() {
   local proto="$1" relay_ip="$2" entry_port="$3"
-  nft list table inet leikwan_forward 2>/dev/null |
-    grep -Fq "${proto} dport ${entry_port} dnat ip to ${relay_ip}"
+  nft_project_table_text | awk -v proto="$proto" -v dport="$entry_port" -v target="$relay_ip" '
+    {
+      line = " " $0 " "
+      gsub(/[[:space:]]+/, " ", line)
+      if (index(line, " " proto " dport " dport) && index(line, " dnat ") && index(line, target)) found = 1
+    }
+    END { exit !found }
+  '
 }
 
 nft_has_relay_dnat() {
   local proto="$1" entry_port="$2" target_ip="$3" target_port="$4"
-  nft list table inet leikwan_forward 2>/dev/null |
-    grep -Fq "${proto} dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
+  local target="${target_ip}:${target_port}"
+  nft_project_table_text | awk -v proto="$proto" -v dport="$entry_port" -v target="$target" '
+    {
+      line = " " $0 " "
+      gsub(/[[:space:]]+/, " ", line)
+      if (index(line, " " proto " dport " dport) && index(line, " dnat ") && index(line, target)) found = 1
+    }
+    END { exit !found }
+  '
 }
 
 is_mss_value() {
@@ -4430,10 +4455,13 @@ report_entry_policy_summary() {
 
 doctor_recheck_relay_dnat_rules() {
   local name entry_port target_host target_ip target_port out_iface route_table enabled _last_resolved_at comment
-  local dnat_missing=0
-  if nft_has_dnat_rules; then
-    report OK "nftables DNAT 规则复查：存在"
-  else
+  local dnat_missing=0 forwards
+  forwards="$(enabled_forwards_count 2>/dev/null || printf '0')"
+  if (( forwards == 0 )); then
+    report INFO "当前没有 enabled 转发目标，跳过 DNAT 复查。"
+    return 0
+  fi
+  if ! nft_has_dnat_rules; then
     report WARN "nftables DNAT 规则复查：仍未发现 DNAT"
     return 1
   fi
@@ -4449,22 +4477,45 @@ doctor_recheck_relay_dnat_rules() {
       dnat_missing=1
     fi
   done < <(resolved_rows_usv)
-  (( dnat_missing == 0 )) && report OK "转发 DNAT 规则复查通过"
   return "$dnat_missing"
 }
 
 doctor_offer_forward_rule_fix() {
   local fix_needed="$1"
+  local reason="${2:-legacy}"
   (( fix_needed == 1 )) || return 0
-  report INFO "检测到转发规则可能是旧版本模板，请执行：lq forward apply-relay --auto-fix-route"
+  case "$reason" in
+    empty)
+      report WARN "nftables 表存在，但没有任何转发 DNAT 规则。"
+      report INFO "检测到转发规则可能尚未应用，请执行：lq forward apply-relay --auto-fix-route"
+      ;;
+    partial)
+      report WARN "检测到部分转发 DNAT 规则缺失，当前 nftables 规则可能不是最新模板。"
+      report INFO "请执行：lq forward apply-relay --auto-fix-route"
+      ;;
+    mss)
+      report INFO "检测到 TCP MSS clamp 规则可能未按当前配置应用，请执行：lq forward apply-relay --auto-fix-route"
+      ;;
+    *)
+      report INFO "检测到转发规则可能是旧版本模板，请执行：lq forward apply-relay --auto-fix-route"
+      ;;
+  esac
   is_interactive || return 0
+  (( DOCTOR_INTERACTIVE_FIX == 1 )) || return 0
   if prompt_yes_no "是否立即重新应用转发规则并同步 route_table？" "Y"; then
+    report INFO "正在重新应用转发规则并同步 route_table..."
     if apply_nft_rules "leikwan-relay" 1; then
       report OK "已重新应用转发规则并同步 route_table。"
-      doctor_recheck_relay_dnat_rules || true
+      if doctor_recheck_relay_dnat_rules; then
+        report OK "转发规则复查通过。"
+      else
+        report WARN "转发规则已重新应用，但仍存在缺失，请查看上方明细。"
+      fi
     else
       report WARN "转发规则重新应用失败，请稍后执行：lq forward apply-relay --auto-fix-route"
     fi
+  else
+    report INFO "已跳过自动修复。可稍后执行：lq forward apply-relay --auto-fix-route"
   fi
 }
 
@@ -4505,7 +4556,7 @@ doctor_cloud() {
   ping_entry_et_ip "relay" "$RELAY_ET_IP" report || true
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
     report OK "nftables table inet leikwan_forward 存在"
-    if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; fi
+    if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有任何 DNAT 规则。"; fi
     report_mss_clamp_status
   else
     report WARN "nftables 项目表不存在"
@@ -4536,6 +4587,9 @@ doctor_relay() {
   local iface entries forwards name public_host et_ip proto port _weight enabled target_ip target_port
   local entry_port target_host out_iface route_table comment
   local forward_rule_fix_needed=0
+  local forward_rule_fix_reason=""
+  local nft_table_exists=0 table_has_any_dnat=0 relay_tcp_missing=0 relay_udp_missing=0
+  forwards=0
   if [[ -x "$EASYTIER_CORE_BIN" && -x "$EASYTIER_CLI_BIN" ]]; then
     report OK "EasyTier binary 存在"
     report INFO "easytier-core: ${EASYTIER_CORE_BIN}"
@@ -4570,17 +4624,22 @@ doctor_relay() {
   done < <(entries_rows)
   if sysctl -n net.ipv4.ip_forward 2>/dev/null | grep -qx 1; then report OK "net.ipv4.ip_forward=1"; else report WARN "net.ipv4.ip_forward 未启用"; fi
   if nft list table inet leikwan_forward >/dev/null 2>&1; then
+    nft_table_exists=1
     report OK "nftables table inet leikwan_forward 存在"
-    if nft_has_dnat_rules; then report OK "nftables DNAT 规则存在"; else report WARN "nftables 表存在，但没有转发 DNAT 规则。"; forward_rule_fix_needed=1; fi
+    if nft_has_dnat_rules; then table_has_any_dnat=1; report OK "nftables DNAT 规则存在"; fi
     report_mss_clamp_status
     if mss_clamp_enabled && ! nft_has_mss_clamp; then
       forward_rule_fix_needed=1
+      forward_rule_fix_reason="mss"
     fi
   else
     report WARN "nftables 项目表不存在"
   fi
   if forwards="$(enabled_forwards_count 2>/dev/null)"; then
     report INFO "enabled forwards：${forwards}"
+    if (( forwards == 0 )); then
+      report INFO "当前没有 enabled 转发目标。"
+    fi
   else
     report FAIL "forwards.tsv 校验失败，请检查 TAB 分隔和字段数。"
   fi
@@ -4616,19 +4675,31 @@ doctor_relay() {
         else
           report FAIL "${name} relay TCP DNAT 缺失：应为 tcp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
           forward_rule_fix_needed=1
+          relay_tcp_missing=1
         fi
         if nft_has_relay_dnat udp "$entry_port" "$target_ip" "$target_port"; then
           report OK "${name} relay UDP DNAT 正常"
         else
           report WARN "${name} relay UDP DNAT 缺失：应为 udp dport ${entry_port} dnat ip to ${target_ip}:${target_port}"
           forward_rule_fix_needed=1
+          relay_udp_missing=1
         fi
       fi
     done < <(resolved_rows_usv)
   else
     report FAIL "resolved.tsv 更新失败，请检查 target_host 解析。"
   fi
-  doctor_offer_forward_rule_fix "$forward_rule_fix_needed"
+  if (( nft_table_exists == 1 && forwards > 0 )); then
+    if (( table_has_any_dnat == 0 )); then
+      forward_rule_fix_needed=1
+      forward_rule_fix_reason="empty"
+    elif (( relay_tcp_missing == 1 || relay_udp_missing == 1 )); then
+      forward_rule_fix_needed=1
+      forward_rule_fix_reason="partial"
+    fi
+  fi
+  [[ -n "$forward_rule_fix_reason" ]] || forward_rule_fix_reason="legacy"
+  doctor_offer_forward_rule_fix "$forward_rule_fix_needed" "$forward_rule_fix_reason"
   [[ -f "$NETWORK_PAIRING_FILE" ]] && report OK "relay 网络码：已生成"
 }
 
@@ -4716,6 +4787,13 @@ doctor() {
     report DEBUG "network.env=${NETWORK_ENV}"
     report DEBUG "nft=${NFT_RULE_FILE}"
   fi
+}
+
+run_doctor_interactive() {
+  local old_doctor_interactive_fix="$DOCTOR_INTERACTIVE_FIX"
+  DOCTOR_INTERACTIVE_FIX=1
+  doctor
+  DOCTOR_INTERACTIVE_FIX="$old_doctor_interactive_fix"
 }
 
 fix_dns_ipv4_first() {
@@ -5373,14 +5451,6 @@ quick_networking_menu() {
       echo "B：利群主机，负责中转和后端转发"
       echo "A：公网入口，可部署多台，用于接入公网流量"
       echo "C：后端目标，支持 TCP/UDP 转发"
-      echo
-      echo "推荐顺序："
-      echo "1. B 修复 DNS / IPv4"
-      echo "2. B 生成公网入口网络码"
-      echo "3. A 粘贴网络码部署入口"
-      echo "4. B 粘贴 A 返回码完成接入"
-      echo "5. A 配置公网入口端口池"
-      echo "6. B 添加后端转发目标"
       echo "----------------------------------------"
       intro_shown=1
     else
@@ -5432,7 +5502,7 @@ relay_host_menu() {
       3) forwards_menu ;;
       4) pbr_menu ;;
       5) run_menu_action_pause ipv6_lockdown ;;
-      6) run_menu_action doctor ;;
+      6) run_menu_action run_doctor_interactive ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -5457,7 +5527,7 @@ entry_host_menu() {
           warn "当前机器检测为利群主机，不是公网入口机。"
           warn "如需管理已接入的公网入口列表，请进入：利群主机 -> 公网入口列表管理"
         else
-          doctor
+          run_doctor_interactive
         fi
         wait_enter_to_return
         ;;
@@ -5487,7 +5557,7 @@ advanced_menu() {
       2) link_test_menu ;;
       3) run_menu_action fix_dns_ipv4_first || warn_and_pause "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
       4) bbr_menu ;;
-      5) run_menu_action doctor ;;
+      5) run_menu_action run_doctor_interactive ;;
       6) backup_restore_menu ;;
       7) run_menu_action generate_debug_report ;;
       8) legacy_cleanup_menu ;;
@@ -5519,7 +5589,7 @@ main_menu() {
       2) relay_host_menu ;;
       3) entry_host_menu ;;
       4) advanced_menu ;;
-      5) run_menu_action doctor ;;
+      5) run_menu_action run_doctor_interactive ;;
       6) uninstall_new_mode ;;
       0) exit 0 ;;
       "") menu_input_required ;;

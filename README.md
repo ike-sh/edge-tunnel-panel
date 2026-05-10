@@ -2,7 +2,7 @@
 
 Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 构建公网入口和中转主机之间的虚拟网络，并使用 nftables 在中转主机上管理 TCP/UDP 转发。
 
-当前版本：`1.0.2`
+当前版本：`1.0.3`
 
 ## 功能特性
 
@@ -73,6 +73,8 @@ lq --version
 ```bash
 lq --doctor
 ```
+
+如果升级脚本后看到 TCP/UDP DNAT 缺失，交互菜单中的“一键诊断 / 查看状态”会提示是否立即执行 `lq forward apply-relay --auto-fix-route` 重新渲染当前模板；非交互 `lq --doctor` 只提示命令，不会自动改规则。
 
 ## 端口说明
 
@@ -172,11 +174,11 @@ lq --uninstall
 
 ## Release
 
-当前正式版本：`1.0.2`
+当前正式版本：`1.0.3`
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.0.2.tar.gz
-leikwan-toolkit-1.0.2.tar.gz.sha256
+leikwan-toolkit-1.0.3.tar.gz
+leikwan-toolkit-1.0.3.tar.gz.sha256
 ```
