@@ -1,6 +1,6 @@
 # 故障排查
 
-Leikwan Toolkit 1.0.3 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.0.4 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -72,6 +72,14 @@ MSS clamp 用于提高 EasyTier/tun 场景下 TCP 转发稳定性。doctor 和�
 
 ```bash
 lq forward apply-relay --auto-fix-route
+```
+
+如果当前 SSH 连接经过公网入口 / EasyTier / 转发链路，前台重应用 nftables 可能短暂中断连接。建议使用后台方式避免 SIGHUP 中止命令：
+
+```bash
+nohup lq forward apply-relay --auto-fix-route >/root/lq-apply-relay.log 2>&1 &
+tail -f /root/lq-apply-relay.log
+lq --doctor
 ```
 
 升级脚本后，如果 doctor 发现 nftables 表存在但没有任何 DNAT、只有部分 TCP/UDP DNAT 缺失，或启用了 MSS clamp 但规则未渲染，会提示这可能是旧版本模板。交互菜单会询问是否立即执行 `lq forward apply-relay --auto-fix-route` 并复查；非交互 `lq --doctor` 只提示命令，不会自动修改 nftables。

@@ -1,6 +1,6 @@
 # nftables 转发
 
-Leikwan Toolkit 1.0.3 只管理本项目自己的表：
+Leikwan Toolkit 1.0.4 只管理本项目自己的表：
 
 ```text
 table inet leikwan_forward
@@ -75,7 +75,7 @@ tcp flags syn tcp option maxseg size set 1320
 
 该规则位于 `forward` hook，随 `/etc/leikwan-toolkit/nft/leikwan-forward.nft` 和 `leikwan-nft-forward.service` 持久化，不需要手工创建临时 `lq_mss` 表。
 
-`doctor` 和“查看状态”只检测当前 nftables 规则，不会自行修改 MSS clamp。执行入口端口池应用或利群转发规则应用时，脚本会重新渲染 nftables；如果默认开启 MSS clamp，会明确输出 `已自动启用 TCP MSS clamp: 1320`。
+`doctor` 和“查看状态”会检测当前 nftables 规则。交互菜单发现 MSS clamp 缺失时会询问是否重新应用规则；非交互 `lq --doctor` 只提示命令，不会自行修改。执行入口端口池应用或利群转发规则应用时，脚本会重新渲染 nftables；如果默认开启 MSS clamp，会明确输出 `已自动启用 TCP MSS clamp: 1320`。
 
 默认 MSS clamp 是 `1320`。如仍不稳定，可降到 `1280` 或故障兜底值 `1200`：
 
@@ -88,6 +88,14 @@ printf 'TCP_MSS_CLAMP=1280\nENABLE_MSS_CLAMP=true\n' | sudo tee /etc/leikwan-too
 
 ```bash
 sudo env LEIKWAN_TCP_MSS_CLAMP=1200 lq forward apply-relay
+```
+
+如果当前 SSH 连接可能经过公网入口、EasyTier 或正在修改的转发链路，建议后台应用 B 侧转发规则：
+
+```bash
+nohup lq forward apply-relay --auto-fix-route >/root/lq-apply-relay.log 2>&1 &
+tail -f /root/lq-apply-relay.log
+lq --doctor
 ```
 
 ## ip_forward

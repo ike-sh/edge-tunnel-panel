@@ -2,7 +2,7 @@
 
 Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 构建公网入口和中转主机之间的虚拟网络，并使用 nftables 在中转主机上管理 TCP/UDP 转发。
 
-当前版本：`1.0.3`
+当前版本：`1.0.4`
 
 ## 功能特性
 
@@ -113,6 +113,14 @@ IPv4 PBR 用于让特定目标网段走指定路由表，例如 CN2 或 9929。
 lq forward apply-relay --auto-fix-route
 ```
 
+如果当前 SSH 连接可能经过公网入口、EasyTier 或正在修改的转发链路，建议后台安全执行：
+
+```bash
+nohup lq forward apply-relay --auto-fix-route >/root/lq-apply-relay.log 2>&1 &
+tail -f /root/lq-apply-relay.log
+lq --doctor
+```
+
 ## 常用命令
 
 ```bash
@@ -174,11 +182,11 @@ lq --uninstall
 
 ## Release
 
-当前正式版本：`1.0.3`
+当前正式版本：`1.0.4`
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.0.3.tar.gz
-leikwan-toolkit-1.0.3.tar.gz.sha256
+leikwan-toolkit-1.0.4.tar.gz
+leikwan-toolkit-1.0.4.tar.gz.sha256
 ```

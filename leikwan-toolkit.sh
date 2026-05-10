@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.0.3"
+TOOL_VERSION="1.0.4"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -13,6 +13,7 @@ DEPS_INSTALLED_THIS_RUN=""
 LOG_DISABLED=0
 MENU_ACTION_PAUSE_DONE=0
 DOCTOR_INTERACTIVE_FIX=0
+APPLY_NFT_LAST_STATUS=""
 
 LOG_FILE="/var/log/leikwan-toolkit.log"
 STATE_DIR="/etc/leikwan-toolkit"
@@ -29,6 +30,7 @@ FORWARDS_DIR="${STATE_DIR}/forwards"
 PBR_DIR="${STATE_DIR}/pbr"
 EASYTIER_DIR="${STATE_DIR}/easytier"
 REPORT_FILE="/root/leikwan-debug-report.txt"
+APPLY_RELAY_LOG="/root/lq-apply-relay.log"
 
 ENTRIES_TSV="${ENTRIES_DIR}/entries.tsv"
 PENDING_ENTRIES_TSV="${ENTRIES_DIR}/pending-entries.tsv"
@@ -1969,6 +1971,12 @@ nft_has_relay_dnat() {
   '
 }
 
+nft_existing_project_chains() {
+  nft_project_table_text | awk '
+    /^[[:space:]]*chain[[:space:]]+/ && $2 != "" && !seen[$2]++ { print $2 }
+  '
+}
+
 is_mss_value() {
   local value="$1"
   [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 500 && value <= 1460 ))
@@ -3794,8 +3802,101 @@ ENABLED=true" 600
   info "下一步：回到 B 利群主机，如果需要指定 CN2 / 9929 出口，请先选择第 7 项配置 PBR，再选择第 6 项添加后端转发目标。"
 }
 
+warn_forward_apply_ssh_risk() {
+  APPLY_NFT_LAST_STATUS=""
+  [[ -n "${SSH_CONNECTION:-}" ]] || return 0
+  warn "正在重新应用 nftables 转发规则。"
+  warn "如果当前 SSH 连接经过公网入口 / EasyTier / 转发链路，连接可能短暂中断。"
+  info "如担心 SSH 断开，可使用："
+  echo "nohup lq forward apply-relay --auto-fix-route >${APPLY_RELAY_LOG} 2>&1 &"
+  if is_interactive; then
+    if ! prompt_yes_no "是否继续前台执行？" "Y"; then
+      APPLY_NFT_LAST_STATUS="skipped"
+      info "已取消前台执行。"
+      return 130
+    fi
+  fi
+  return 0
+}
+
+nft_prepare_project_table_apply_file() {
+  local content="$1" output="$2" chain
+  : >"$output"
+  if nft_project_table_exists; then
+    printf '%s\n' 'flush table inet leikwan_forward' >>"$output"
+    while IFS= read -r chain; do
+      [[ -n "$chain" ]] || continue
+      printf 'delete chain inet leikwan_forward %s\n' "$chain" >>"$output"
+    done < <(nft_existing_project_chains)
+  else
+    printf '%s\n' 'add table inet leikwan_forward' >>"$output"
+  fi
+  awk '
+    /^[[:space:]]*chain[[:space:]]+/ {
+      chain = $2
+      next
+    }
+    chain != "" && /^[[:space:]]*type[[:space:]]+/ {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      print "add chain inet leikwan_forward " chain " { " line " }"
+      next
+    }
+    chain != "" && /^[[:space:]]*}/ {
+      chain = ""
+      next
+    }
+    chain != "" {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line != "" && line !~ /^[{}]/) {
+        print "add rule inet leikwan_forward " chain " " line
+      }
+    }
+  ' <<<"$content" >>"$output"
+}
+
+apply_relay_rules_background() {
+  need_root_unless_dry_run
+  local cmd=()
+  if command -v lq >/dev/null 2>&1; then
+    cmd=(lq forward apply-relay --auto-fix-route)
+  else
+    cmd=(bash "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")" forward apply-relay --auto-fix-route)
+  fi
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] nohup ${cmd[*]} >${APPLY_RELAY_LOG} 2>&1 &"
+    return 0
+  fi
+  nohup "${cmd[@]}" >"$APPLY_RELAY_LOG" 2>&1 &
+  info "已后台执行，请稍后查看："
+  echo "tail -f ${APPLY_RELAY_LOG}"
+  info "后台执行完成后，可运行：lq --doctor"
+}
+
+apply_relay_rules_menu() {
+  local choice
+  while true; do
+    print_menu_header "重新应用利群转发规则"
+    echo "1. 前台执行"
+    echo "2. 后台执行并写入 ${APPLY_RELAY_LOG}"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause apply_nft_rules "leikwan-relay" 1; return 0 ;;
+      2) run_menu_action_pause apply_relay_rules_background; return 0 ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
 apply_nft_rules() {
   local role="$1" auto_fix_route="${2:-0}" content tmp old enabled_count=-1 relay_ip start end proto
+  local rollback
+  APPLY_NFT_LAST_STATUS=""
   need_root_unless_dry_run
   install_packages nftables iproute2 || return 1
   configure_forward_sysctl || warn "IPv4 转发 sysctl 写入失败，请稍后手动检查。"
@@ -3836,21 +3937,21 @@ apply_nft_rules() {
         fail "enabled forwards=${enabled_count}，但 relay nftables 未生成 DNAT 规则。"
         return 1
       fi
+      warn_forward_apply_ssh_risk || return $?
       ;;
     *) fail "无法识别角色：${role}"; return 1 ;;
   esac
   write_file "$NFT_RULE_FILE" "$content" 644
   write_file "$NFT_SERVICE" "$(render_nft_service)" 644
   (( DRY_RUN == 1 )) && return 0
-  tmp="$(mktemp)"; old="$(mktemp)"
-  printf '%s\n' "$content" >"$tmp"
+  tmp="$(mktemp)"; old="$(mktemp)"; rollback="$(mktemp)"
+  nft_prepare_project_table_apply_file "$content" "$tmp"
   if ! nft -c -f "$tmp"; then
     fail "nftables 规则校验失败。"
-    rm -f "$tmp" "$old"
+    rm -f "$tmp" "$old" "$rollback"
     return 1
   fi
   nft list table inet leikwan_forward >"$old" 2>/dev/null || true
-  nft delete table inet leikwan_forward 2>/dev/null || true
   if nft -f "$tmp"; then
     if command -v systemctl >/dev/null 2>&1; then
       systemctl daemon-reload || warn "systemd daemon-reload 失败，请稍后手动检查。"
@@ -3870,11 +3971,16 @@ apply_nft_rules() {
     fi
   else
     fail "nftables 应用失败，尝试回滚。"
-    [[ -s "$old" ]] && nft -f "$old" || true
-    rm -f "$tmp" "$old"
+    if [[ -s "$old" ]]; then
+      nft_prepare_project_table_apply_file "$(cat "$old")" "$rollback"
+      nft -f "$rollback" || true
+    else
+      nft delete table inet leikwan_forward 2>/dev/null || true
+    fi
+    rm -f "$tmp" "$old" "$rollback"
     return 1
   fi
-  rm -f "$tmp" "$old"
+  rm -f "$tmp" "$old" "$rollback"
 }
 
 nft_project_table_exists() {
@@ -4494,7 +4600,8 @@ doctor_offer_forward_rule_fix() {
       report INFO "请执行：lq forward apply-relay --auto-fix-route"
       ;;
     mss)
-      report INFO "检测到 TCP MSS clamp 规则可能未按当前配置应用，请执行：lq forward apply-relay --auto-fix-route"
+      report INFO "检测到 TCP MSS clamp 未启用，可能是旧版本 nftables 模板或规则未重新应用。"
+      report INFO "请执行：lq forward apply-relay --auto-fix-route"
       ;;
     *)
       report INFO "检测到转发规则可能是旧版本模板，请执行：lq forward apply-relay --auto-fix-route"
@@ -4506,11 +4613,16 @@ doctor_offer_forward_rule_fix() {
     report INFO "正在重新应用转发规则并同步 route_table..."
     if apply_nft_rules "leikwan-relay" 1; then
       report OK "已重新应用转发规则并同步 route_table。"
-      if doctor_recheck_relay_dnat_rules; then
+      if mss_clamp_enabled; then
+        report_mss_clamp_status
+      fi
+      if doctor_recheck_relay_dnat_rules && { ! mss_clamp_enabled || nft_has_mss_clamp; }; then
         report OK "转发规则复查通过。"
       else
         report WARN "转发规则已重新应用，但仍存在缺失，请查看上方明细。"
       fi
+    elif [[ "$APPLY_NFT_LAST_STATUS" == "skipped" ]]; then
+      report INFO "已取消前台执行。可使用 nohup 后台方式安全应用。"
     else
       report WARN "转发规则重新应用失败，请稍后执行：lq forward apply-relay --auto-fix-route"
     fi
@@ -5296,7 +5408,7 @@ forwards_menu() {
       3) run_menu_action_pause delete_forward ;;
       4) run_menu_action_pause list_forwards ;;
       5) run_menu_action_pause set_forward_enabled ;;
-      6) run_menu_action_pause apply_nft_rules "leikwan-relay" || warn_and_pause "利群转发 nftables 规则未应用成功。" ;;
+      6) apply_relay_rules_menu ;;
       7) run_menu_action_pause resolve_forward_targets_action ;;
       8) run_menu_action_pause test_forward ;;
       9) run_menu_action_pause import_forwards_tsv ;;
