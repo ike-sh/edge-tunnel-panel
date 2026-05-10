@@ -1,6 +1,6 @@
 ﻿# 配置导入 / 导出 / 迁移包
 
-Leikwan Toolkit 1.2.0 增加配置包，用于备份、迁移和排错。
+Leikwan Toolkit 1.2.1 增加配置包，用于备份、迁移和排错。
 
 ## 完整包和脱敏包
 
@@ -70,6 +70,7 @@ lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
 - 校验外部 `.sha256`
 - 校验包内 `checksums.sha256`
 - 校验 manifest
+- 拒绝路径穿越、绝对路径、symlink 和 hardlink 包成员
 - 展示 inspect 摘要
 - 自动创建 `auto-before-config-import-YYYYMMDD-HHMMSS.tar.gz` 快照
 - 二次确认覆盖风险

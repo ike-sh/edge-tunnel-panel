@@ -1,6 +1,6 @@
 ﻿# 转发端点分享输出
 
-Leikwan Toolkit 1.2.0 会生成更完整的端点分享文件，方便把公网入口发给使用方或交给脚本读取。
+Leikwan Toolkit 1.2.1 会生成更完整的端点分享文件，方便把公网入口发给使用方或交给脚本读取。
 
 ## 生成
 
@@ -25,7 +25,7 @@ lq output json
 lq output html
 ```
 
-HTML 是静态文件，不需要 Web 服务。JSON 包含版本、生成时间、enabled entries、enabled forwards 和每个 TCP / UDP endpoint。
+HTML 是静态文件，不需要 Web 服务。JSON 包含版本、生成时间、enabled entries、enabled forwards 和每个 TCP / UDP endpoint。HTML 会转义 forward name、comment、target_host 和 public_host 等用户输入字段。
 
 ## 内容
 

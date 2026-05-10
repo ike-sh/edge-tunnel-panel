@@ -5,6 +5,8 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 TARGETS=(leikwan-toolkit.sh scripts/bootstrap.sh scripts/package-release.sh README.md docs)
+[[ -f scripts/verify-release.sh ]] && TARGETS+=(scripts/verify-release.sh)
+[[ -d tests ]] && TARGETS+=(tests)
 TOOL_VERSION="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' leikwan-toolkit.sh 2>/dev/null || true)"
 if [[ -n "$TOOL_VERSION" && -d "dist/leikwan-toolkit-${TOOL_VERSION}" ]]; then
   TARGETS+=(
@@ -14,6 +16,8 @@ if [[ -n "$TOOL_VERSION" && -d "dist/leikwan-toolkit-${TOOL_VERSION}" ]]; then
     "dist/leikwan-toolkit-${TOOL_VERSION}/README.md"
     "dist/leikwan-toolkit-${TOOL_VERSION}/docs"
   )
+  [[ -f "dist/leikwan-toolkit-${TOOL_VERSION}/scripts/verify-release.sh" ]] && TARGETS+=("dist/leikwan-toolkit-${TOOL_VERSION}/scripts/verify-release.sh")
+  [[ -d "dist/leikwan-toolkit-${TOOL_VERSION}/tests" ]] && TARGETS+=("dist/leikwan-toolkit-${TOOL_VERSION}/tests")
 fi
 
 FAILED=0
@@ -32,6 +36,8 @@ deny_patterns=(
   'EASYTIER_NETWORK_SECRET=[A-Za-z0-9][A-Za-z0-9._-]{8,}'
   'REALITY_PRIVATE_KEY[[:space:]]*='
   'X25519.*private[[:space:]_-]*key'
+  '(^|[^A-Za-z0-9_])([Pp]assword|[Tt]oken|[Ss]ecret)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9][A-Za-z0-9._/-]{8,}'
+  'LEIKWAN_[A-Z0-9_]*_BASE64=[A-Za-z0-9+/]{24,}={0,2}'
 )
 
 for pattern in "${deny_patterns[@]}"; do

@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.2.0 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.2.1 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标

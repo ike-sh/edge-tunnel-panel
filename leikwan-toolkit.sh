@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.2.0"
+TOOL_VERSION="1.2.1"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -10,7 +10,7 @@ DRY_RUN=0
 VERBOSE_DOCTOR=0
 DEPS_APT_UPDATED=0
 DEPS_INSTALLED_THIS_RUN=""
-LOG_DISABLED=0
+LOG_DISABLED="${LEIKWAN_LOG_DISABLED:-0}"
 MENU_ACTION_PAUSE_DONE=0
 DOCTOR_INTERACTIVE_FIX=0
 APPLY_NFT_LAST_STATUS=""
@@ -20,9 +20,9 @@ PORT_CHECK_RESULT="ok"
 STATUS_OVERVIEW_RESULT="ok"
 LEIKWAN_GLOBAL_LOCK_TOKEN=""
 
-LOG_FILE="/var/log/leikwan-toolkit.log"
-STATE_DIR="/etc/leikwan-toolkit"
-BACKUP_DIR="/var/backups/leikwan-toolkit"
+LOG_FILE="${LEIKWAN_LOG_FILE:-/var/log/leikwan-toolkit.log}"
+STATE_DIR="${LEIKWAN_STATE_DIR:-/etc/leikwan-toolkit}"
+BACKUP_DIR="${LEIKWAN_BACKUP_DIR:-/var/backups/leikwan-toolkit}"
 OLD_LOG_FILE="/var/log/leikwan-wg-toolkit.log"
 OLD_STATE_DIR="/etc/leikwan-wg-toolkit"
 OLD_BACKUP_DIR="/var/backups/leikwan-wg-toolkit"
@@ -37,18 +37,19 @@ EASYTIER_DIR="${STATE_DIR}/easytier"
 STATUS_DIR="${STATE_DIR}/status"
 SNAPSHOT_DIR="${STATE_DIR}/snapshots"
 AUTO_SNAPSHOT_DIR="${SNAPSHOT_DIR}/auto"
-REPORT_FILE="/root/leikwan-debug-report.txt"
-APPLY_RELAY_LOG="/root/lq-apply-relay.log"
+REPORT_FILE="${LEIKWAN_REPORT_FILE:-/root/leikwan-debug-report.txt}"
+APPLY_RELAY_LOG="${LEIKWAN_APPLY_RELAY_LOG:-/root/lq-apply-relay.log}"
 DDNS_CONFIG="${STATE_DIR}/ddns.env"
 DDNS_LOG_FILE="/var/log/leikwan-ddns-refresh.log"
 DDNS_STATUS_FILE="${STATUS_DIR}/last-ddns.env"
 DDNS_SERVICE_NAME="leikwan-ddns-refresh"
 DDNS_SERVICE="/etc/systemd/system/${DDNS_SERVICE_NAME}.service"
 DDNS_TIMER="/etc/systemd/system/${DDNS_SERVICE_NAME}.timer"
-LEIKWAN_LOCK_PATH="/run/leikwan-toolkit.lock"
-DDNS_LOCK_PATH="/run/leikwan-ddns-refresh.lock"
-UPDATE_LOCK_PATH="/run/leikwan-update.lock"
-CONFIG_LOCK_PATH="/run/leikwan-config.lock"
+LEIKWAN_RUN_DIR="${LEIKWAN_RUN_DIR:-/run}"
+LEIKWAN_LOCK_PATH="${LEIKWAN_LOCK_PATH:-${LEIKWAN_RUN_DIR}/leikwan-toolkit.lock}"
+DDNS_LOCK_PATH="${DDNS_LOCK_PATH:-${LEIKWAN_RUN_DIR}/leikwan-ddns-refresh.lock}"
+UPDATE_LOCK_PATH="${UPDATE_LOCK_PATH:-${LEIKWAN_RUN_DIR}/leikwan-update.lock}"
+CONFIG_LOCK_PATH="${CONFIG_LOCK_PATH:-${LEIKWAN_RUN_DIR}/leikwan-config.lock}"
 UPDATE_STATUS_FILE="${STATUS_DIR}/last-update.env"
 UPDATE_TARGET_SCRIPT="/root/leikwan-toolkit.sh"
 UPDATE_REPO="ike-sh/leikwan-toolkit"
@@ -388,6 +389,18 @@ run_menu_action_pause() {
 
 run_menu_action() {
   run_menu_action_pause "$@"
+}
+
+run_cli_action() {
+  local rc err_trap
+  err_trap="$(trap -p ERR || true)"
+  trap - ERR
+  set +e
+  "$@"
+  rc=$?
+  set -e
+  [[ -n "$err_trap" ]] && eval "$err_trap"
+  exit "$rc"
 }
 
 is_port() {
@@ -758,7 +771,10 @@ migrate_legacy_paths() {
 ensure_base_dirs() {
   if (( DRY_RUN == 0 )); then
     migrate_legacy_paths
-    install -d -m 700 "$STATE_DIR" "$ENTRY_DIR" "$ENTRIES_DIR" "$FORWARDS_DIR" "$OUTPUT_DIR" "$NFT_DIR" "$PBR_DIR" "$EASYTIER_DIR" "$STATUS_DIR" "$SNAPSHOT_DIR" "$AUTO_SNAPSHOT_DIR"
+    if ! install -d -m 700 "$STATE_DIR" "$ENTRY_DIR" "$ENTRIES_DIR" "$FORWARDS_DIR" "$OUTPUT_DIR" "$NFT_DIR" "$PBR_DIR" "$EASYTIER_DIR" "$STATUS_DIR" "$SNAPSHOT_DIR" "$AUTO_SNAPSHOT_DIR" 2>/dev/null; then
+      mkdir -p "$STATE_DIR" "$ENTRY_DIR" "$ENTRIES_DIR" "$FORWARDS_DIR" "$OUTPUT_DIR" "$NFT_DIR" "$PBR_DIR" "$EASYTIER_DIR" "$STATUS_DIR" "$SNAPSHOT_DIR" "$AUTO_SNAPSHOT_DIR"
+      chmod 700 "$STATE_DIR" "$ENTRY_DIR" "$ENTRIES_DIR" "$FORWARDS_DIR" "$OUTPUT_DIR" "$NFT_DIR" "$PBR_DIR" "$EASYTIER_DIR" "$STATUS_DIR" "$SNAPSHOT_DIR" "$AUTO_SNAPSHOT_DIR" 2>/dev/null || true
+    fi
   fi
 }
 
@@ -4853,7 +4869,6 @@ ddns_status() {
   local timer_state interval refresh_forwards refresh_entries refresh_pbr auto_apply auto_sync_forward_pbr auto_sync_domain_pbr entry_auto_restart
   local last_time last_result last_scope forward_changed forward_failed entry_changed entry_failed pbr_changed pbr_failed
   local relay_restart_needed nft_applied pbr_applied relay_restarted forward_count entry_count pbr_count
-  ddns_ensure_config
   timer_state="$(ddns_timer_state)"
   interval="$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")"
   refresh_forwards="$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")"
@@ -6262,11 +6277,12 @@ json_escape() {
 
 html_escape() {
   local value="$1"
-  value="${value//&/&amp;}"
-  value="${value//</&lt;}"
-  value="${value//>/&gt;}"
-  value="${value//\"/&quot;}"
-  printf '%s' "$value"
+  printf '%s' "$value" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&#39;/g"
 }
 
 output_generated_at() {
@@ -6387,17 +6403,26 @@ generate_forward_outputs() {
 }
 
 output_show() {
-  [[ -f "$FORWARD_TXT" ]] || generate_forward_outputs 1
+  if [[ ! -f "$FORWARD_TXT" ]]; then
+    info "尚未生成端点输出，请先执行：lq output generate"
+    return 0
+  fi
   cat "$FORWARD_TXT"
 }
 
 output_json() {
-  [[ -f "$FORWARD_JSON" ]] || generate_forward_outputs 1
+  if [[ ! -f "$FORWARD_JSON" ]]; then
+    info "尚未生成 JSON 端点输出，请先执行：lq output generate"
+    return 0
+  fi
   cat "$FORWARD_JSON"
 }
 
 output_html() {
-  [[ -f "$FORWARD_HTML" ]] || generate_forward_outputs 1
+  if [[ ! -f "$FORWARD_HTML" ]]; then
+    info "尚未生成 HTML 端点输出，请先执行：lq output generate"
+    return 0
+  fi
   ok "HTML 输出：${FORWARD_HTML}"
 }
 
@@ -6620,8 +6645,36 @@ config_verify_external_sha() {
   (cd "$(dirname "$pkg")" && sha256sum -c "$(basename "$sha")" >/dev/null)
 }
 
+config_validate_archive_members() {
+  local archive="$1" label="${2:-配置包}" member line mode type
+  [[ -f "$archive" ]] || { fail "${label}不存在：${archive}"; return 1; }
+  if ! tar -tzf "$archive" >/dev/null 2>&1; then
+    fail "${label}不是有效 tar.gz：${archive}"
+    return 1
+  fi
+  while IFS= read -r member; do
+    member="${member//$'\r'/}"
+    [[ -n "$member" ]] || continue
+    if [[ "$member" == /* || "$member" == *"/../"* || "$member" == ../* || "$member" == *"/.." || "$member" == "." || "$member" == ".." || "$member" == *\\* ]]; then
+      fail "${label}包含不安全路径：${member}"
+      return 1
+    fi
+  done < <(tar -tzf "$archive")
+  while IFS= read -r line; do
+    mode="${line%% *}"
+    type="${mode:0:1}"
+    case "$type" in
+      l|h)
+        fail "${label}包含 symlink/hardlink，拒绝导入：${line}"
+        return 1
+        ;;
+    esac
+  done < <(tar -tvzf "$archive" 2>/dev/null || true)
+}
+
 config_extract_package() {
   local pkg="$1" out_tmp="$2" out_root="$3" tmp root
+  config_validate_archive_members "$pkg" "配置包" || return 1
   tmp="$(mktemp -d /tmp/leikwan-config-inspect.XXXXXX)"
   tar -xzf "$pkg" -C "$tmp"
   root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
@@ -6667,7 +6720,7 @@ config_inspect_root() {
 
 config_inspect() {
   local pkg="$1" tmp="" root=""
-  [[ -n "$pkg" ]] || { fail "请提供配置包路径。"; return 1; }
+  [[ -n "$pkg" ]] || { fail "缺少配置包路径。"; echo "用法：lq config inspect /path/to/pkg.tar.gz" >&2; return 1; }
   [[ -f "$pkg" ]] || { fail "配置包不存在：${pkg}"; return 1; }
   if config_verify_external_sha "$pkg"; then
     ok "外部 sha256 校验通过。"
@@ -6746,9 +6799,8 @@ config_apply_after_import() {
 }
 
 config_import() {
-  need_root_unless_dry_run
   local pkg="${1:-}" mode="" assume_yes=0 arg config_lock="" tmp="" root="" manifest contains_secret import_mode
-  [[ -n "$pkg" ]] || { fail "请提供配置包路径。"; return 1; }
+  [[ -n "$pkg" ]] || { fail "缺少配置包路径。"; echo "用法：lq config import /path/to/pkg.tar.gz" >&2; return 1; }
   shift || true
   while (($# > 0)); do
     arg="$1"
@@ -6767,6 +6819,8 @@ config_import() {
     fail "非交互 full import 必须显式添加 --yes。"
     return 1
   fi
+  config_validate_archive_members "$pkg" "配置包" || return 1
+  need_root_unless_dry_run
   if ! lock_acquire "$CONFIG_LOCK_PATH" "配置导入/导出" config_lock; then
     warn "已有 Leikwan 任务运行中，请稍后再试。"
     return 1
@@ -6818,6 +6872,7 @@ config_import() {
   config_import_auto_snapshot_or_confirm || { rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 1; }
   import_mode="$mode"
   if [[ -f "${root}/state/etc-leikwan-toolkit.tar.gz" ]]; then
+    config_validate_archive_members "${root}/state/etc-leikwan-toolkit.tar.gz" "配置包 state/etc-leikwan-toolkit.tar.gz" || { rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 1; }
     tar -xzf "${root}/state/etc-leikwan-toolkit.tar.gz" -C /
   else
     fail "配置包缺少 state/etc-leikwan-toolkit.tar.gz。"
@@ -6839,7 +6894,9 @@ config_import() {
 
 config_list() {
   local files=() file size i=0
-  mapfile -t files < <(find /root -maxdepth 1 -type f \( -name 'leikwan-config-*.tar.gz' -o -name 'leikwan-config-redacted-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk '{sub(/^[^ ]+ /, ""); print}')
+  if [[ -d /root ]]; then
+    mapfile -t files < <(find /root -maxdepth 1 -type f \( -name 'leikwan-config-*.tar.gz' -o -name 'leikwan-config-redacted-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk '{sub(/^[^ ]+ /, ""); print}' || true)
+  fi
   if (( ${#files[@]} == 0 )); then
     warn "未找到已导出的配置包。"
     return 0
@@ -8049,7 +8106,7 @@ generate_debug_report() {
     -e 's/(EASYTIER_NETWORK_SECRET=).*/\1<redacted>/g' \
     -e 's/(PAIRING_CODE_BASE64=).*/\1<redacted>/g' \
     -e 's/(LEIKWAN_[A-Z0-9_]*_BASE64=).*/\1<redacted>/g' \
-    -e 's/(([Tt]oken|[Pp]assword)[[:space:]_=-]+)[^[:space:]]+/\1<redacted>/g' \
+    -e 's/(([Ss]ecret|[Tt]oken|[Pp]assword)[[:space:]_=-]+)[^[:space:]]+/\1<redacted>/g' \
     -e 's#(LAST_UPDATE_SOURCE=https?://[^?[:space:]]+)\?[^[:space:]]+#\1?<redacted>#g' \
     -e 's/(PrivateKey[[:space:]]*=[[:space:]]*)[^[:space:]]+/\1<redacted>/g' \
     -e 's#(vless|vmess|trojan|ss|hysteria)://[^[:space:]]+#<proxy-link-redacted>#g' \
@@ -8982,32 +9039,32 @@ main() {
   while [[ "${1:-}" == "--dry-run" ]]; do DRY_RUN=1; shift; done
   case "${1:-}" in
     status)
-      status_overview
+      run_cli_action status_overview
       ;;
     config)
       case "${2:-}" in
-        export) shift 2; config_export "$@" ;;
-        import) shift 2; config_import "$@" ;;
-        inspect) config_inspect "${3:-}" ;;
-        list) config_list ;;
+        export) shift 2; run_cli_action config_export "$@" ;;
+        import) shift 2; run_cli_action config_import "$@" ;;
+        inspect) run_cli_action config_inspect "${3:-}" ;;
+        list) run_cli_action config_list ;;
         *) fail "未知 config 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
     export-config)
       shift
-      config_export "$@"
+      run_cli_action config_export "$@"
       ;;
     import-config)
       shift
-      config_import "$@"
+      run_cli_action config_import "$@"
       ;;
     output)
       case "${2:-}" in
-        generate) generate_forward_outputs ;;
-        show) output_show ;;
-        json) output_json ;;
-        html) output_html ;;
-        qr) output_qr ;;
+        generate) run_cli_action generate_forward_outputs ;;
+        show) run_cli_action output_show ;;
+        json) run_cli_action output_json ;;
+        html) run_cli_action output_html ;;
+        qr) run_cli_action output_qr ;;
         *) fail "未知 output 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
@@ -9046,7 +9103,7 @@ main() {
       ;;
     port)
       case "${2:-}" in
-        check) port_check ;;
+        check) run_cli_action port_check ;;
         *) fail "未知 port 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
@@ -9071,7 +9128,7 @@ main() {
     ddns)
       case "${2:-}" in
         run) shift 2; ddns_refresh_once "$@" ;;
-        status) ddns_status ;;
+        status) run_cli_action ddns_status ;;
         enable) ddns_enable_timer ;;
         disable) ddns_disable_timer ;;
         logs) ddns_logs ;;
@@ -9089,8 +9146,8 @@ main() {
       ;;
     --help|-h) print_help ;;
     --version|-v) echo "${PROJECT_NAME} ${TOOL_VERSION}" ;;
-    --status) status_overview ;;
-    --port-check) port_check ;;
+    --status) run_cli_action status_overview ;;
+    --port-check) run_cli_action port_check ;;
     --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
     --self-update) update_run 1 || exit $? ;;
     --update-check) update_check || exit $? ;;
@@ -9103,4 +9160,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

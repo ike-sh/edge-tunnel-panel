@@ -1,0 +1,82 @@
+# 安全边界
+
+本页汇总 Leikwan Toolkit 1.2.1 的敏感信息和高危操作边界。
+
+## 敏感内容
+
+以下内容应按敏感文件保存：
+
+- EasyTier network secret
+- 配对码中的 base64 内容
+- 完整配置快照
+- full config export 包
+
+不要把这些内容公开到 issue、聊天记录或仓库。
+
+## 配置包
+
+完整配置包：
+
+```bash
+lq config export --full
+```
+
+用于迁移和恢复运行，包含 EasyTier network secret。导出时会明确警告，并生成外部 `.sha256` 与包内 `checksums.sha256`。
+
+脱敏配置包：
+
+```bash
+lq config export --redacted
+```
+
+用于排错和提交 issue。脚本会把 EasyTier secret、配对码 base64、token、password、secret 类字段替换为 `REDACTED`。脱敏包不能用于完整恢复运行。
+
+导入配置包前，脚本会：
+
+- 校验外部 `.sha256`
+- 校验包内 `checksums.sha256`
+- 校验 manifest
+- 拒绝路径穿越、绝对路径、symlink 和 hardlink 包成员
+- 自动创建 `auto-before-config-import-*` 快照
+- 对 full import 非交互模式要求 `--yes`
+
+## debug report
+
+debug report 会包含状态文件、配置摘要、端点输出摘要和日志尾部，不会打包完整 config export 包。日志只保留尾部片段，DDNS 日志最多 tail 100 行，其它日志最多按功能导出尾部片段。
+
+生成后仍建议人工快速检查再发送。
+
+## 端点输出
+
+```bash
+lq output generate
+```
+
+端点输出只包含公网入口、业务端口、PRIMARY / BACKUP、TCP / UDP endpoint 和后端摘要，不包含 EasyTier secret、配对码、token 或 password。
+
+HTML 输出会转义用户输入字段。QR 输出只包含 `tcp://host:port` 或 `udp://host:port` endpoint 字符串，不是代理链接。
+
+## 自更新
+
+自更新只使用 GitHub Release 包：
+
+```bash
+lq update check
+lq update run
+```
+
+更新流程会下载 `.tar.gz` 和 `.sha256`，校验通过并确认新脚本语法和版本后才替换当前脚本。失败时保留旧脚本，必要时可执行：
+
+```bash
+lq update rollback
+```
+
+## 高危操作快照
+
+删除公网入口、删除转发目标、删除 PBR、重新应用转发规则、恢复快照、配置导入、卸载等操作前会自动创建快照。自动快照保存在：
+
+```text
+/etc/leikwan-toolkit/snapshots/auto/
+```
+
+默认只保留最近 10 个。

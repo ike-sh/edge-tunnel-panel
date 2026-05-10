@@ -11,12 +11,25 @@ SHA_PATH="${PACKAGE_PATH}.sha256"
 
 cd "$ROOT_DIR"
 
+SHELLCHECK_TARGETS=(
+  leikwan-toolkit.sh
+  scripts/package-release.sh
+  scripts/check-redaction.sh
+  scripts/bootstrap.sh
+)
+[[ -f scripts/verify-release.sh ]] && SHELLCHECK_TARGETS+=(scripts/verify-release.sh)
+if compgen -G 'tests/*.sh' >/dev/null; then
+  while IFS= read -r test_script; do
+    SHELLCHECK_TARGETS+=("$test_script")
+  done < <(find tests -maxdepth 1 -type f -name '*.sh' | sort)
+fi
+
 if ! command -v shellcheck >/dev/null 2>&1; then
   echo "FAIL: shellcheck not found" >&2
   exit 1
 fi
 
-shellcheck leikwan-toolkit.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
+shellcheck "${SHELLCHECK_TARGETS[@]}"
 bash scripts/check-redaction.sh
 
 rm -rf "$DIST_DIR"
@@ -27,6 +40,8 @@ cp leikwan-toolkit.sh README.md "$STAGING_DIR/"
 cp -R docs "$STAGING_DIR/docs"
 mkdir -p "$STAGING_DIR/scripts"
 cp scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh "$STAGING_DIR/scripts/"
+[[ -f scripts/verify-release.sh ]] && cp scripts/verify-release.sh "$STAGING_DIR/scripts/"
+[[ -d tests ]] && cp -R tests "$STAGING_DIR/tests"
 
 bash scripts/check-redaction.sh
 

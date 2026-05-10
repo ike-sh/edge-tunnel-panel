@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.2.0 正式版验收。
+本页用于 Leikwan Toolkit 1.2.1 正式版验收。
 
 ## 版本
 
@@ -12,13 +12,14 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.2.0"
-leikwan-toolkit 1.2.0
+TOOL_VERSION="1.2.1"
+leikwan-toolkit 1.2.1
 ```
 
 ## 打包
 
 ```bash
+bash scripts/verify-release.sh
 bash -n leikwan-toolkit.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
 shellcheck leikwan-toolkit.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
 git diff --check
@@ -29,13 +30,30 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.2.0.tar.gz
-dist/leikwan-toolkit-1.2.0.tar.gz.sha256
+dist/leikwan-toolkit-1.2.1.tar.gz
+dist/leikwan-toolkit-1.2.1.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
 
 按发布验收命令检查包内容，确认不包含旧入口文件和旧卸载脚本。
+
+## 回归测试
+
+```bash
+bash tests/smoke.sh
+bash tests/cli-regression.sh
+bash tests/render-regression.sh
+bash tests/package-regression.sh
+bash tests/redaction-regression.sh
+bash scripts/verify-release.sh
+```
+
+期望全部通过，`scripts/verify-release.sh` 最后输出：
+
+```text
+[OK] release verification passed
+```
 
 ## 快速组网
 
@@ -249,6 +267,7 @@ lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz --mode full --yes
 - 交互导入可选择 config-only / apply / full。
 - 非交互 full import 没有 `--yes` 时拒绝执行。
 - 脱敏包不能用于 full 恢复运行。
+- 包内含路径穿越、绝对路径、symlink 或 hardlink 时，inspect / import 必须拒绝。
 - 导入后提示执行 `lq status`、`lq --doctor` 和必要时 `lq forward apply-relay --auto-fix-route`。
 
 菜单路径：
@@ -282,7 +301,7 @@ lq output qr
 
 - TXT / TSV / JSON / HTML 都包含生成时间、脚本版本、enabled entries、enabled forwards、PRIMARY / BACKUP、TCP / UDP endpoint。
 - JSON 可被 `jq` 或其它 JSON 解析器读取。
-- HTML 是静态文件，移动端可读，不需要 Web 服务。
+- HTML 是静态文件，移动端可读，不需要 Web 服务；用户输入中的 `<script>` 必须被转义。
 - 输出不包含 EasyTier network secret、配对码 base64、token 或 password。
 - 未安装 `qrencode` 时 `lq output qr` 输出 INFO 并跳过；已安装时只把 endpoint 字符串写入二维码。
 - `lq status` 显示最近端点输出时间。
