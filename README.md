@@ -2,7 +2,7 @@
 
 Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 构建公网入口和中转主机之间的虚拟网络，并使用 nftables 在中转主机上管理 TCP/UDP 转发。
 
-当前版本：`1.0.4`
+当前版本：`1.0.5`
 
 ## 功能特性
 
@@ -182,11 +182,11 @@ lq --uninstall
 
 ## Release
 
-当前正式版本：`1.0.4`
+当前正式版本：`1.0.5`
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.0.4.tar.gz
-leikwan-toolkit-1.0.4.tar.gz.sha256
+leikwan-toolkit-1.0.5.tar.gz
+leikwan-toolkit-1.0.5.tar.gz.sha256
 ```

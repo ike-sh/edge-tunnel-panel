@@ -1,6 +1,6 @@
 # 工作流
 
-本文说明 Leikwan Toolkit 1.0.4 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.0.5 的推荐操作顺序。
 
 ## 角色
 

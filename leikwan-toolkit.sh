@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.0.4"
+TOOL_VERSION="1.0.5"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -2007,8 +2007,16 @@ tcp_mss_clamp_value() {
 nft_has_mss_clamp() {
   local mss
   mss="$(tcp_mss_clamp_value)"
-  nft list table inet leikwan_forward 2>/dev/null |
-    grep -Fq "tcp option maxseg size set ${mss}"
+  nft_project_table_text | awk -v mss="$mss" '
+    {
+      line = " " $0 " "
+      gsub(/[[:space:]]+/, " ", line)
+      if (index(line, " tcp ") && index(line, " maxseg ") && index(line, " size set ")) {
+        if (index(line, " " mss " ") || line ~ / maxseg size set( |$)/) found = 1
+      }
+    }
+    END { exit !found }
+  '
 }
 
 entry_exists() {
@@ -3805,16 +3813,18 @@ ENABLED=true" 600
 warn_forward_apply_ssh_risk() {
   APPLY_NFT_LAST_STATUS=""
   [[ -n "${SSH_CONNECTION:-}" ]] || return 0
+  if ! is_interactive; then
+    info "正在后台/非交互应用 nftables 转发规则。"
+    return 0
+  fi
   warn "正在重新应用 nftables 转发规则。"
   warn "如果当前 SSH 连接经过公网入口 / EasyTier / 转发链路，连接可能短暂中断。"
   info "如担心 SSH 断开，可使用："
   echo "nohup lq forward apply-relay --auto-fix-route >${APPLY_RELAY_LOG} 2>&1 &"
-  if is_interactive; then
-    if ! prompt_yes_no "是否继续前台执行？" "Y"; then
-      APPLY_NFT_LAST_STATUS="skipped"
-      info "已取消前台执行。"
-      return 130
-    fi
+  if ! prompt_yes_no "是否继续前台执行？" "Y"; then
+    APPLY_NFT_LAST_STATUS="skipped"
+    info "已取消前台执行。"
+    return 130
   fi
   return 0
 }
