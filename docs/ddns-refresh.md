@@ -1,24 +1,22 @@
-﻿# DDNS 后端自动刷新
+﻿# DDNS 后端 / PBR / 公网入口自动刷新
 
-Leikwan Toolkit 1.1.1 增加 DDNS 后端自动刷新。它用于处理转发目标中的域名后端，例如：
+Leikwan Toolkit 1.1.2 的 DDNS 刷新覆盖三类对象：
 
-```text
-tw    10004    tw.example.com    52936    eth1    T_CN2    true    tw-target
-```
+- 转发目标：`forwards.tsv` 的 `target_host`
+- 公网入口：`entries.tsv` 的 `public_host`
+- 域名 PBR：`pbr/domain-routes.tsv`
 
-当 `target_host` 的 IPv4 解析结果变化时，脚本会更新 `resolved.tsv`，创建自动快照，并安全重应用 B 侧 nftables 转发规则。
-
-## 使用场景
-
-- 后端目标是家宽、动态公网 IP 或 DDNS 域名。
-- 后端域名 IP 变化后，希望 B 侧转发规则自动跟随。
-- 需要保留旧 IP，在解析失败时避免把可用规则覆盖成空值。
+它只处理域名，不会把用户填写的域名替换成 IP。纯 IPv4 保持原样。
 
 ## 常用命令
 
 ```bash
-lq ddns status
 lq ddns run
+lq ddns run --scope forwards
+lq ddns run --scope entries
+lq ddns run --scope pbr
+lq ddns run --scope all
+lq ddns status
 lq ddns enable
 lq ddns disable
 lq ddns logs
@@ -28,34 +26,12 @@ lq --ddns-run
 交互菜单路径：
 
 ```text
-利群主机 -> 转发目标管理 -> DDNS 后端自动刷新
+利群主机 -> 转发目标管理 -> DDNS 后端 / PBR / 公网入口自动刷新
 ```
 
-## 自动刷新 timer
+## 配置文件
 
-默认不自动启用。执行：
-
-```bash
-lq ddns enable
-```
-
-会写入：
-
-```text
-/etc/systemd/system/leikwan-ddns-refresh.service
-/etc/systemd/system/leikwan-ddns-refresh.timer
-```
-
-默认间隔：
-
-```text
-OnBootSec=2min
-OnUnitActiveSec=5min
-```
-
-可在菜单中选择 `5min / 10min / 30min / 1h`。
-
-配置文件：
+配置文件为：
 
 ```text
 /etc/leikwan-toolkit/ddns.env
@@ -64,26 +40,138 @@ OnUnitActiveSec=5min
 默认配置：
 
 ```text
-DDNS_REFRESH_INTERVAL=5min
+DDNS_REFRESH_FORWARDS=true
+DDNS_REFRESH_ENTRIES=true
+DDNS_REFRESH_PBR=true
 DDNS_AUTO_APPLY=true
-DDNS_AUTO_FIX_ROUTE=false
-DDNS_AUTO_SYNC_PBR=false
+DDNS_AUTO_SYNC_FORWARD_PBR=true
+DDNS_AUTO_SYNC_DOMAIN_PBR=true
+DDNS_ENTRY_AUTO_RESTART_RELAY=false
 DDNS_KEEP_OLD_ON_FAIL=true
+DDNS_REFRESH_INTERVAL=5min
 ```
 
-## 刷新行为
+`DDNS_ENTRY_AUTO_RESTART_RELAY=false` 是安全默认值。公网入口域名 IP 变化后，EasyTier relay 运行中不一定重新解析 peer 域名，但自动重启 relay 会短暂中断所有入口，所以 timer 默认只记录 `relay restart needed` 并写日志。
 
-- 只检查 enabled 转发目标。
-- 只处理 `target_host` 为域名的目标，纯 IPv4 不作为 DDNS 目标。
-- IP 未变化时不会重应用 nftables。
-- IP 变化时更新 `resolved.tsv`，创建 `auto-before-ddns-apply-YYYYMMDD-HHMMSS.tar.gz` 快照，并安全重应用转发规则。
-- 解析失败时保留旧 resolved IP，不覆盖为失败结果。
-
-日志：
+确认可接受维护窗口自动重启时，再显式设置：
 
 ```text
-/var/log/leikwan-ddns-refresh.log
+DDNS_ENTRY_AUTO_RESTART_RELAY=true
 ```
+
+## Scope
+
+`lq ddns run` 默认等价于：
+
+```bash
+lq ddns run --scope all
+```
+
+scope 行为：
+
+- `forwards`：只刷新后端转发目标域名。
+- `entries`：只刷新公网入口 `public_host` 域名。
+- `pbr`：只刷新域名 PBR。
+- `all`：按 forwards -> entries -> pbr 顺序刷新，并合并 apply。
+
+## 转发目标 DDNS
+
+示例 forward：
+
+```text
+tw    10004    tw.example.com    52936    eth1    T_CN2    true    tw-target
+```
+
+刷新成功后写入：
+
+```text
+/etc/leikwan-toolkit/forwards/resolved.tsv
+```
+
+IP 变化时：
+
+- 更新 `resolved.tsv`
+- 创建 `auto-before-ddns-apply-*.tar.gz` 自动快照
+- 只重应用一次 nftables
+- 如果该 forward 有 `route_table` 且 `DDNS_AUTO_SYNC_FORWARD_PBR=true`，同步 `forward:<name>` 来源 PBR
+
+解析失败时保留旧 resolved IP，不覆盖成空值。
+
+## 公网入口 DDNS
+
+示例 entry：
+
+```text
+public3    entry.example.com    10.198.1.4    tcp,udp    8303    100    true
+```
+
+刷新缓存写入：
+
+```text
+/etc/leikwan-toolkit/entries/resolved-entries.tsv
+```
+
+格式：
+
+```text
+# name public_host resolved_ip last_checked last_changed
+public3 entry.example.com 203.0.113.44 2026-05-10T05:00:00 2026-05-10T05:00:00
+```
+
+公网入口域名变化时，脚本不会修改 `entries.tsv`，也不会把域名替换成 IP。状态文件会记录：
+
+```text
+LAST_DDNS_ENTRY_CHANGED=public3
+LAST_DDNS_RELAY_RESTART_NEEDED=true
+```
+
+交互执行时会询问是否立即重启 relay；timer 非交互模式默认不重启。选择不重启时，可在维护窗口执行：
+
+```text
+利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务
+```
+
+## 域名 PBR DDNS
+
+域名 PBR 定义文件：
+
+```text
+/etc/leikwan-toolkit/pbr/domain-routes.tsv
+```
+
+格式：
+
+```text
+# name host route_table enabled comment
+tw tw.example.com T_CN2 true tw-ddns-pbr
+```
+
+解析缓存：
+
+```text
+/etc/leikwan-toolkit/pbr/resolved-pbr-domains.tsv
+```
+
+同步后在 `static-routes.conf` 生成来源明确的规则：
+
+```text
+203.0.113.45/32 CN2 pbr-domain:tw tw.example.com
+```
+
+域名 IP 变化时，脚本删除旧的 `pbr-domain:<name>` 规则并添加新的 `/32` 规则。它不会删除用户手写 `static` 规则，也不会删除 `forward:<name>` 来源规则。
+
+## PBR 来源边界
+
+自动管理范围：
+
+- `forward:<name>`：由 `lq pbr sync-from-forwards` 管理。
+- `pbr-domain:<name>`：由 `lq pbr domain sync` 管理。
+
+不会自动删除：
+
+- `static` 或无来源标记的用户手写规则。
+
+## 状态与日志
 
 最近状态：
 
@@ -91,40 +179,34 @@ DDNS_KEEP_OLD_ON_FAIL=true
 /etc/leikwan-toolkit/status/last-ddns.env
 ```
 
-## PBR 同步
-
-域名后端 IP 变化后，PBR `/32` 规则可能需要同步。默认不会自动迁移 PBR，脚本会提示：
-
-```bash
-lq pbr sync-from-forwards
-```
-
-该命令会遍历 enabled forwards，根据当前 resolved IP 同步 `forward:<name>` 来源的 PBR，并删除旧的 forward 来源规则。它不会删除用户手动添加的 `static` PBR。
-
-如需 DDNS 刷新后自动同步，可设置：
+关键字段：
 
 ```text
-DDNS_AUTO_SYNC_PBR=true
+LAST_DDNS_SCOPE=
+LAST_DDNS_FORWARD_CHANGED=
+LAST_DDNS_ENTRY_CHANGED=
+LAST_DDNS_PBR_CHANGED=
+LAST_DDNS_RELAY_RESTART_NEEDED=
+LAST_DDNS_NFT_APPLIED=
+LAST_DDNS_PBR_APPLIED=
+LAST_DDNS_RELAY_RESTARTED=
 ```
+
+日志：
+
+```text
+/var/log/leikwan-ddns-refresh.log
+```
+
+日志会记录 scope、三类对象 checked / changed / failed、是否应用 nftables、是否应用 PBR、是否需要或已经重启 relay。日志不会写入 EasyTier network secret。
 
 ## 并发保护
 
-DDNS 刷新和转发规则应用使用 lock，避免多个任务同时写 nftables：
+DDNS 全流程使用：
 
 ```text
-/run/leikwan-toolkit.lock
 /run/leikwan-ddns-refresh.lock
+/run/leikwan-toolkit.lock
 ```
 
-如果已有任务运行，DDNS timer 会跳过本次刷新，不视为系统失败。
-
-## 排查
-
-```bash
-lq ddns status
-journalctl -u leikwan-ddns-refresh.service --no-pager -n 100
-tail -f /var/log/leikwan-ddns-refresh.log
-lq --doctor
-```
-
-debug report 会包含 `ddns.env`、`last-ddns.env`、timer/service 状态和最近 100 行 DDNS 日志。DDNS 日志不会写入 EasyTier network secret。
+如果已有 Leikwan 任务运行，timer 会跳过本次刷新，不视为失败。

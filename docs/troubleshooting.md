@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.1.1 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.1.2 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -134,30 +134,54 @@ lq --doctor
 
 从现有转发目标添加 PBR 时，脚本会默认询问是否立即执行上述同步。
 
-## DDNS 后端刷新
+## DDNS 后端 / 公网入口 / PBR 刷新
 
-域名后端目标可使用 DDNS 自动刷新：
+域名后端目标、公网入口 `public_host` 和域名 PBR 可使用 DDNS 自动刷新：
 
 ```bash
 lq ddns status
 lq ddns run
+lq ddns run --scope forwards
+lq ddns run --scope entries
+lq ddns run --scope pbr
 lq ddns enable
 lq ddns logs
 ```
 
-如果 `lq ddns run` 显示 IP 未变化，不会重应用 nftables。如果显示解析变化，会更新 `resolved.tsv` 并安全重应用转发规则。解析失败时会保留旧 IP。
+如果 `lq ddns run --scope forwards` 显示 IP 未变化，不会重应用 nftables。如果显示解析变化，会更新 `resolved.tsv` 并安全重应用转发规则。解析失败时会保留旧 IP。
 
-PBR 默认不会自动迁移。域名 IP 变化后，可执行：
+公网入口 DDNS 变化时，默认不会自动重启 relay。状态中会显示 `relay restart needed`，因为 EasyTier 运行中不一定重新解析 peer 域名。建议在维护窗口重启 relay；只有设置 `DDNS_ENTRY_AUTO_RESTART_RELAY=true` 后，timer 才会自动重启。
+
+forward 来源 PBR 可执行：
 
 ```bash
 lq pbr sync-from-forwards
 ```
+
+域名 PBR 可执行：
+
+```bash
+lq pbr domain sync
+```
+
+PBR 自动管理边界：
+
+- `forward:<name>` 可自动同步。
+- `pbr-domain:<name>` 可自动同步。
+- `static` 规则不会被自动删除。
 
 日志路径：
 
 ```text
 /var/log/leikwan-ddns-refresh.log
 /etc/leikwan-toolkit/status/last-ddns.env
+```
+
+如果 doctor 提示域名 PBR 已变化但规则未同步，执行：
+
+```bash
+lq pbr domain sync
+lq --pbr-apply
 ```
 
 ## 自更新

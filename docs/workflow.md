@@ -1,6 +1,6 @@
 ﻿# 工作流
 
-本文说明 Leikwan Toolkit 1.1.1 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.1.2 的推荐操作顺序。
 
 ## 角色
 
@@ -145,21 +145,51 @@ lq forward apply-relay --auto-fix-route
 
 从现有转发目标添加 PBR 后，脚本会默认询问是否立即执行上述同步。
 
-## DDNS 后端自动刷新
+域名型 PBR 使用独立菜单：
 
-如果后端目标是 DDNS 域名，建议在转发目标稳定后启用自动刷新：
+```bash
+lq pbr domain add
+lq pbr domain sync
+```
+
+域名 PBR 会生成 `pbr-domain:<name>` 来源规则。脚本只自动管理 `forward:<name>` 和 `pbr-domain:<name>`，不会自动删除用户手写 `static` 规则。
+
+## DDNS 后端 / 公网入口 / PBR 自动刷新
+
+如果后端目标、公网入口 `public_host` 或域名 PBR 使用 DDNS 域名，建议在配置稳定后启用自动刷新：
 
 ```bash
 lq ddns enable
 lq ddns status
+lq ddns run --scope all
 ```
 
-脚本会定期检查 enabled 转发目标中的域名后端。解析 IP 变化时，会更新 `resolved.tsv`、创建自动快照并安全重应用 nftables 转发规则；解析失败时保留旧 IP。
+常用 scope：
 
-PBR 默认不会自动同步。域名 IP 变化后，可执行：
+```bash
+lq ddns run --scope forwards
+lq ddns run --scope entries
+lq ddns run --scope pbr
+```
+
+脚本会定期检查 enabled 转发目标中的域名后端、公网入口域名和域名 PBR。后端变化时更新 `resolved.tsv`、创建自动快照并安全重应用 nftables；PBR 变化时同步 `/32` 规则并应用 PBR；解析失败时保留旧 IP。
+
+公网入口 DDNS 变化默认不会自动重启 relay，只会记录 `relay restart needed`。原因是 relay 重启会短暂中断所有入口，而 EasyTier 运行中又不一定重新解析 peer 域名。确认可以接受维护窗口自动重启时，可设置：
+
+```text
+DDNS_ENTRY_AUTO_RESTART_RELAY=true
+```
+
+forward 来源 PBR 可手动同步：
 
 ```bash
 lq pbr sync-from-forwards
+```
+
+域名 PBR 可手动同步：
+
+```bash
+lq pbr domain sync
 ```
 
 ## 诊断
@@ -170,4 +200,4 @@ A 和 B 都可以执行：
 lq --doctor
 ```
 
-doctor 会检查 EasyTier、nftables、PBR、TCP/UDP DNAT、MSS clamp、入口 TCP/UDP 探测和后端目标探测。UDP 探测只作为参考，最终应结合 EasyTier peer / ping 和业务实测判断。
+doctor 会检查 EasyTier、nftables、PBR、TCP/UDP DNAT、MSS clamp、入口 TCP/UDP 探测、后端目标探测、entry DDNS 缓存和域名 PBR 同步状态。UDP 探测只作为参考，最终应结合 EasyTier peer / ping 和业务实测判断。

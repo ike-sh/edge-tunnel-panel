@@ -2,7 +2,7 @@
 
 Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 构建公网入口和中转主机之间的虚拟网络，并使用 nftables 在中转主机上管理 TCP/UDP 转发。
 
-当前版本：`1.1.1`
+当前版本：`1.1.2`
 
 ## 功能特性
 
@@ -16,7 +16,7 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 - 状态总览与最近 apply / doctor / status 缓存
 - 配置快照 / 回滚，高危操作前自动快照
 - 端口冲突预检与端口推荐避让
-- DDNS 后端自动刷新、自动重应用转发规则
+- DDNS 后端 / 公网入口 / 域名 PBR 自动刷新
 - GitHub Release 自更新、sha256 校验与安全回滚
 - 一键诊断与脱敏报告
 - 完整卸载
@@ -149,6 +149,17 @@ IPv4 PBR 用于让特定目标网段走指定路由表，例如 CN2 或 9929。
 lq forward apply-relay --auto-fix-route
 ```
 
+域名型 PBR 可通过 CLI 或菜单管理：
+
+```bash
+lq pbr domain add
+lq pbr domain list
+lq pbr domain sync
+lq pbr domain delete
+```
+
+域名 PBR 写入 `/etc/leikwan-toolkit/pbr/domain-routes.tsv`，同步后在 `static-routes.conf` 生成 `pbr-domain:<name> <host>` 来源的 `/32` 规则。脚本只自动管理 `forward:<name>` 和 `pbr-domain:<name>` 来源，用户手写 `static` 规则不会被自动删除。
+
 如果当前 SSH 连接可能经过公网入口、EasyTier 或正在修改的转发链路，建议后台安全执行：
 
 ```bash
@@ -157,13 +168,17 @@ tail -f /root/lq-apply-relay.log
 lq --doctor
 ```
 
-## DDNS 后端自动刷新
+## DDNS 后端 / 公网入口 / PBR 自动刷新
 
-如果转发目标的 `target_host` 是域名，例如 `tw.example.com`，可以启用 DDNS 自动刷新。脚本会定期解析 enabled 转发目标中的域名后端；IP 变化时更新 `resolved.tsv`，创建自动快照，并安全重应用 nftables 转发规则。
+如果转发目标的 `target_host`、公网入口的 `public_host` 或域名 PBR 使用 DDNS 域名，可以启用自动刷新。脚本会定期解析 enabled 对象；后端变化时更新 `resolved.tsv` 并安全重应用 nftables，公网入口变化时记录 `relay restart needed`，域名 PBR 变化时同步 `/32` PBR 规则。
 
 ```bash
 lq ddns status
 lq ddns run
+lq ddns run --scope forwards
+lq ddns run --scope entries
+lq ddns run --scope pbr
+lq ddns run --scope all
 lq ddns enable
 lq ddns disable
 lq ddns logs
@@ -172,13 +187,33 @@ lq --ddns-run
 
 默认 timer 间隔为 5 分钟，配置文件为 `/etc/leikwan-toolkit/ddns.env`，日志为 `/var/log/leikwan-ddns-refresh.log`，最近状态写入 `/etc/leikwan-toolkit/status/last-ddns.env`。
 
-PBR 默认不会随 DDNS 自动迁移。域名后端 IP 变化后，可手动同步 forward 来源 PBR：
+默认配置会刷新三类对象并自动同步 forward / domain PBR：
+
+```text
+DDNS_REFRESH_FORWARDS=true
+DDNS_REFRESH_ENTRIES=true
+DDNS_REFRESH_PBR=true
+DDNS_AUTO_APPLY=true
+DDNS_AUTO_SYNC_FORWARD_PBR=true
+DDNS_AUTO_SYNC_DOMAIN_PBR=true
+DDNS_ENTRY_AUTO_RESTART_RELAY=false
+DDNS_KEEP_OLD_ON_FAIL=true
+DDNS_REFRESH_INTERVAL=5min
+```
+
+公网入口 `public_host` 变化默认不会自动重启 relay，因为 relay 重启会短暂中断所有入口。EasyTier 运行中不一定重新解析 peer 域名，所以状态和 doctor 会提示维护窗口重启。只有显式设置 `DDNS_ENTRY_AUTO_RESTART_RELAY=true` 时，timer 模式才会自动创建快照并重启 relay。
+
+域名后端 IP 变化后，可手动同步 forward 来源 PBR：
 
 ```bash
 lq pbr sync-from-forwards
 ```
 
-如果确认需要自动同步，可在 `ddns.env` 中设置 `DDNS_AUTO_SYNC_PBR=true`。同步只处理 `forward:<name>` 来源的 PBR，不会删除用户手写的 `static` PBR。
+域名 PBR 可手动同步：
+
+```bash
+lq pbr domain sync
+```
 
 ## 常用命令
 
@@ -192,6 +227,7 @@ lq --port-check
 lq pair status
 lq pbr show
 lq pbr sync-from-forwards
+lq pbr domain sync
 lq ddns status
 lq ddns run
 lq update check
@@ -282,11 +318,11 @@ lq --uninstall
 
 ## Release
 
-当前正式版本：`1.1.1`
+当前正式版本：`1.1.2`
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.1.1.tar.gz
-leikwan-toolkit-1.1.1.tar.gz.sha256
+leikwan-toolkit-1.1.2.tar.gz
+leikwan-toolkit-1.1.2.tar.gz.sha256
 ```

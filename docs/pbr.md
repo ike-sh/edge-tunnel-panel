@@ -11,6 +11,7 @@ IPv4 多出口策略路由 / PBR
 3. 删除 PBR 规则
 4. 应用 PBR
 5. 查看 PBR
+6. 域名 PBR 管理
 0. 返回
 ```
 
@@ -23,85 +24,129 @@ IPv4 多出口策略路由 / PBR
 203.0.113.0/24
 ```
 
-如果输入域名，例如 `tw.example.com`，脚本会提示：
-
-```text
-[WARN] 静态 PBR 只接受 IPv4 或 CIDR。如果要给域名 / DDNS 添加 PBR，请选择“从现有转发目标添加 PBR”。
-```
-
-## 从转发目标添加 PBR
-
-当后端是 DDNS / 域名时，使用第 2 项：
-
-1. 脚本展示 enabled 转发目标列表。
-2. 输入编号或名称。
-3. 如果 `target_host` 是 IP，直接写入 `target_ip/32`。
-4. 如果 `target_host` 是域名，先解析当前 IPv4，再写入 `resolved_ip/32`。
-5. 选择线路组：`CN2 -> T_CN2`、`9929 -> T_9929` 或自定义路由表。
-
-写入规则会记录来源转发名和 `target_host`。以后 `pbr_apply` 会重新解析来源域名；IP 变化时更新对应 PBR 规则。
-
-也可以用 1.1.1 的同步命令按当前 enabled forwards 重建 forward 来源 PBR：
-
-```bash
-sudo lq pbr sync-from-forwards
-```
-
-它会删除旧的 `forward <name> <host>` 来源规则，再按当前 `resolved.tsv` 和 `route_table` 生成新的 `/32` 规则。用户手动写入的 `static` PBR 不会被删除。
-
-## 删除 PBR 规则
-
-使用第 3 项删除规则。脚本会先展示当前 PBR 规则列表：
-
-```text
-编号  目标网段                 路由表      来源
-1. 203.0.113.107/32         T_CN2      static
-2. 203.0.113.154/32         T_CN2      static
-3. 198.51.100.158/32        T_CN2      forward:Hinet tw.example.com
-```
-
-可以输入编号、完整 CIDR，或裸 IP。裸 IP 会按 `/32` 匹配。删除前会确认，确认后从 `static-routes.conf` 删除对应行并重新应用 PBR。
-
-如果规则来自 DDNS / forward，删除的是当前解析 IP 对应的 PBR 记录。若同一 CIDR 有多条不同路由表规则，按 CIDR 输入会要求改用编号，避免误删其他线路。
-
-也可以使用 CLI：
-
-```bash
-sudo lq pbr delete 203.0.113.154/32
-sudo lq --pbr-delete 203.0.113.154
-```
-
-## 配置文件
+静态规则写入：
 
 ```text
 /etc/leikwan-toolkit/pbr/static-routes.conf
 ```
 
-普通静态规则格式：
+格式：
 
 ```text
-203.0.113.10/32 CN2
 203.0.113.10/32 CN2 static
 ```
 
-来自转发目标的动态规则格式：
+`static` 规则由用户显式管理，DDNS 同步不会自动删除。
 
-```text
-203.0.113.20/32 CN2 forward Hinet tw.example.com
+## 从转发目标添加 PBR
+
+当 forward 有 `route_table` 时，可以用当前 resolved IP 生成 `forward:<name>` 来源 PBR。
+
+同步命令：
+
+```bash
+sudo lq pbr sync-from-forwards
 ```
 
-## 与转发目标的关系
+它会删除旧的 `forward <name> <host>` 来源规则，再按当前 `resolved.tsv` 和 `route_table` 生成新的 `/32` 规则。用户手写 `static` PBR 和 `pbr-domain:<name>` 规则不会被删除。
 
-`lq forward apply-relay --auto-fix-route` 会同步 `forwards.tsv` 中的 `out_iface` 和 `route_table` 元数据。
+DDNS 后端刷新时，如果 `DDNS_AUTO_SYNC_FORWARD_PBR=true`，forward 域名 IP 变化会自动执行同等同步，并在统一流程中只应用一次 PBR。
 
-从现有转发目标添加 PBR 后，脚本会默认询问是否立即重新应用利群转发规则并同步 `route_table`，等价于执行 `lq forward apply-relay --auto-fix-route`。选择稍后应用时，PBR 会保留，但转发目标元数据需要在维护窗口手动同步。
+## 域名 PBR
 
-- 实际出口接口和配置不一致时，脚本会 WARN，因为 nftables `oifname` 可能不匹配。
-- 出口接口一致但 route_table 元数据不同，只提示 INFO；这通常不会单独导致转发失败。
+域名 PBR 用于这类需求：
 
-应用：
+```text
+tw.example.com -> T_CN2
+```
+
+CLI：
+
+```bash
+lq pbr domain add
+lq pbr domain list
+lq pbr domain delete
+lq pbr domain sync
+```
+
+菜单：
+
+```text
+域名 PBR 管理
+1. 添加域名 PBR
+2. 查看域名 PBR
+3. 删除域名 PBR
+4. 立即同步域名 PBR
+0. 返回
+```
+
+定义文件：
+
+```text
+/etc/leikwan-toolkit/pbr/domain-routes.tsv
+```
+
+格式：
+
+```text
+# name host route_table enabled comment
+tw tw.example.com T_CN2 true tw-ddns-pbr
+```
+
+解析缓存：
+
+```text
+/etc/leikwan-toolkit/pbr/resolved-pbr-domains.tsv
+```
+
+同步后会在 `static-routes.conf` 中生成来源明确的规则：
+
+```text
+203.0.113.45/32 CN2 pbr-domain:tw tw.example.com
+```
+
+规则说明：
+
+- 添加域名 PBR 时，host 必须是域名，不能是纯 IPv4。
+- 添加后会立即解析域名，解析失败不写入。
+- `lq pbr domain sync` 只同步 `pbr-domain:<name>` 来源规则。
+- 域名 IP 变化时，旧 `pbr-domain:<name>` 规则会被替换为新的 `/32`。
+- 如果相同 CIDR / table 已有 static 规则，脚本不会重复添加，会保留用户规则。
+
+## 自动管理边界
+
+DDNS 和同步命令只自动管理两类来源：
+
+- `forward:<name>`：由 `lq pbr sync-from-forwards` 管理。
+- `pbr-domain:<name>`：由 `lq pbr domain sync` 管理。
+
+不会自动删除：
+
+- `static`
+- 旧版本手写且无来源标记的 PBR
+- 其它手动维护规则
+
+## 删除 PBR 规则
+
+普通删除使用第 3 项。脚本会先展示当前 PBR 规则列表：
+
+```text
+编号  目标网段              路由表      来源
+1. 203.0.113.10/32      T_CN2      static
+2. 198.51.100.20/32     T_CN2      forward:tw tw.example.com
+3. 203.0.113.45/32      T_CN2      pbr-domain:tw tw.example.com
+```
+
+可以输入编号、完整 CIDR，或裸 IP。裸 IP 会按 `/32` 匹配。删除前会确认，确认后从 `static-routes.conf` 删除对应行并重新应用 PBR。
+
+删除域名 PBR 请使用 `lq pbr domain delete` 或域名 PBR 菜单；它会同时清理 `domain-routes.tsv`、`resolved-pbr-domains.tsv` 和 `pbr-domain:<name>` 来源规则，不会删除 static 规则。
+
+## 应用
 
 ```bash
 sudo lq --pbr-apply
+sudo lq pbr apply
 sudo lq forward apply-relay --auto-fix-route
 ```
+
+从现有转发目标添加 PBR 后，脚本会默认询问是否立即重新应用利群转发规则并同步 `route_table`，等价于执行 `lq forward apply-relay --auto-fix-route`。选择稍后应用时，PBR 会保留，但转发目标元数据需要在维护窗口手动同步。

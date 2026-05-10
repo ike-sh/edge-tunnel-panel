@@ -1,6 +1,6 @@
 ﻿# 架构说明
 
-Leikwan Toolkit 1.1.1 使用 EasyTier + nftables 构建三段式 TCP/UDP 转发链路。
+Leikwan Toolkit 1.1.2 使用 EasyTier + nftables 构建三段式 TCP/UDP 转发链路。
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -33,7 +33,7 @@ public3: 10.198.1.4
 
 A 侧负责把业务入口端口池 TCP+UDP DNAT 到 B 的 EasyTier IP。B 侧负责把每个转发目标的入口端口 TCP+UDP DNAT 到后端目标。
 
-如果后端目标是域名，B 侧会把当前解析 IP 写入 `resolved.tsv`。DDNS 自动刷新可以定期检查这些域名后端，IP 变化时自动更新 resolved 记录并重应用 nftables。
+如果后端目标是域名，B 侧会把当前解析 IP 写入 `resolved.tsv`。DDNS 自动刷新可以定期检查域名后端、公网入口域名和域名 PBR；后端 IP 变化时自动更新 resolved 记录并重应用 nftables，公网入口变化时提示 relay 可能需要重启，域名 PBR 变化时同步 `/32` 规则。
 
 ## 多入口
 

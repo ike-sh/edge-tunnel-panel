@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.1.1 正式版验收。
+本页用于 Leikwan Toolkit 1.1.2 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.1.1"
-leikwan-toolkit 1.1.1
+TOOL_VERSION="1.1.2"
+leikwan-toolkit 1.1.2
 ```
 
 ## 打包
@@ -29,8 +29,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.1.1.tar.gz
-dist/leikwan-toolkit-1.1.1.tar.gz.sha256
+dist/leikwan-toolkit-1.1.2.tar.gz
+dist/leikwan-toolkit-1.1.2.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -70,8 +70,10 @@ public2  203.0.113.20   10.198.1.3  tcp,udp  8302  100  true
 - A 侧端口池必须生成 TCP+UDP DNAT。
 - B 侧转发目标必须生成 TCP+UDP DNAT。
 - PBR 菜单显示 `0. 返回`。
+- PBR 菜单包含 `域名 PBR 管理`。
 - 从现有转发目标添加 PBR 后，默认询问是否立即同步转发规则和 `route_table` 元数据。
 - `lq pbr sync-from-forwards` 能根据当前 resolved IP 同步 forward 来源 PBR，且不删除 static PBR。
+- `lq pbr domain add/list/delete/sync` 可用，域名 PBR 同步生成 `pbr-domain:<name>` 来源规则，且不删除 static PBR。
 - 删除 PBR 支持编号、CIDR 和裸 IP。
 
 ## DDNS 自动刷新
@@ -79,15 +81,21 @@ public2  203.0.113.20   10.198.1.3  tcp,udp  8302  100  true
 ```bash
 lq ddns status
 lq ddns run
+lq ddns run --scope forwards
+lq ddns run --scope entries
+lq ddns run --scope pbr
+lq ddns run --scope all
 lq --ddns-run
 ```
 
 期望：
 
 - 不清屏，不等待回车。
-- 能识别 enabled 转发目标中的域名后端。
-- IP 未变化时不重应用 nftables。
-- IP 变化时更新 `resolved.tsv`，创建 `auto-before-ddns-apply-*.tar.gz` 快照并安全重应用 nftables。
+- 能识别 enabled 转发目标中的域名后端、公网入口域名和域名 PBR。
+- forward IP 未变化时不重应用 nftables。
+- forward IP 变化时更新 `resolved.tsv`，创建 `auto-before-ddns-apply-*.tar.gz` 快照并安全重应用 nftables。
+- entry IP 变化时更新 `resolved-entries.tsv`，默认只记录 `relay restart needed`，timer 不自动重启 relay。
+- pbr domain IP 变化时更新 `resolved-pbr-domains.tsv`，生成新的 `pbr-domain:<name>` `/32` 规则。
 - 解析失败时保留旧 resolved IP。
 
 启用 timer：
@@ -106,6 +114,24 @@ cat /etc/leikwan-toolkit/status/last-ddns.env
 ```
 
 期望日志包含开始 / 结束、changed / failed 统计，不包含 EasyTier secret。
+
+检查 last-ddns：
+
+```bash
+cat /etc/leikwan-toolkit/status/last-ddns.env
+```
+
+期望包含：
+
+```text
+LAST_DDNS_SCOPE=
+LAST_DDNS_FORWARD_CHANGED=
+LAST_DDNS_ENTRY_CHANGED=
+LAST_DDNS_PBR_CHANGED=
+LAST_DDNS_RELAY_RESTART_NEEDED=
+LAST_DDNS_NFT_APPLIED=
+LAST_DDNS_PBR_APPLIED=
+```
 
 ## 自更新
 

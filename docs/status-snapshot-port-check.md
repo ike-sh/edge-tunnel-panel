@@ -1,6 +1,6 @@
 ﻿# 状态、快照与端口预检
 
-本文记录状态总览、快照 / 回滚、端口预检，以及 1.1.1 起的 DDNS 状态集成。
+本文记录状态总览、快照 / 回滚、端口预检，以及 1.1.2 的 DDNS 状态集成。
 
 ## 状态总览
 
@@ -24,12 +24,15 @@ lq --status
 
 缓存只记录时间、动作、结果和版本，不写 EasyTier secret。
 
-1.1.1 起，B 利群主机状态总览还会显示 DDNS 自动刷新：
+1.1.2 起，B 利群主机状态总览还会显示 DDNS scope 和三类 DDNS 状态：
 
 ```text
 DDNS 自动刷新: active / disabled
+DDNS scopes: forwards=yes entries=yes pbr=yes
 最近 DDNS: 2026-05-10 04:12:00 / OK
-域名后端: 1 changed / 0 failed
+后端 DDNS: OK
+公网入口 DDNS: public3 changed，relay restart needed
+PBR DDNS: OK
 ```
 
 DDNS 最近状态缓存：
@@ -41,8 +44,8 @@ DDNS 最近状态缓存：
 脚本自更新最近状态也会显示在 `lq status` 中：
 
 ```text
-脚本版本: 1.1.1
-最近更新: 2026-05-10 05:30:00 / 1.1.0 -> 1.1.1 / OK
+脚本版本: 1.1.2
+最近更新: 2026-05-10 05:30:00 / 1.1.1 -> 1.1.2 / OK
 ```
 
 `status` 不联网检查 latest release；联网检查只由 `lq update check` 执行。

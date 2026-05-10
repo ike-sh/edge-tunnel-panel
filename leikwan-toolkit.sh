@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.1.1"
+TOOL_VERSION="1.1.2"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -54,6 +54,7 @@ UPDATE_REPO="ike-sh/leikwan-toolkit"
 
 ENTRIES_TSV="${ENTRIES_DIR}/entries.tsv"
 PENDING_ENTRIES_TSV="${ENTRIES_DIR}/pending-entries.tsv"
+RESOLVED_ENTRIES_TSV="${ENTRIES_DIR}/resolved-entries.tsv"
 FORWARDS_TSV="${FORWARDS_DIR}/forwards.tsv"
 RESOLVED_TSV="${FORWARDS_DIR}/resolved.tsv"
 FORWARD_TXT="${OUTPUT_DIR}/forward-endpoints.txt"
@@ -98,12 +99,19 @@ NFT_SERVICE="/etc/systemd/system/${NFT_SERVICE_NAME}.service"
 FORWARD_SYSCTL="/etc/sysctl.d/99-leikwan-forward.conf"
 
 PBR_STATIC_CONF="${PBR_DIR}/static-routes.conf"
+PBR_DOMAIN_TSV="${PBR_DIR}/domain-routes.tsv"
+PBR_RESOLVED_DOMAIN_TSV="${PBR_DIR}/resolved-pbr-domains.tsv"
 PBR_RT_TABLES="/etc/iproute2/rt_tables"
 PBR_PRIORITY="15000"
 DDNS_REFRESH_INTERVAL_DEFAULT="5min"
+DDNS_REFRESH_FORWARDS_DEFAULT="true"
+DDNS_REFRESH_ENTRIES_DEFAULT="true"
+DDNS_REFRESH_PBR_DEFAULT="true"
 DDNS_AUTO_APPLY_DEFAULT="true"
 DDNS_AUTO_FIX_ROUTE_DEFAULT="false"
-DDNS_AUTO_SYNC_PBR_DEFAULT="false"
+DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT="true"
+DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT="true"
+DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT="false"
 DDNS_KEEP_OLD_ON_FAIL_DEFAULT="true"
 
 BBR_SYSCTL_CONF="/etc/sysctl.d/99-leikwan-bbr.conf"
@@ -444,6 +452,11 @@ looks_like_domain() {
   [[ "$value" =~ [A-Za-z] && "$value" == *.* ]]
 }
 
+is_domain_name() {
+  local value="$1"
+  [[ -n "$value" && ! "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "$value" =~ [A-Za-z] ]]
+}
+
 prompt_port() {
   local prompt="$1" default="$2" value
   while true; do
@@ -662,11 +675,13 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh forward apply-relay --auto-fix-route
   sudo bash leikwan-toolkit.sh pbr delete 203.0.113.10/32
   sudo bash leikwan-toolkit.sh pbr sync-from-forwards
+  sudo bash leikwan-toolkit.sh pbr domain add|list|delete|sync
   sudo bash leikwan-toolkit.sh update check
   sudo bash leikwan-toolkit.sh update run
   sudo bash leikwan-toolkit.sh update status
   sudo bash leikwan-toolkit.sh update rollback
   sudo bash leikwan-toolkit.sh ddns run
+  sudo bash leikwan-toolkit.sh ddns run --scope forwards|entries|pbr|all
   sudo bash leikwan-toolkit.sh ddns status
   sudo bash leikwan-toolkit.sh ddns enable
   sudo bash leikwan-toolkit.sh ddns disable
@@ -1031,7 +1046,10 @@ random_hex() {
 ensure_tsv_files() {
   ensure_base_dirs
   [[ -f "$ENTRIES_TSV" ]] || write_file "$ENTRIES_TSV" $'# entry_name\tpublic_host\tet_ip\teasytier_protocol\teasytier_port\tweight\tenabled' 600
+  [[ -f "$RESOLVED_ENTRIES_TSV" ]] || write_file "$RESOLVED_ENTRIES_TSV" $'# name\tpublic_host\tresolved_ip\tlast_checked\tlast_changed' 600
   [[ -f "$FORWARDS_TSV" ]] || write_file "$FORWARDS_TSV" $'# name\tentry_port\ttarget_host\ttarget_port\tout_iface\troute_table\tenabled\tcomment' 600
+  [[ -f "$PBR_DOMAIN_TSV" ]] || write_file "$PBR_DOMAIN_TSV" $'# name\thost\troute_table\tenabled\tcomment' 600
+  [[ -f "$PBR_RESOLVED_DOMAIN_TSV" ]] || write_file "$PBR_RESOLVED_DOMAIN_TSV" $'# name\thost\tresolved_ip\troute_table\tlast_checked\tlast_changed' 600
 }
 
 resolve_ipv4_first() {
@@ -2259,6 +2277,25 @@ pending_entries_rows() {
       printf "%s\t%s\t%s\t%s\t%s\n", name, et_ip, proto, port, created_at
     }
   ' "$PENDING_ENTRIES_TSV"
+}
+
+resolved_entries_rows() {
+  [[ -f "$RESOLVED_ENTRIES_TSV" ]] || return 0
+  awk -F'\t' '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    { gsub(/\r/, "") }
+    NF == 0 { next }
+    $1 ~ /^#/ { next }
+    {
+      name=trim($1)
+      public_host=trim($2)
+      resolved_ip=trim($3)
+      last_checked=trim($4)
+      last_changed=trim($5)
+      if (name=="" || public_host=="") next
+      printf "%s\t%s\t%s\t%s\t%s\n", name, public_host, resolved_ip, last_checked, last_changed
+    }
+  ' "$RESOLVED_ENTRIES_TSV"
 }
 
 entries_rows_sorted() {
@@ -4300,21 +4337,63 @@ ddns_config_bool() {
   esac
 }
 
+bool_yes_no() {
+  case "${1,,}" in
+    true|yes|1|on) printf 'yes' ;;
+    *) printf 'no' ;;
+  esac
+}
+
+bool_to_default() {
+  case "${1,,}" in
+    true|yes|1|on) printf 'Y' ;;
+    *) printf 'N' ;;
+  esac
+}
+
+bool_enabled_disabled() {
+  case "${1,,}" in
+    true|yes|1|on) printf 'enabled' ;;
+    *) printf 'disabled' ;;
+  esac
+}
+
 ddns_write_config() {
   local interval="${1:-$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")}"
-  local auto_apply="${2:-$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")}"
-  local auto_fix="${3:-$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")}"
-  local auto_sync_pbr="${4:-$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")}"
-  local keep_old="${5:-$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")}"
+  local refresh_forwards="${2:-$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")}"
+  local refresh_entries="${3:-$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")}"
+  local refresh_pbr="${4:-$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")}"
+  local auto_apply="${5:-$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")}"
+  local auto_fix="${6:-$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")}"
+  local auto_sync_forward_pbr="${7:-$(ddns_config_value DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")")}"
+  local auto_sync_domain_pbr="${8:-$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")}"
+  local entry_auto_restart="${9:-$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")}"
+  local keep_old="${10:-$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")}"
   write_file "$DDNS_CONFIG" "DDNS_REFRESH_INTERVAL=${interval}
+DDNS_REFRESH_FORWARDS=${refresh_forwards}
+DDNS_REFRESH_ENTRIES=${refresh_entries}
+DDNS_REFRESH_PBR=${refresh_pbr}
 DDNS_AUTO_APPLY=${auto_apply}
 DDNS_AUTO_FIX_ROUTE=${auto_fix}
-DDNS_AUTO_SYNC_PBR=${auto_sync_pbr}
+DDNS_AUTO_SYNC_FORWARD_PBR=${auto_sync_forward_pbr}
+DDNS_AUTO_SYNC_DOMAIN_PBR=${auto_sync_domain_pbr}
+DDNS_ENTRY_AUTO_RESTART_RELAY=${entry_auto_restart}
 DDNS_KEEP_OLD_ON_FAIL=${keep_old}" 600
 }
 
 ddns_ensure_config() {
-  [[ -f "$DDNS_CONFIG" ]] || ddns_write_config "$DDNS_REFRESH_INTERVAL_DEFAULT" "$DDNS_AUTO_APPLY_DEFAULT" "$DDNS_AUTO_FIX_ROUTE_DEFAULT" "$DDNS_AUTO_SYNC_PBR_DEFAULT" "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT"
+  if [[ ! -f "$DDNS_CONFIG" ]]; then
+    ddns_write_config "$DDNS_REFRESH_INTERVAL_DEFAULT" "$DDNS_REFRESH_FORWARDS_DEFAULT" "$DDNS_REFRESH_ENTRIES_DEFAULT" "$DDNS_REFRESH_PBR_DEFAULT" "$DDNS_AUTO_APPLY_DEFAULT" "$DDNS_AUTO_FIX_ROUTE_DEFAULT" "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT" "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT" "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT" "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT"
+    return 0
+  fi
+  if ! grep -q '^DDNS_REFRESH_FORWARDS=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_REFRESH_ENTRIES=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_REFRESH_PBR=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_AUTO_SYNC_FORWARD_PBR=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_AUTO_SYNC_DOMAIN_PBR=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_ENTRY_AUTO_RESTART_RELAY=' "$DDNS_CONFIG" 2>/dev/null; then
+    ddns_write_config
+  fi
 }
 
 ddns_emit() {
@@ -4333,17 +4412,26 @@ ddns_emit() {
 }
 
 ddns_write_last_status() {
-  local result="$1" changed="$2" failed="$3" changed_count="$4" failed_count="$5"
+  local result="$1" scope="$2"
+  local forward_changed="$3" forward_failed="$4" entry_changed="$5" entry_failed="$6" pbr_changed="$7" pbr_failed="$8"
+  local relay_restart_needed="$9" nft_applied="${10}" pbr_applied="${11}" relay_restarted="${12}"
   (( DRY_RUN == 1 )) && return 0
   [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
   mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
   {
     printf 'LAST_DDNS_TIME=%s\n' "$(status_now)"
     printf 'LAST_DDNS_RESULT=%s\n' "$result"
-    printf 'LAST_DDNS_CHANGED=%s\n' "$changed"
-    printf 'LAST_DDNS_FAILED=%s\n' "$failed"
-    printf 'LAST_DDNS_CHANGED_COUNT=%s\n' "$changed_count"
-    printf 'LAST_DDNS_FAILED_COUNT=%s\n' "$failed_count"
+    printf 'LAST_DDNS_SCOPE=%s\n' "$scope"
+    printf 'LAST_DDNS_FORWARD_CHANGED=%s\n' "$forward_changed"
+    printf 'LAST_DDNS_FORWARD_FAILED=%s\n' "$forward_failed"
+    printf 'LAST_DDNS_ENTRY_CHANGED=%s\n' "$entry_changed"
+    printf 'LAST_DDNS_ENTRY_FAILED=%s\n' "$entry_failed"
+    printf 'LAST_DDNS_PBR_CHANGED=%s\n' "$pbr_changed"
+    printf 'LAST_DDNS_PBR_FAILED=%s\n' "$pbr_failed"
+    printf 'LAST_DDNS_RELAY_RESTART_NEEDED=%s\n' "$relay_restart_needed"
+    printf 'LAST_DDNS_NFT_APPLIED=%s\n' "$nft_applied"
+    printf 'LAST_DDNS_PBR_APPLIED=%s\n' "$pbr_applied"
+    printf 'LAST_DDNS_RELAY_RESTARTED=%s\n' "$relay_restarted"
     printf 'LAST_DDNS_VERSION=%s\n' "$TOOL_VERSION"
   } >"$DDNS_STATUS_FILE"
   chmod 600 "$DDNS_STATUS_FILE" 2>/dev/null || true
@@ -4354,6 +4442,37 @@ ddns_domain_forward_count() {
     $7=="true" && $3 !~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/ && $3 ~ /[A-Za-z]/ { c++ }
     END { print c+0 }
   '
+}
+
+ddns_domain_entry_count() {
+  entries_rows | awk -F'\t' '
+    $7=="true" && $2 !~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/ && $2 ~ /[A-Za-z]/ { c++ }
+    END { print c+0 }
+  '
+}
+
+ddns_domain_pbr_count() {
+  pbr_domain_rows | awk -F'\t' '$4=="true"{c++} END{print c+0}'
+}
+
+last_resolved_ip_for_entry() {
+  local name="$1"
+  resolved_entries_rows | awk -F'\t' -v n="$name" '$1==n && $3!="" {print $3; exit}'
+}
+
+last_resolved_changed_for_entry() {
+  local name="$1"
+  resolved_entries_rows | awk -F'\t' -v n="$name" '$1==n && $5!="" {print $5; exit}'
+}
+
+ddns_scope_requested() {
+  local scope="$1" wanted="$2"
+  [[ "$scope" == "all" || "$scope" == "$wanted" ]]
+}
+
+ddns_scope_enabled() {
+  local key="$1" default="$2"
+  ddns_config_bool "$key" "$default"
 }
 
 ddns_timer_state() {
@@ -4382,106 +4501,249 @@ ddns_auto_snapshot() {
   return 1
 }
 
-ddns_refresh_once() {
-  need_root_unless_dry_run
-  ensure_base_dirs
-  ddns_ensure_config
-  local ddns_lock="" changed="" failed="" result="ok" content resolved_at
-  local name entry_port target_host target_port out_iface route_table enabled comment old_ip target_ip domain_count=0 forward_count=0 changed_count=0 failed_count=0 need_apply=0
-  local auto_apply auto_fix auto_sync_pbr
-  if ! lock_acquire "$DDNS_LOCK_PATH" "DDNS 刷新" ddns_lock; then
-    ddns_write_last_status "skipped" "" "" 0 0
-    return 0
-  fi
-  if ! global_lock_acquire; then
-    lock_release "$ddns_lock"
-    ddns_write_last_status "skipped" "" "" 0 0
-    return 0
-  fi
-  ddns_emit INFO "DDNS 刷新开始。"
-  validate_forwards_tsv >/dev/null || { ddns_emit FAIL "forwards.tsv 校验失败。"; ddns_write_last_status "fail" "" "forwards.tsv" 0 1; global_lock_release; lock_release "$ddns_lock"; return 1; }
+ddns_refresh_forwards_scope() {
+  validate_forwards_tsv >/dev/null || { DDNS_FORWARD_FAILED="forwards.tsv"; return 1; }
+  local content resolved_at name entry_port target_host target_port out_iface route_table enabled comment
+  local old_ip target_ip forward_count=0 domain_count=0 changed_count=0 failed_count=0
   resolved_at="$(status_now)"
   content=$'# name\tentry_port\ttarget_host\tresolved_ip\ttarget_port\tout_iface\troute_table\tenabled\tlast_resolved_at\tcomment'
-  auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
-  auto_fix="$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")"
-  auto_sync_pbr="$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")"
   while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
     forward_count=$((forward_count + 1))
     old_ip="$(last_resolved_ip_for_forward "$name")"
     target_ip=""
     if is_ipv4 "$target_host"; then
       target_ip="$target_host"
-    elif [[ "$enabled" == "true" && "$target_host" =~ [A-Za-z] ]]; then
+    elif [[ "$enabled" == "true" ]] && is_domain_name "$target_host"; then
       domain_count=$((domain_count + 1))
       target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
       if [[ -z "$target_ip" ]]; then
         failed_count=$((failed_count + 1))
-        failed="${failed:+${failed},}${name}"
+        DDNS_FORWARD_FAILED="${DDNS_FORWARD_FAILED:+${DDNS_FORWARD_FAILED},}${name}"
         if [[ -n "$old_ip" ]]; then
-          ddns_emit WARN "${name} 解析失败，保留旧 IP：${old_ip}"
+          ddns_emit WARN "转发目标 ${name} 解析失败，保留旧 IP：${old_ip}"
           target_ip="$old_ip"
         else
-          ddns_emit WARN "${name} 解析失败，且没有旧 IP：${target_host}"
+          ddns_emit WARN "转发目标 ${name} 解析失败，且没有旧 IP：${target_host}"
           continue
         fi
       elif [[ -n "$old_ip" && "$old_ip" == "$target_ip" ]]; then
-        ddns_emit OK "${name} 解析未变化：${target_ip}"
-      elif [[ -n "$old_ip" && "$old_ip" != "$target_ip" ]]; then
-        changed_count=$((changed_count + 1))
-        changed="${changed:+${changed},}${name}"
-        need_apply=1
-        ddns_emit WARN "${name} 解析变化：${old_ip} -> ${target_ip}"
-        if [[ -n "$route_table" && "$route_table" != "-" ]]; then
-          ddns_emit INFO "${name} 的解析 IP 已变化，PBR 可能需要同步。"
-          ddns_emit INFO "可执行：lq pbr sync-from-forwards"
-        fi
+        ddns_emit OK "转发目标 ${name} 解析未变化：${target_ip}"
       else
         changed_count=$((changed_count + 1))
-        changed="${changed:+${changed},}${name}"
-        need_apply=1
-        ddns_emit OK "${name} 初次解析：${target_ip}"
+        DDNS_FORWARD_CHANGED="${DDNS_FORWARD_CHANGED:+${DDNS_FORWARD_CHANGED},}${name}"
+        DDNS_FORWARD_NEED_APPLY=1
+        ddns_emit WARN "转发目标 ${name} 解析变化：${old_ip:-none} -> ${target_ip}"
         if [[ -n "$route_table" && "$route_table" != "-" ]]; then
-          ddns_emit INFO "${name} 初次写入 resolved IP，PBR 可能需要同步。"
-          ddns_emit INFO "可执行：lq pbr sync-from-forwards"
+          DDNS_FORWARD_PBR_NEED_SYNC=1
+          if ! ddns_config_bool DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")"; then
+            ddns_emit INFO "转发目标 ${name} 的 IP 已变化，PBR 可能需要同步。"
+            ddns_emit INFO "可执行：lq pbr sync-from-forwards"
+          fi
         fi
       fi
     else
       target_ip="$old_ip"
-      if [[ -z "$target_ip" && "$target_host" =~ [A-Za-z] ]]; then
+      if [[ -z "$target_ip" ]] && is_domain_name "$target_host"; then
         target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
       fi
     fi
     [[ -n "$target_ip" ]] || continue
     content="${content}"$'\n'"${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_ip}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${resolved_at}"$'\t'"${comment}"
   done < <(forwards_rows_usv)
-  ddns_emit INFO "forwards=${forward_count}，域名后端=${domain_count}，changed=${changed_count}，failed=${failed_count}"
   write_file "$RESOLVED_TSV" "$content" 600
-  if (( need_apply == 1 )) && [[ "${auto_apply,,}" == "true" ]]; then
-    if ddns_auto_snapshot; then
-      ddns_emit INFO "检测到域名后端变化，正在安全重应用 nftables 转发规则。"
-      if apply_nft_rules "leikwan-relay" "$([[ "${auto_fix,,}" == "true" ]] && printf '1' || printf '0')"; then
-        ddns_emit OK "已重应用 nftables 转发规则。"
+  ddns_emit INFO "forwards checked=${forward_count}，domains=${domain_count}，changed=${changed_count}，failed=${failed_count}"
+  return 0
+}
+
+ddns_refresh_entries_scope() {
+  local content checked_at name public_host et_ip proto port weight enabled old_ip new_ip old_changed last_changed
+  local entry_count=0 domain_count=0 changed_count=0 failed_count=0
+  checked_at="$(status_now)"
+  content=$'# name\tpublic_host\tresolved_ip\tlast_checked\tlast_changed'
+  while IFS=$'\t' read -r name public_host et_ip proto port weight enabled; do
+    if is_domain_name "$public_host"; then
+      old_ip="$(last_resolved_ip_for_entry "$name")"
+      old_changed="$(last_resolved_changed_for_entry "$name")"
+      if [[ "$enabled" == "true" ]]; then
+        entry_count=$((entry_count + 1))
+        domain_count=$((domain_count + 1))
+        new_ip="$(resolve_ipv4_first "$public_host" 2>/dev/null || true)"
+        if [[ -z "$new_ip" ]]; then
+          failed_count=$((failed_count + 1))
+          DDNS_ENTRY_FAILED="${DDNS_ENTRY_FAILED:+${DDNS_ENTRY_FAILED},}${name}"
+          if [[ -n "$old_ip" ]]; then
+            ddns_emit WARN "公网入口 ${name} 解析失败，保留旧 IP：${old_ip}"
+            new_ip="$old_ip"
+            last_changed="${old_changed:-$checked_at}"
+          else
+            ddns_emit WARN "公网入口 ${name} 解析失败，且没有旧 IP：${public_host}"
+            continue
+          fi
+        elif [[ -z "$old_ip" ]]; then
+          ddns_emit OK "公网入口 ${name} 解析已记录：${new_ip}"
+          last_changed="$checked_at"
+        elif [[ "$old_ip" == "$new_ip" ]]; then
+          ddns_emit OK "公网入口 ${name} 解析未变化：${new_ip}"
+          last_changed="${old_changed:-$checked_at}"
+        else
+          changed_count=$((changed_count + 1))
+          DDNS_ENTRY_CHANGED="${DDNS_ENTRY_CHANGED:+${DDNS_ENTRY_CHANGED},}${name}"
+          DDNS_RELAY_RESTART_NEEDED=true
+          last_changed="$checked_at"
+          ddns_emit WARN "公网入口 ${name} 解析变化：${old_ip:-none} -> ${new_ip}"
+        fi
       else
-        result="fail"
-        ddns_emit WARN "nftables 转发规则重应用失败。"
+        new_ip="${old_ip:-}"
+        last_changed="${old_changed:-}"
       fi
-      if [[ "${auto_sync_pbr,,}" == "true" ]]; then
-        ddns_emit INFO "DDNS_AUTO_SYNC_PBR=true，正在同步 forward 来源 PBR。"
-        pbr_sync_from_forwards || result="warn"
+      [[ -n "$new_ip" ]] || continue
+      content="${content}"$'\n'"${name}"$'\t'"${public_host}"$'\t'"${new_ip}"$'\t'"${checked_at}"$'\t'"${last_changed}"
+    fi
+  done < <(entries_rows)
+  write_file "$RESOLVED_ENTRIES_TSV" "$content" 600
+  ddns_emit INFO "entries checked=${entry_count}，domains=${domain_count}，changed=${changed_count}，failed=${failed_count}"
+}
+
+ddns_maybe_restart_relay() {
+  local non_interactive="$1"
+  [[ "$DDNS_RELAY_RESTART_NEEDED" == "true" ]] || return 0
+  ddns_emit WARN "公网入口 ${DDNS_ENTRY_CHANGED} 的 DDNS 解析已变化。"
+  ddns_emit WARN "EasyTier relay 可能需要重启才能重新解析 peer。"
+  if (( non_interactive == 0 )) && is_interactive; then
+    if prompt_yes_no "是否现在重启 relay？" "N"; then
+      if apply_easytier_relay_service confirmed; then
+        DDNS_RELAY_RESTARTED=true
+        ddns_emit OK "已重启 relay。"
+      else
+        ddns_emit WARN "relay 重启失败，请稍后手动检查。"
+        return 1
+      fi
+    else
+      ddns_emit INFO "已记录公网入口 DDNS 变化，但未重启 relay。"
+      ddns_emit INFO "可在维护窗口执行：利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务"
+    fi
+  elif ddns_config_bool DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT"; then
+    ddns_emit INFO "DDNS_ENTRY_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
+    if apply_easytier_relay_service confirmed; then
+      DDNS_RELAY_RESTARTED=true
+      ddns_emit OK "已自动重启 relay。"
+    else
+      ddns_emit WARN "relay 自动重启失败。"
+      return 1
+    fi
+  else
+    ddns_emit INFO "timer/非交互模式默认不重启 relay。"
+  fi
+}
+
+ddns_refresh_once() {
+  need_root_unless_dry_run
+  ensure_base_dirs
+  ddns_ensure_config
+  local scope="all" non_interactive=0 arg ddns_lock="" result="ok" auto_apply auto_fix
+  while (($# > 0)); do
+    arg="$1"
+    case "$arg" in
+      --scope) scope="${2:-all}"; shift 2 ;;
+      --non-interactive) non_interactive=1; shift ;;
+      *) fail "未知 ddns run 参数：${arg}"; return 1 ;;
+    esac
+  done
+  case "$scope" in
+    all|forwards|entries|pbr) ;;
+    *) fail "DDNS scope 无效：${scope}"; return 1 ;;
+  esac
+  DDNS_FORWARD_CHANGED=""; DDNS_FORWARD_FAILED=""; DDNS_ENTRY_CHANGED=""; DDNS_ENTRY_FAILED=""
+  DDNS_PBR_CHANGED=""; DDNS_PBR_FAILED=""; DDNS_RELAY_RESTART_NEEDED=false
+  DDNS_NFT_APPLIED=false; DDNS_PBR_APPLIED=false; DDNS_RELAY_RESTARTED=false
+  DDNS_FORWARD_NEED_APPLY=0; DDNS_FORWARD_PBR_NEED_SYNC=0
+  if ! lock_acquire "$DDNS_LOCK_PATH" "DDNS 刷新" ddns_lock; then
+    ddns_write_last_status "skipped" "$scope" "" "" "" "" "" "" false false false false
+    return 0
+  fi
+  if ! global_lock_acquire; then
+    lock_release "$ddns_lock"
+    ddns_write_last_status "skipped" "$scope" "" "" "" "" "" "" false false false false
+    return 0
+  fi
+  ddns_emit INFO "DDNS 刷新开始，scope=${scope}。"
+  auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
+  auto_fix="$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")"
+  if ddns_scope_requested "$scope" forwards; then
+    if ddns_scope_enabled DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT"; then
+      ddns_refresh_forwards_scope || result="fail"
+    else
+      ddns_emit INFO "forwards scope 已禁用。"
+    fi
+  fi
+  if ddns_scope_requested "$scope" entries; then
+    if ddns_scope_enabled DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT"; then
+      ddns_refresh_entries_scope || result="warn"
+    else
+      ddns_emit INFO "entries scope 已禁用。"
+    fi
+  fi
+  if ddns_scope_requested "$scope" pbr; then
+    if ddns_scope_enabled DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT"; then
+      if ddns_config_bool DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT"; then
+        pbr_domain_sync --from-ddns || result="warn"
+        [[ -n "$PBR_DOMAIN_SYNC_CHANGED_NAMES" ]] && DDNS_PBR_CHANGED="$PBR_DOMAIN_SYNC_CHANGED_NAMES"
+        [[ -n "$PBR_DOMAIN_SYNC_FAILED_NAMES" ]] && DDNS_PBR_FAILED="$PBR_DOMAIN_SYNC_FAILED_NAMES"
+        ddns_emit INFO "pbr domains checked=$(ddns_domain_pbr_count 2>/dev/null || printf '0')，changed=${DDNS_PBR_CHANGED:-none}，failed=${DDNS_PBR_FAILED:-none}"
+      else
+        ddns_emit INFO "DDNS_AUTO_SYNC_DOMAIN_PBR=false，跳过域名 PBR 自动同步。"
+      fi
+    else
+      ddns_emit INFO "pbr scope 已禁用。"
+    fi
+  fi
+  if (( DDNS_FORWARD_NEED_APPLY == 1 )); then
+    if [[ "${auto_apply,,}" == "true" ]]; then
+      if ddns_auto_snapshot; then
+        ddns_emit INFO "检测到域名后端变化，正在安全重应用 nftables 转发规则。"
+        if apply_nft_rules "leikwan-relay" "$([[ "${auto_fix,,}" == "true" ]] && printf '1' || printf '0')"; then
+          DDNS_NFT_APPLIED=true
+          ddns_emit OK "已重应用 nftables 转发规则。"
+        else
+          result="fail"
+          ddns_emit WARN "nftables 转发规则重应用失败。"
+        fi
+      else
+        result="warn"
       fi
     else
       result="warn"
+      ddns_emit WARN "检测到域名后端变化，但 DDNS_AUTO_APPLY=${auto_apply}，未自动应用。"
     fi
-  elif (( need_apply == 1 )); then
-    result="warn"
-    ddns_emit WARN "检测到域名后端变化，但 DDNS_AUTO_APPLY=${auto_apply}，未自动应用。"
-  else
-    ddns_emit OK "没有域名后端发生变化，无需重应用规则。"
   fi
-  if (( failed_count > 0 )) && [[ "$result" == "ok" ]]; then
+  if (( DDNS_FORWARD_PBR_NEED_SYNC == 1 )); then
+    if ddns_config_bool DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")"; then
+      ddns_emit INFO "DDNS_AUTO_SYNC_FORWARD_PBR=true，正在同步 forward 来源 PBR。"
+      pbr_sync_from_forwards --no-apply || result="warn"
+    fi
+  fi
+  if [[ -n "$DDNS_PBR_CHANGED" ]] || { [[ -n "$DDNS_FORWARD_CHANGED" ]] && (( DDNS_FORWARD_PBR_NEED_SYNC == 1 )); }; then
+    if [[ "${auto_apply,,}" == "true" ]]; then
+      if pbr_apply; then
+        DDNS_PBR_APPLIED=true
+        ddns_emit OK "已应用 PBR。"
+      else
+        result="warn"
+        ddns_emit WARN "PBR 应用失败。"
+      fi
+    else
+      result="warn"
+      ddns_emit INFO "DDNS_AUTO_APPLY=${auto_apply}，已更新 PBR 配置但未应用。"
+    fi
+  fi
+  if ! ddns_maybe_restart_relay "$non_interactive"; then
     result="warn"
   fi
-  ddns_write_last_status "$result" "$changed" "$failed" "$changed_count" "$failed_count"
+  if [[ -n "$DDNS_FORWARD_FAILED$DDNS_ENTRY_FAILED$DDNS_PBR_FAILED" && "$result" == "ok" ]]; then
+    result="warn"
+  fi
+  ddns_emit INFO "summary scope=${scope} forwards changed=${DDNS_FORWARD_CHANGED:-none} failed=${DDNS_FORWARD_FAILED:-none}; entries changed=${DDNS_ENTRY_CHANGED:-none} failed=${DDNS_ENTRY_FAILED:-none}; pbr changed=${DDNS_PBR_CHANGED:-none} failed=${DDNS_PBR_FAILED:-none}; nft_applied=${DDNS_NFT_APPLIED}; pbr_applied=${DDNS_PBR_APPLIED}; relay_restart_needed=${DDNS_RELAY_RESTART_NEEDED}; relay_restarted=${DDNS_RELAY_RESTARTED}"
+  ddns_write_last_status "$result" "$scope" "$DDNS_FORWARD_CHANGED" "$DDNS_FORWARD_FAILED" "$DDNS_ENTRY_CHANGED" "$DDNS_ENTRY_FAILED" "$DDNS_PBR_CHANGED" "$DDNS_PBR_FAILED" "$DDNS_RELAY_RESTART_NEEDED" "$DDNS_NFT_APPLIED" "$DDNS_PBR_APPLIED" "$DDNS_RELAY_RESTARTED"
   ddns_emit INFO "DDNS 刷新结束：$(status_result_display "$result")。"
   global_lock_release
   lock_release "$ddns_lock"
@@ -4491,7 +4753,7 @@ render_ddns_service() {
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
 [Unit]
-Description=Leikwan DDNS backend refresh
+Description=Leikwan DDNS backend / entry / PBR refresh
 After=network-online.target
 Wants=network-online.target
 
@@ -4507,7 +4769,7 @@ render_ddns_timer() {
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
 [Unit]
-Description=Leikwan DDNS backend refresh timer
+Description=Leikwan DDNS backend / entry / PBR refresh timer
 
 [Timer]
 OnBootSec=2min
@@ -4533,8 +4795,8 @@ ddns_enable_timer() {
   need_root_unless_dry_run
   ddns_ensure_config
   ddns_install_units
-  info "将每 $(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT") 刷新 enabled 转发目标中的域名后端。"
-  warn "如果域名 IP 变化，将自动重应用 nftables 转发规则。"
+  info "将每 $(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT") 刷新 enabled 后端转发目标、公网入口和域名 PBR。"
+  warn "公网入口 DDNS 变化默认只记录 relay restart needed，不会自动中断 relay。"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable --now "${DDNS_SERVICE_NAME}.timer"
     ok "DDNS 自动刷新 timer 已启用。"
@@ -4555,27 +4817,59 @@ ddns_disable_timer() {
 }
 
 ddns_status() {
-  local timer_state interval auto_apply auto_sync_pbr last_time last_result changed_count failed_count domain_count
+  local timer_state interval refresh_forwards refresh_entries refresh_pbr auto_apply auto_sync_forward_pbr auto_sync_domain_pbr entry_auto_restart
+  local last_time last_result last_scope forward_changed forward_failed entry_changed entry_failed pbr_changed pbr_failed
+  local relay_restart_needed nft_applied pbr_applied relay_restarted forward_count entry_count pbr_count
+  ddns_ensure_config
   timer_state="$(ddns_timer_state)"
   interval="$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")"
+  refresh_forwards="$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")"
+  refresh_entries="$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")"
+  refresh_pbr="$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")"
   auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
-  auto_sync_pbr="$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")"
+  auto_sync_forward_pbr="$(ddns_config_value DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")")"
+  auto_sync_domain_pbr="$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")"
+  entry_auto_restart="$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")"
   last_time="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_TIME)"
   last_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
-  changed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_CHANGED_COUNT)"
-  failed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FAILED_COUNT)"
-  domain_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
+  last_scope="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_SCOPE)"
+  forward_changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_CHANGED)"
+  forward_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_FAILED)"
+  entry_changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_CHANGED)"
+  entry_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_FAILED)"
+  pbr_changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_CHANGED)"
+  pbr_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_FAILED)"
+  relay_restart_needed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)"
+  nft_applied="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_NFT_APPLIED)"
+  pbr_applied="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_APPLIED)"
+  relay_restarted="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTARTED)"
+  forward_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
+  entry_count="$(ddns_domain_entry_count 2>/dev/null || printf '0')"
+  pbr_count="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
   echo "DDNS 自动刷新状态"
   echo "----------------------------------------"
   echo "timer: ${timer_state}"
   echo "interval: ${interval}"
+  echo "forwards: $(bool_enabled_disabled "$refresh_forwards") (${forward_count})"
+  echo "entries: $(bool_enabled_disabled "$refresh_entries") (${entry_count})"
+  echo "pbr: $(bool_enabled_disabled "$refresh_pbr") (${pbr_count})"
   echo "auto apply: ${auto_apply}"
-  echo "auto sync pbr: ${auto_sync_pbr}"
-  echo "domain forwards: ${domain_count}"
+  echo "auto sync forward pbr: ${auto_sync_forward_pbr}"
+  echo "auto sync domain pbr: ${auto_sync_domain_pbr}"
+  echo "entry auto restart relay: ${entry_auto_restart}"
   echo "last run: ${last_time:-"-"}"
   echo "last result: ${last_result:-"-"}"
-  echo "changed targets: ${changed_count:-0}"
-  echo "failed targets: ${failed_count:-0}"
+  echo "last scope: ${last_scope:-"-"}"
+  echo "forward changed: ${forward_changed:-"-"}"
+  echo "forward failed: ${forward_failed:-"-"}"
+  echo "entry changed: ${entry_changed:-"-"}"
+  echo "entry failed: ${entry_failed:-"-"}"
+  echo "pbr changed: ${pbr_changed:-"-"}"
+  echo "pbr failed: ${pbr_failed:-"-"}"
+  echo "relay restart needed: $(bool_yes_no "${relay_restart_needed:-false}")"
+  echo "nft applied: $(bool_yes_no "${nft_applied:-false}")"
+  echo "pbr applied: $(bool_yes_no "${pbr_applied:-false}")"
+  echo "relay restarted: $(bool_yes_no "${relay_restarted:-false}")"
 }
 
 ddns_logs() {
@@ -4588,9 +4882,10 @@ ddns_logs() {
 
 ddns_set_interval() {
   need_root_unless_dry_run
-  local choice interval
+  ddns_ensure_config
+  local choice interval refresh_forwards refresh_entries refresh_pbr auto_apply auto_fix auto_sync_forward_pbr auto_sync_domain_pbr entry_auto_restart keep_old
   echo
-  echo "选择 DDNS 刷新间隔："
+  echo "设置 DDNS 刷新间隔和范围："
   echo "1. 5min"
   echo "2. 10min"
   echo "3. 30min"
@@ -4605,7 +4900,23 @@ ddns_set_interval() {
     0|"") return 0 ;;
     *) warn "无效选择。"; return 0 ;;
   esac
-  ddns_write_config "$interval"
+  refresh_forwards="$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")"
+  refresh_entries="$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")"
+  refresh_pbr="$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")"
+  auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
+  auto_fix="$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")"
+  auto_sync_forward_pbr="$(ddns_config_value DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")")"
+  auto_sync_domain_pbr="$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")"
+  entry_auto_restart="$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")"
+  keep_old="$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")"
+  if prompt_yes_no "刷新后端转发目标域名？" "$(bool_to_default "$refresh_forwards")"; then refresh_forwards="true"; else refresh_forwards="false"; fi
+  if prompt_yes_no "刷新公网入口 public_host 域名？" "$(bool_to_default "$refresh_entries")"; then refresh_entries="true"; else refresh_entries="false"; fi
+  if prompt_yes_no "刷新域名 PBR？" "$(bool_to_default "$refresh_pbr")"; then refresh_pbr="true"; else refresh_pbr="false"; fi
+  if prompt_yes_no "域名后端变化后自动重应用 nftables / PBR？" "$(bool_to_default "$auto_apply")"; then auto_apply="true"; else auto_apply="false"; fi
+  if prompt_yes_no "转发目标 DDNS 变化后自动同步 forward 来源 PBR？" "$(bool_to_default "$auto_sync_forward_pbr")"; then auto_sync_forward_pbr="true"; else auto_sync_forward_pbr="false"; fi
+  if prompt_yes_no "自动同步域名 PBR？" "$(bool_to_default "$auto_sync_domain_pbr")"; then auto_sync_domain_pbr="true"; else auto_sync_domain_pbr="false"; fi
+  if prompt_yes_no "公网入口 DDNS 变化后自动重启 relay？" "$(bool_to_default "$entry_auto_restart")"; then entry_auto_restart="true"; else entry_auto_restart="false"; fi
+  ddns_write_config "$interval" "$refresh_forwards" "$refresh_entries" "$refresh_pbr" "$auto_apply" "$auto_fix" "$auto_sync_forward_pbr" "$auto_sync_domain_pbr" "$entry_auto_restart" "$keep_old"
   ddns_install_units
   ok "DDNS 刷新间隔已设置为：${interval}"
   if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled --quiet "${DDNS_SERVICE_NAME}.timer" 2>/dev/null; then
@@ -4616,22 +4927,28 @@ ddns_set_interval() {
 ddns_menu() {
   local choice
   while true; do
-    print_menu_header "DDNS 后端自动刷新"
-    echo "1. 立即刷新一次"
-    echo "2. 启用自动刷新"
-    echo "3. 禁用自动刷新"
-    echo "4. 查看自动刷新状态"
-    echo "5. 查看刷新日志"
-    echo "6. 设置刷新间隔"
+    print_menu_header "DDNS 后端 / PBR / 公网入口自动刷新"
+    echo "1. 立即刷新全部"
+    echo "2. 只刷新后端转发目标"
+    echo "3. 只刷新公网入口域名"
+    echo "4. 只刷新域名 PBR"
+    echo "5. 启用自动刷新"
+    echo "6. 禁用自动刷新"
+    echo "7. 查看自动刷新状态"
+    echo "8. 查看刷新日志"
+    echo "9. 设置刷新间隔和范围"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) run_menu_action_pause ddns_refresh_once ;;
-      2) run_menu_action_pause ddns_enable_timer ;;
-      3) run_menu_action_pause ddns_disable_timer ;;
-      4) run_menu_action_pause ddns_status ;;
-      5) run_menu_action_pause ddns_logs ;;
-      6) run_menu_action_pause ddns_set_interval ;;
+      1) run_menu_action_pause ddns_refresh_once --scope all ;;
+      2) run_menu_action_pause ddns_refresh_once --scope forwards ;;
+      3) run_menu_action_pause ddns_refresh_once --scope entries ;;
+      4) run_menu_action_pause ddns_refresh_once --scope pbr ;;
+      5) run_menu_action_pause ddns_enable_timer ;;
+      6) run_menu_action_pause ddns_disable_timer ;;
+      7) run_menu_action_pause ddns_status ;;
+      8) run_menu_action_pause ddns_logs ;;
+      9) run_menu_action_pause ddns_set_interval ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -4789,10 +5106,17 @@ current_relay_et_ip() {
   printf '%s' "${ip:-$RELAY_ET_IP}"
 }
 
-current_entry_public_host() {
+current_entry_configured_public_host() {
   local host
   host="$(env_file_get "$ENTRY_PAIRING_FILE" ENTRY_PUBLIC_HOST)"
+  [[ -n "$host" ]] || host="$(env_file_get "$NETWORK_ENV" ENTRY_PUBLIC_HOST)"
   [[ -n "$host" ]] || host="$(entries_rows | awk -F'\t' '$7=="true"{print $2; exit}')"
+  printf '%s' "$host"
+}
+
+current_entry_public_host() {
+  local host
+  host="$(current_entry_configured_public_host)"
   [[ -n "$host" ]] || host="$(detect_public_ipv4 2>/dev/null || true)"
   printf '%s' "${host:-<A_PUBLIC_HOST>}"
 }
@@ -5211,6 +5535,55 @@ pbr_init_rt_tables() {
   fi
 }
 
+pbr_domain_rows() {
+  [[ -f "$PBR_DOMAIN_TSV" ]] || return 0
+  awk -F'\t' '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    { gsub(/\r/, "") }
+    NF == 0 { next }
+    $1 ~ /^#/ { next }
+    {
+      name=trim($1)
+      host=trim($2)
+      route_table=trim($3)
+      enabled=trim($4)
+      comment=trim($5)
+      if (name=="" || host=="" || route_table=="" || enabled=="") next
+      printf "%s\t%s\t%s\t%s\t%s\n", name, host, route_table, enabled, comment
+    }
+  ' "$PBR_DOMAIN_TSV"
+}
+
+pbr_resolved_domain_rows() {
+  [[ -f "$PBR_RESOLVED_DOMAIN_TSV" ]] || return 0
+  awk -F'\t' '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    { gsub(/\r/, "") }
+    NF == 0 { next }
+    $1 ~ /^#/ { next }
+    {
+      name=trim($1)
+      host=trim($2)
+      resolved_ip=trim($3)
+      route_table=trim($4)
+      last_checked=trim($5)
+      last_changed=trim($6)
+      if (name=="" || host=="") next
+      printf "%s\t%s\t%s\t%s\t%s\t%s\n", name, host, resolved_ip, route_table, last_checked, last_changed
+    }
+  ' "$PBR_RESOLVED_DOMAIN_TSV"
+}
+
+last_resolved_ip_for_pbr_domain() {
+  local name="$1"
+  pbr_resolved_domain_rows | awk -F'\t' -v n="$name" '$1==n && $3!="" {print $3; exit}'
+}
+
+last_resolved_changed_for_pbr_domain() {
+  local name="$1"
+  pbr_resolved_domain_rows | awk -F'\t' -v n="$name" '$1==n && $6!="" {print $6; exit}'
+}
+
 pbr_group_gateway() {
   case "$1" in
     T_9929|9929) printf '%s' "10.7.0.1" ;;
@@ -5273,9 +5646,18 @@ pbr_refresh_dynamic_rules() {
 
 pbr_apply() {
   need_root_unless_dry_run
+  local release_global_lock=0
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 1
+    release_global_lock=1
+  fi
   pbr_init_rt_tables
   pbr_refresh_dynamic_rules
-  [[ -f "$PBR_STATIC_CONF" ]] || { warn "暂无 PBR 静态规则。"; return 0; }
+  if [[ ! -f "$PBR_STATIC_CONF" ]]; then
+    warn "暂无 PBR 静态规则。"
+    (( release_global_lock == 1 )) && global_lock_release
+    return 0
+  fi
   local cidr group _source_type _source_name _source_host table_id gw table_name normalized apply_failed=0
   while ip rule del priority "$PBR_PRIORITY" 2>/dev/null; do :; done
   while read -r cidr group _source_type _source_name _source_host; do
@@ -5311,6 +5693,7 @@ pbr_apply() {
     fi
     ok "PBR：${cidr} -> ${table_name}"
   done <"$PBR_STATIC_CONF"
+  (( release_global_lock == 1 )) && global_lock_release
   return "$apply_failed"
 }
 
@@ -5552,14 +5935,248 @@ pbr_rule_key_exists() {
   ' "$file"
 }
 
+pbr_domain_source_exists() {
+  local file="$1" name="$2"
+  [[ -f "$file" ]] || return 1
+  awk -v src="pbr-domain:${name}" '
+    /^[[:space:]]*($|#)/ { next }
+    $3 == src { found=1 }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
+replace_pbr_domain_row() {
+  local row="$1" name tmp
+  IFS=$'\t' read -r name _ <<<"$row"
+  ensure_tsv_files
+  tmp="$(mktemp)"
+  awk -F'\t' -v n="$name" '$1==n {next} {print}' "$PBR_DOMAIN_TSV" >"$tmp"
+  printf '%s\n' "$row" >>"$tmp"
+  write_file "$PBR_DOMAIN_TSV" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+}
+
+display_pbr_domains() {
+  local labels
+  labels=$'编号\t名称\t域名\t路由表\t启用\t备注'
+  pbr_domain_rows | awk -F'\t' '{printf "%d.\t%s\t%s\t%s\t%s\t%s\n", ++i, $1, $2, $3, $4, ($5!="" ? $5 : "-")}' | render_tsv_table 100 "$labels"
+}
+
+pbr_domain_list() {
+  if ! pbr_domain_rows | awk 'NR==1 {found=1} END{exit !found}'; then
+    info "当前没有域名 PBR。"
+    return 0
+  fi
+  display_pbr_domains
+}
+
+select_pbr_domain_name() {
+  local choice name
+  if ! pbr_domain_rows | awk 'NR==1 {found=1} END{exit !found}'; then
+    warn "当前没有域名 PBR。" >&2
+    return 1
+  fi
+  display_pbr_domains >&2
+  while true; do
+    choice="$(prompt_value "请输入编号或名称，直接回车返回")"
+    [[ -z "$choice" ]] && return 1
+    if [[ "$choice" =~ ^[0-9]+$ ]]; then
+      name="$(pbr_domain_rows | awk -F'\t' -v idx="$choice" 'NR==idx {print $1; exit}')"
+    else
+      name="$(pbr_domain_rows | awk -F'\t' -v n="$choice" '$1==n {print $1; exit}')"
+    fi
+    [[ -n "$name" ]] && { printf '%s' "$name"; return 0; }
+    warn "域名 PBR 不存在：${choice}" >&2
+  done
+}
+
+pbr_domain_sync() {
+  need_root_unless_dry_run
+  ensure_tsv_files >/dev/null
+  local no_apply=1 from_ddns=0 arg acquired_lock=0
+  while (($# > 0)); do
+    arg="$1"
+    case "$arg" in
+      --apply) no_apply=0; shift ;;
+      --no-apply) no_apply=1; shift ;;
+      --from-ddns) from_ddns=1; no_apply=1; shift ;;
+      *) fail "未知 pbr domain sync 参数：${arg}"; return 1 ;;
+    esac
+  done
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 0
+    acquired_lock=1
+  fi
+  local tmp_static tmp_resolved checked_at name host route_table enabled comment old_ip new_ip old_changed last_changed
+  local cidr group candidates=0 synced=0 skipped=0 failed=0 changed=0 rc=0
+  PBR_DOMAIN_SYNC_CHANGED_NAMES=""
+  PBR_DOMAIN_SYNC_FAILED_NAMES=""
+  mkdir -p "$PBR_DIR"
+  [[ -f "$PBR_STATIC_CONF" ]] || : >"$PBR_STATIC_CONF"
+  tmp_static="$(mktemp)"
+  tmp_resolved="$(mktemp)"
+  checked_at="$(status_now)"
+  awk '
+    /^[[:space:]]*($|#)/ { print; next }
+    $3 ~ /^pbr-domain:/ { next }
+    { print }
+  ' "$PBR_STATIC_CONF" >"$tmp_static"
+  printf '# name\thost\tresolved_ip\troute_table\tlast_checked\tlast_changed\n' >"$tmp_resolved"
+  while IFS=$'\t' read -r name host route_table enabled comment; do
+    old_ip="$(last_resolved_ip_for_pbr_domain "$name")"
+    old_changed="$(last_resolved_changed_for_pbr_domain "$name")"
+    if [[ "$enabled" != "true" ]]; then
+      [[ -n "$old_ip" ]] && printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$host" "$old_ip" "$route_table" "$checked_at" "${old_changed:-$checked_at}" >>"$tmp_resolved"
+      continue
+    fi
+    candidates=$((candidates + 1))
+    if ! is_domain_name "$host"; then
+      warn "域名 PBR ${name} 的 host 不是域名：${host}"
+      failed=$((failed + 1))
+      PBR_DOMAIN_SYNC_FAILED_NAMES="${PBR_DOMAIN_SYNC_FAILED_NAMES:+${PBR_DOMAIN_SYNC_FAILED_NAMES},}${name}"
+      continue
+    fi
+    new_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    if [[ -z "$new_ip" ]]; then
+      failed=$((failed + 1))
+      PBR_DOMAIN_SYNC_FAILED_NAMES="${PBR_DOMAIN_SYNC_FAILED_NAMES:+${PBR_DOMAIN_SYNC_FAILED_NAMES},}${name}"
+      if [[ -n "$old_ip" ]]; then
+        warn "域名 PBR ${name} 解析失败，保留旧 IP：${old_ip}"
+        new_ip="$old_ip"
+        last_changed="${old_changed:-$checked_at}"
+      else
+        warn "域名 PBR ${name} 解析失败，且没有旧 IP：${host}"
+        continue
+      fi
+    elif [[ -n "$old_ip" && "$old_ip" == "$new_ip" ]]; then
+      ok "域名 PBR ${name} 解析未变化：${new_ip}"
+      last_changed="${old_changed:-$checked_at}"
+    else
+      changed=$((changed + 1))
+      PBR_DOMAIN_SYNC_CHANGED_NAMES="${PBR_DOMAIN_SYNC_CHANGED_NAMES:+${PBR_DOMAIN_SYNC_CHANGED_NAMES},}${name}"
+      warn "域名 PBR ${name} 解析变化：${old_ip:-none} -> ${new_ip}"
+      last_changed="$checked_at"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$host" "$new_ip" "$route_table" "$checked_at" "$last_changed" >>"$tmp_resolved"
+    cidr="${new_ip}/32"
+    group="${route_table#T_}"
+    if pbr_rule_key_exists "$tmp_static" "$cidr" "$group"; then
+      skipped=$((skipped + 1))
+      info "已存在同 CIDR/table 的非域名 PBR，跳过 pbr-domain:${name} ${cidr} -> T_${group}"
+      continue
+    fi
+    printf '%s %s pbr-domain:%s %s\n' "$cidr" "$group" "$name" "$host" >>"$tmp_static"
+    synced=$((synced + 1))
+  done < <(pbr_domain_rows)
+  write_file "$PBR_RESOLVED_DOMAIN_TSV" "$(cat "$tmp_resolved")" 600
+  write_file "$PBR_STATIC_CONF" "$(cat "$tmp_static")" 600
+  rm -f "$tmp_static" "$tmp_resolved"
+  if (( candidates == 0 )); then
+    info "没有 enabled 域名 PBR 需要同步。"
+  else
+    info "域名 PBR 同步完成：enabled=${candidates}，写入=${synced}，已有=${skipped}，changed=${changed}，failed=${failed}。"
+  fi
+  if (( no_apply == 0 )); then
+    pbr_apply || rc=1
+  elif (( from_ddns == 0 )); then
+    info "如需立即生效，请执行：lq --pbr-apply"
+  fi
+  (( acquired_lock == 1 )) && global_lock_release
+  (( rc == 0 )) || return "$rc"
+  (( failed == 0 ))
+}
+
+pbr_domain_add() {
+  need_root_unless_dry_run
+  ensure_tsv_files >/dev/null
+  local name host group route_table enabled comment row resolved
+  name="$(safe_name "$(prompt_value "域名 PBR 名称" "tw")")"
+  [[ -n "$name" ]] || { warn "域名 PBR 名称不能为空。"; return 0; }
+  while true; do
+    host="$(prompt_host "域名 host")"
+    is_domain_name "$host" && break
+    warn "域名 PBR 的 host 必须是域名，不能是纯 IPv4。"
+  done
+  group="$(pbr_select_group)" || return 0
+  route_table="T_${group#T_}"
+  enabled="$(prompt_value "enabled true/false" "true")"
+  [[ "$enabled" == "true" || "$enabled" == "false" ]] || { warn "enabled 必须是 true 或 false。"; return 0; }
+  comment="$(prompt_value "备注" "${name}-ddns-pbr")"
+  resolved="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+  [[ -n "$resolved" ]] || { warn "域名暂未解析成功，未写入域名 PBR：${host}"; return 0; }
+  row="${name}"$'\t'"${host}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
+  confirm_summary "添加域名 PBR 摘要" "name=${name}\nhost=${host}\nresolved=${resolved}\nroute_table=${route_table}\nenabled=${enabled}\nsource=pbr-domain:${name} ${host}" || return 0
+  replace_pbr_domain_row "$row"
+  pbr_domain_sync --apply
+}
+
+pbr_domain_delete() {
+  need_root_unless_dry_run
+  ensure_tsv_files >/dev/null
+  local name tmp
+  name="$(select_pbr_domain_name)" || return 0
+  prompt_yes_no "确认删除域名 PBR ${name}？" "N" || return 0
+  auto_snapshot_or_confirm "delete-pbr-domain" || return 0
+  tmp="$(mktemp)"
+  awk -F'\t' -v n="$name" '$1==n {next} {print}' "$PBR_DOMAIN_TSV" >"$tmp"
+  write_file "$PBR_DOMAIN_TSV" "$(cat "$tmp")" 600
+  awk -F'\t' -v n="$name" '$1==n {next} {print}' "$PBR_RESOLVED_DOMAIN_TSV" >"$tmp"
+  write_file "$PBR_RESOLVED_DOMAIN_TSV" "$(cat "$tmp")" 600
+  [[ -f "$PBR_STATIC_CONF" ]] || : >"$PBR_STATIC_CONF"
+  awk -v src="pbr-domain:${name}" '
+    /^[[:space:]]*($|#)/ { print; next }
+    $3 == src { next }
+    { print }
+  ' "$PBR_STATIC_CONF" >"$tmp"
+  write_file "$PBR_STATIC_CONF" "$(cat "$tmp")" 600
+  rm -f "$tmp"
+  ok "已删除域名 PBR：${name}"
+  pbr_apply
+}
+
+pbr_domain_menu() {
+  local choice
+  while true; do
+    print_menu_header "域名 PBR 管理"
+    echo "1. 添加域名 PBR"
+    echo "2. 查看域名 PBR"
+    echo "3. 删除域名 PBR"
+    echo "4. 立即同步域名 PBR"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause pbr_domain_add ;;
+      2) run_menu_action_pause pbr_domain_list ;;
+      3) run_menu_action_pause pbr_domain_delete ;;
+      4) run_menu_action_pause pbr_domain_sync ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
 pbr_sync_from_forwards() {
   need_root_unless_dry_run
   ensure_tsv_files >/dev/null
   resolve_forwards >/dev/null 2>&1 || true
   mkdir -p "$PBR_DIR"
   [[ -f "$PBR_STATIC_CONF" ]] || : >"$PBR_STATIC_CONF"
+  local no_apply=0 arg acquired_lock=0
+  while (($# > 0)); do
+    arg="$1"
+    case "$arg" in
+      --apply) no_apply=0; shift ;;
+      --no-apply) no_apply=1; shift ;;
+      *) fail "未知 pbr sync-from-forwards 参数：${arg}"; return 1 ;;
+    esac
+  done
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 0
+    acquired_lock=1
+  fi
   local tmp name _entry_port target_host target_ip _target_port _out_iface route_table enabled _resolved_at _comment
-  local cidr group synced=0 skipped=0 candidates=0
+  local cidr group synced=0 skipped=0 candidates=0 rc=0
   tmp="$(mktemp)"
   awk '
     /^[[:space:]]*($|#)/ { print; next }
@@ -5591,7 +6208,13 @@ pbr_sync_from_forwards() {
   else
     info "PBR 同步完成：新增 ${synced}，已存在 ${skipped}。"
   fi
-  pbr_apply
+  if (( no_apply == 0 )); then
+    pbr_apply || rc=1
+  else
+    info "已更新 forward 来源 PBR 配置，稍后由统一流程应用。"
+  fi
+  (( acquired_lock == 1 )) && global_lock_release
+  return "$rc"
 }
 
 generate_forward_outputs() {
@@ -5877,6 +6500,7 @@ doctor_cloud() {
   else
     report WARN "nftables 项目表不存在"
   fi
+  report_local_entry_ddns_status
   if [[ -f "$ENTRY_EXPOSE_ENV" ]]; then
     start="$(entry_expose_start)"
     end="$(entry_expose_end)"
@@ -6016,6 +6640,8 @@ doctor_relay() {
   fi
   [[ -n "$forward_rule_fix_reason" ]] || forward_rule_fix_reason="legacy"
   doctor_offer_forward_rule_fix "$forward_rule_fix_needed" "$forward_rule_fix_reason"
+  report_entry_ddns_cache_status
+  report_pbr_domain_ddns_status
   [[ -f "$NETWORK_PAIRING_FILE" ]] && report OK "relay 网络码：已生成"
 }
 
@@ -6134,6 +6760,177 @@ status_cache_summary() {
   fi
 }
 
+status_ddns_entry_summary() {
+  local changed failed relay_needed
+  changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_CHANGED)"
+  failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_FAILED)"
+  relay_needed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)"
+  if [[ -n "$failed" ]]; then
+    status_mark_result warn
+    printf 'WARN failed=%s' "$failed"
+  elif [[ "${relay_needed,,}" == "true" && -n "$changed" ]]; then
+    status_mark_result warn
+    printf '%s changed，relay restart needed' "$changed"
+  elif [[ -n "$changed" ]]; then
+    printf '%s changed' "$changed"
+  else
+    printf 'OK'
+  fi
+}
+
+status_ddns_pbr_summary() {
+  local changed failed
+  changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_CHANGED)"
+  failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_FAILED)"
+  if [[ -n "$failed" ]]; then
+    status_mark_result warn
+    printf 'WARN failed=%s' "$failed"
+  elif [[ -n "$changed" ]]; then
+    printf '%s changed' "$changed"
+  else
+    printf 'OK'
+  fi
+}
+
+status_ddns_forward_summary() {
+  local changed failed
+  changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_CHANGED)"
+  failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_FAILED)"
+  if [[ -n "$failed" ]]; then
+    status_mark_result warn
+    printf 'WARN failed=%s' "$failed"
+  elif [[ -n "$changed" ]]; then
+    printf '%s changed' "$changed"
+  else
+    printf 'OK'
+  fi
+}
+
+report_local_entry_ddns_status() {
+  local host resolved public_ip
+  host="$(current_entry_configured_public_host)"
+  if [[ -z "$host" ]]; then
+    report INFO "未配置本机公网入口域名，跳过 DDNS 一致性检查。"
+    return 0
+  fi
+  if ! is_domain_name "$host"; then
+    report INFO "本机公网入口地址不是域名，跳过 DDNS 一致性检查：${host}"
+    return 0
+  fi
+  resolved="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+  public_ip="$(detect_public_ipv4 2>/dev/null || true)"
+  if [[ -z "$resolved" ]]; then
+    report WARN "本机公网入口域名解析失败：${host}"
+    return 0
+  fi
+  if [[ -z "$public_ip" ]]; then
+    report WARN "无法获取当前公网 IPv4，跳过本机公网入口 DDNS 对比。"
+    report INFO "域名解析：${resolved}"
+    return 0
+  fi
+  if [[ "$resolved" == "$public_ip" ]]; then
+    report OK "本机公网入口 DDNS 解析正常：${resolved}"
+  else
+    report WARN "本机公网入口域名解析与当前公网 IP 不一致。"
+    report INFO "域名解析：${resolved}"
+    report INFO "当前公网：${public_ip}"
+    report INFO "请检查 DDNS 客户端是否正常更新。"
+  fi
+}
+
+status_local_entry_ddns_line() {
+  local host resolved public_ip
+  host="$(current_entry_configured_public_host)"
+  if [[ -z "$host" ]]; then
+    printf 'skipped'
+    return 0
+  fi
+  if ! is_domain_name "$host"; then
+    printf 'skipped'
+    return 0
+  fi
+  resolved="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+  public_ip="$(detect_public_ipv4 2>/dev/null || true)"
+  if [[ -z "$resolved" || -z "$public_ip" ]]; then
+    status_mark_result warn
+    printf 'WARN，建议执行 lq --doctor'
+  elif [[ "$resolved" == "$public_ip" ]]; then
+    printf 'OK %s' "$resolved"
+  else
+    status_mark_result warn
+    printf 'WARN %s != %s' "$resolved" "$public_ip"
+  fi
+}
+
+report_entry_ddns_cache_status() {
+  local name public_host _et_ip _proto _port _weight enabled cached_ip checked=0
+  while IFS=$'\t' read -r name public_host _et_ip _proto _port _weight enabled; do
+    [[ "$enabled" == "true" ]] || continue
+    is_domain_name "$public_host" || continue
+    checked=$((checked + 1))
+    cached_ip="$(last_resolved_ip_for_entry "$name")"
+    if [[ -n "$cached_ip" ]]; then
+      report OK "公网入口 ${name} DDNS 缓存：${public_host} -> ${cached_ip}"
+    else
+      report WARN "公网入口 ${name} 缺少 DDNS 解析缓存，请执行：lq ddns run --scope entries"
+    fi
+  done < <(entries_rows)
+  if (( checked == 0 )); then
+    report INFO "未发现 enabled 域名公网入口。"
+  fi
+  if [[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)" == "true" ]]; then
+    report WARN "公网入口 DDNS 已变化，relay 可能需要重启才能重新解析 peer。"
+  fi
+}
+
+pbr_domain_rule_matches() {
+  local name="$1" cidr="$2" route_table="$3"
+  [[ -f "$PBR_STATIC_CONF" ]] || return 1
+  awk -v src="pbr-domain:${name}" -v cidr="$cidr" -v table="${route_table#T_}" '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      g=$2
+      sub(/^T_/, "", g)
+      if ($1 == cidr && g == table && $3 == src) found=1
+    }
+    END { exit found ? 0 : 1 }
+  ' "$PBR_STATIC_CONF"
+}
+
+report_pbr_domain_ddns_status() {
+  local name host route_table enabled _comment cached_ip current_ip cidr checked=0
+  while IFS=$'\t' read -r name host route_table enabled _comment; do
+    [[ "$enabled" == "true" ]] || continue
+    checked=$((checked + 1))
+    if ! is_domain_name "$host"; then
+      report WARN "域名 PBR ${name} host 不是域名：${host}"
+      continue
+    fi
+    current_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    cached_ip="$(last_resolved_ip_for_pbr_domain "$name")"
+    if [[ -z "$current_ip" ]]; then
+      report WARN "域名 PBR ${name} 解析失败：${host}"
+      continue
+    fi
+    if [[ -n "$cached_ip" && "$cached_ip" != "$current_ip" ]]; then
+      report WARN "域名 PBR ${name} 已变化，请执行：lq pbr domain sync"
+    else
+      report OK "域名 PBR ${name} 解析：${host} -> ${current_ip}"
+    fi
+    cidr="${current_ip}/32"
+    if pbr_domain_rule_matches "$name" "$cidr" "$route_table"; then
+      report OK "域名 PBR ${name} 生成规则存在：${cidr} -> ${route_table}"
+    elif pbr_rule_key_exists "$PBR_STATIC_CONF" "$cidr" "$route_table"; then
+      report INFO "域名 PBR ${name} 对应 CIDR/table 已由其它 PBR 规则覆盖：${cidr} -> ${route_table}"
+    else
+      report WARN "域名 PBR ${name} 生成规则缺失，请执行：lq pbr domain sync"
+    fi
+  done < <(pbr_domain_rows)
+  if (( checked == 0 )); then
+    report INFO "未配置 enabled 域名 PBR。"
+  fi
+}
+
 systemd_active_state() {
   local service="$1" state
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -6198,7 +6995,8 @@ status_mss_summary() {
 status_overview_relay() {
   local service_state relay_ip entries_total entries_enabled forwards_total forwards_enabled
   local primary_row primary_name primary_proto primary_port pbr_count last_apply last_doctor
-  local ddns_timer ddns_last_time ddns_last_result ddns_changed_count ddns_failed_count ddns_domain_count
+  local ddns_timer ddns_last_time ddns_last_result ddns_forward_count ddns_entry_count ddns_pbr_count
+  local ddns_refresh_forwards ddns_refresh_entries ddns_refresh_pbr
   service_state="$(systemd_active_state "${EASYTIER_RELAY_SERVICE_NAME}.service" || true)"
   [[ "$service_state" == "active" ]] || status_mark_result warn
   relay_ip="$(current_relay_et_ip)"
@@ -6221,9 +7019,12 @@ status_overview_relay() {
   ddns_timer="$(ddns_timer_state)"
   ddns_last_time="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_TIME)"
   ddns_last_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
-  ddns_changed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_CHANGED_COUNT)"
-  ddns_failed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FAILED_COUNT)"
-  ddns_domain_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
+  ddns_refresh_forwards="$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")"
+  ddns_refresh_entries="$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")"
+  ddns_refresh_pbr="$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")"
+  ddns_forward_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
+  ddns_entry_count="$(ddns_domain_entry_count 2>/dev/null || printf '0')"
+  ddns_pbr_count="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
   echo "角色: leikwan-relay"
   echo "EasyTier: relay ${service_state}"
   echo "Relay IP: ${relay_ip}"
@@ -6238,14 +7039,20 @@ status_overview_relay() {
   echo "nftables: $(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")"
   echo "MSS clamp: $(status_mss_summary)"
   echo "DDNS 自动刷新: ${ddns_timer}"
+  echo "DDNS scopes: forwards=$(bool_yes_no "$ddns_refresh_forwards") entries=$(bool_yes_no "$ddns_refresh_entries") pbr=$(bool_yes_no "$ddns_refresh_pbr")"
   if [[ -n "$ddns_last_time" ]]; then
     echo "最近 DDNS: ${ddns_last_time} / $(status_result_display "$ddns_last_result")"
-    echo "域名后端: ${ddns_changed_count:-0} changed / ${ddns_failed_count:-0} failed"
+    echo "后端 DDNS: $(status_ddns_forward_summary)"
+    echo "公网入口 DDNS: $(status_ddns_entry_summary)"
+    echo "PBR DDNS: $(status_ddns_pbr_summary)"
   else
     echo "最近 DDNS: -"
+    echo "后端 DDNS: -"
+    echo "公网入口 DDNS: -"
+    echo "PBR DDNS: -"
   fi
-  if (( ddns_domain_count > 0 )) && [[ "$ddns_timer" != "active" ]]; then
-    echo "[INFO] 检测到域名后端目标，可在转发目标管理中启用 DDNS 自动刷新。"
+  if (( (ddns_forward_count + ddns_entry_count + ddns_pbr_count) > 0 )) && [[ "$ddns_timer" != "active" ]]; then
+    echo "[INFO] 检测到域名 DDNS 对象，可在 DDNS 菜单中启用自动刷新。"
   fi
   echo "最近应用: ${last_apply}"
   echo "最近诊断: ${last_doctor}"
@@ -6276,6 +7083,7 @@ status_overview_entry() {
   echo "EasyTier service: ${service_state}"
   echo "监听: $(easytier_protocols_display "$proto")/${port}"
   echo "公网入口端口池: ${start}-${end}"
+  echo "本机公网入口 DDNS: $(status_local_entry_ddns_line)"
   echo "nftables: $(status_nft_summary cloud-entry "$relay_ip" "$start" "$end" 0)"
   echo "MSS clamp: $(status_mss_summary)"
   echo "最近诊断: ${last_doctor}"
@@ -6574,11 +7382,20 @@ generate_debug_report() {
     [[ -f "$UPDATE_STATUS_FILE" ]] && sed -n '1,120p' "$UPDATE_STATUS_FILE"
     echo "ddns log tail:"
     [[ -f "$DDNS_LOG_FILE" ]] && tail -n 100 "$DDNS_LOG_FILE"
+    echo "resolved-entries.tsv:"
+    [[ -f "$RESOLVED_ENTRIES_TSV" ]] && sed -n '1,160p' "$RESOLVED_ENTRIES_TSV"
+    echo "pbr/domain-routes.tsv:"
+    [[ -f "$PBR_DOMAIN_TSV" ]] && sed -n '1,160p' "$PBR_DOMAIN_TSV"
+    echo "pbr/resolved-pbr-domains.tsv:"
+    [[ -f "$PBR_RESOLVED_DOMAIN_TSV" ]] && sed -n '1,160p' "$PBR_RESOLVED_DOMAIN_TSV"
     echo "outputs:"
     [[ -f "$FORWARD_TSV" ]] && sed -n '1,120p' "$FORWARD_TSV"
   } >"$tmp" 2>&1
   sed -E \
     -e 's/(EASYTIER_NETWORK_SECRET=).*/\1<redacted>/g' \
+    -e 's/(PAIRING_CODE_BASE64=).*/\1<redacted>/g' \
+    -e 's/(LEIKWAN_[A-Z0-9_]*_BASE64=).*/\1<redacted>/g' \
+    -e 's/(([Tt]oken|[Pp]assword)[[:space:]_=-]+)[^[:space:]]+/\1<redacted>/g' \
     -e 's#(LAST_UPDATE_SOURCE=https?://[^?[:space:]]+)\?[^[:space:]]+#\1?<redacted>#g' \
     -e 's/(PrivateKey[[:space:]]*=[[:space:]]*)[^[:space:]]+/\1<redacted>/g' \
     -e 's#(vless|vmess|trojan|ss|hysteria)://[^[:space:]]+#<proxy-link-redacted>#g' \
@@ -7207,6 +8024,7 @@ pbr_menu() {
     echo "3. 删除 PBR 规则"
     echo "4. 应用 PBR"
     echo "5. 查看 PBR"
+    echo "6. 域名 PBR 管理"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -7215,7 +8033,10 @@ pbr_menu() {
       3) run_menu_action_pause delete_pbr_rule ;;
       4) run_menu_action_pause pbr_apply ;;
       5) run_menu_action_pause pbr_show ;;
-      6|0) return 0 ;;
+      6) pbr_domain_menu ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
     esac
   done
 }
@@ -7551,13 +8372,22 @@ main() {
         delete) delete_pbr_rule "${3:-}" ;;
         apply) pbr_apply ;;
         show|list) pbr_show ;;
-        sync-from-forwards) pbr_sync_from_forwards ;;
+        sync-from-forwards) shift 2; pbr_sync_from_forwards "$@" ;;
+        domain)
+          case "${3:-}" in
+            add) pbr_domain_add ;;
+            list|show) pbr_domain_list ;;
+            delete) pbr_domain_delete ;;
+            sync) shift 3; pbr_domain_sync "$@" ;;
+            *) fail "未知 pbr domain 子命令：${3:-}"; print_help; exit 1 ;;
+          esac
+          ;;
         *) fail "未知 pbr 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
     ddns)
       case "${2:-}" in
-        run) ddns_refresh_once ;;
+        run) shift 2; ddns_refresh_once "$@" ;;
         status) ddns_status ;;
         enable) ddns_enable_timer ;;
         disable) ddns_disable_timer ;;
@@ -7581,7 +8411,7 @@ main() {
     --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
     --self-update) update_run 1 || exit $? ;;
     --update-check) update_check || exit $? ;;
-    --ddns-run) ddns_refresh_once ;;
+    --ddns-run) shift; ddns_refresh_once "$@" ;;
     --pbr-apply) pbr_apply ;;
     --pbr-delete) delete_pbr_rule "${2:-}" ;;
     --uninstall) uninstall_new_mode ;;
