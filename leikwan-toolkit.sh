@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.0.5"
+TOOL_VERSION="1.0.6"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -187,6 +187,120 @@ wait_enter_to_return() {
   printf '\n按回车继续...'
   local _answer
   IFS= read -r _answer || true
+}
+
+terminal_cols() {
+  if [[ -n "${LEIKWAN_COLUMNS:-}" && "${LEIKWAN_COLUMNS}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$LEIKWAN_COLUMNS"
+    return 0
+  fi
+  if is_interactive && command -v tput >/dev/null 2>&1 && [[ -n "${TERM:-}" && "${TERM:-}" != "dumb" ]]; then
+    tput cols 2>/dev/null || printf '80\n'
+  else
+    printf '120\n'
+  fi
+}
+
+display_width() {
+  local value="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys, unicodedata; s=sys.argv[1]; print(sum(0 if unicodedata.combining(ch) else 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1 for ch in s))' "$value" 2>/dev/null && return 0
+  fi
+  printf '%s' "$value" | awk '{print length($0)}'
+}
+
+pad_display_width() {
+  local value="$1" width="$2" current
+  current="$(display_width "$value")"
+  printf '%s' "$value"
+  if [[ "$current" =~ ^[0-9]+$ ]] && (( current < width )); then
+    printf '%*s' "$((width - current))" ''
+  fi
+}
+
+should_render_table() {
+  local min_cols="$1" cols
+  [[ "${LEIKWAN_COMPACT:-0}" == "1" ]] && return 1
+  cols="$(terminal_cols)"
+  if [[ "${LEIKWAN_TABLE:-0}" == "1" ]]; then
+    (( cols >= min_cols )) && return 0
+    return 1
+  fi
+  (( cols >= min_cols ))
+}
+
+render_tsv_compact() {
+  local labels="$1"
+  awk -F'\t' -v labels="$labels" '
+    BEGIN { split(labels, label, "\t") }
+    NF {
+      print $1 " " $2
+      for (i = 3; i <= NF; i++) {
+        value = ($i == "" ? "-" : $i)
+        print "   " label[i] ": " value
+      }
+      print ""
+    }
+  '
+}
+
+render_tsv_table() {
+  local min_cols="$1" labels="$2" rows cols tmp
+  rows="$(cat || true)"
+  [[ -n "$rows" ]] || return 0
+  cols="$(terminal_cols)"
+  if should_render_table "$min_cols" && command -v python3 >/dev/null 2>&1; then
+    tmp="$(mktemp)"
+    printf '%s\n' "$rows" >"$tmp"
+    if python3 - "$labels" "$cols" "$tmp" <<'PY'
+import sys
+import unicodedata
+
+labels = sys.argv[1].split("\t")
+cols = int(sys.argv[2])
+path = sys.argv[3]
+
+with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    rows = [line.rstrip("\n").split("\t") for line in fh if line.strip()]
+
+if not rows:
+    sys.exit(0)
+
+columns = len(labels)
+for row in rows:
+    if len(row) < columns:
+        row.extend([""] * (columns - len(row)))
+
+def cell_width(value):
+    total = 0
+    for ch in value:
+        if unicodedata.combining(ch):
+            continue
+        total += 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+    return total
+
+def pad(value, width):
+    return value + " " * max(width - cell_width(value), 0)
+
+widths = []
+for idx, label in enumerate(labels):
+    widths.append(max([cell_width(label)] + [cell_width(row[idx]) for row in rows]))
+
+total_width = sum(widths) + (2 * (columns - 1))
+if total_width > cols:
+    sys.exit(2)
+
+print("  ".join(pad(labels[idx], widths[idx]) for idx in range(columns)))
+for row in rows:
+    print("  ".join(pad(row[idx], widths[idx]) for idx in range(columns)))
+PY
+    then
+      rm -f "$tmp"
+      return 0
+    fi
+    rm -f "$tmp"
+  fi
+  render_tsv_compact "$labels" <<<"$rows"
 }
 
 print_compact_header() {
@@ -1722,8 +1836,8 @@ last_resolved_ip_for_forward() {
 
 display_entries() {
   ensure_tsv_files
-  local only_enabled="${1:-all}"
-  printf '%s\n' "编号  名称            公网地址                 EasyTier IP    协议  端口   权重        启用"
+  local only_enabled="${1:-all}" labels
+  labels=$'编号\t名称\t公网地址\tEasyTier IP\t协议\t端口\t权重\t启用'
   entries_rows_sorted | awk -F'\t' -v only="$only_enabled" '
     function proto_display(s) { return s=="tcp,udp" ? "tcp+udp" : s }
     function display_name(n) {
@@ -1732,9 +1846,9 @@ display_entries() {
     }
     only=="enabled" && $7!="true" {next}
     {
-      printf "%d) %-18s %-24s %-14s %-7s %-6s weight=%-5s %s\n", ++i, display_name($1), $2, $3, proto_display($4), $5, $6, ($7=="true" ? "enabled" : "disabled")
+      printf "%d)\t%s\t%s\t%s\t%s\t%s\tweight=%s\t%s\n", ++i, display_name($1), $2, $3, proto_display($4), $5, $6, ($7=="true" ? "enabled" : "disabled")
     }
-  '
+  ' | render_tsv_table 112 "$labels"
 }
 
 select_entry_name() {
@@ -1764,11 +1878,11 @@ select_entry_name() {
 }
 
 display_forwards() {
-  local only_enabled="${1:-all}" resolved_source="/dev/null"
+  local only_enabled="${1:-all}" resolved_source="/dev/null" labels
   ensure_tsv_files >/dev/null
   resolve_forwards >/dev/null 2>&1 || true
   [[ -f "$RESOLVED_TSV" ]] && resolved_source="$RESOLVED_TSV"
-  printf '%s\n' "编号  名称        入口端口  后端目标                                      当前解析 IP        出口接口  路由表     启用       备注"
+  labels=$'编号\t名称\t入口端口\t后端目标\t当前解析 IP\t出口接口\t路由表\t启用\t备注'
   awk -F'\t' -v only="$only_enabled" '
     NR==FNR {
       if ($1 !~ /^#/ && NF >= 4) ip[$1]=$4
@@ -1779,9 +1893,9 @@ display_forwards() {
     {
       resolved=(ip[$1] != "" ? ip[$1] : "-")
       comment=(NF>=8 && $8!="" ? $8 : "-")
-      printf "%d) %-10s %-8s -> %-43s %-16s %-8s %-8s %-9s %s\n", ++i, $1, $2, $3 ":" $4, resolved, ($5!="" ? $5 : "-"), ($6!="" ? $6 : "-"), ($7=="true" ? "enabled" : "disabled"), comment
+      printf "%d)\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ++i, $1, $2, $3 ":" $4, resolved, ($5!="" ? $5 : "-"), ($6!="" ? $6 : "-"), ($7=="true" ? "enabled" : "disabled"), comment
     }
-  ' "$resolved_source" "$FORWARDS_TSV"
+  ' "$resolved_source" "$FORWARDS_TSV" | render_tsv_table 112 "$labels"
 }
 
 display_forward_selection_list() {
@@ -2029,17 +2143,18 @@ pending_entries_count() {
 }
 
 display_pending_entries() {
+  local labels
+  labels=$'编号\t名称\tEasyTier IP\t协议\t端口\tcreated_at'
   pending_entries_rows | awk -F'\t' '
     function display_name(n) {
       if (n ~ /^public[0-9]+$/) return "公网" substr(n, 7) "(" n ")"
       return n
     }
-    BEGIN { print "编号  名称            EasyTier IP    协议      端口   created_at" }
     {
       proto=($3=="tcp,udp" ? "tcp+udp" : $3)
-      printf "%d) %-18s %-14s %-9s %-6s %s\n", ++i, display_name($1), $2, proto, $4, ($5!="" ? $5 : "-")
+      printf "%d)\t%s\t%s\t%s\t%s\t%s\n", ++i, display_name($1), $2, proto, $4, ($5!="" ? $5 : "-")
     }
-  '
+  ' | render_tsv_table 88 "$labels"
 }
 
 entry_reserved_count() {
@@ -4300,14 +4415,13 @@ pbr_rules_count() {
 }
 
 display_pbr_rules() {
-  local numbered="${1:-no}" title="${2:-}"
+  local numbered="${1:-no}" title="${2:-}" labels
   [[ -n "$title" ]] && { echo; echo "$title"; }
+  labels=$'编号\t目标网段\t路由表\t来源'
   if [[ "$numbered" == "numbered" ]]; then
-    printf '%s\n' "编号  目标网段                 路由表      来源"
-    pbr_rows | awk -F'\t' '{printf "%d. %-24s %-10s %s\n", ++i, $2, $3, $4}'
+    pbr_rows | awk -F'\t' '{printf "%d.\t%s\t%s\t%s\n", ++i, $2, $3, $4}' | render_tsv_table 78 "$labels"
   else
-    printf '%s\n' "目标网段                 路由表      来源"
-    pbr_rows | awk -F'\t' '{printf "%-24s %-10s %s\n", $2, $3, $4}'
+    pbr_rows | awk -F'\t' '{printf "%d.\t%s\t%s\t%s\n", ++i, $2, $3, $4}' | render_tsv_table 78 "$labels"
   fi
 }
 

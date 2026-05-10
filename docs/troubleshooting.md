@@ -1,6 +1,6 @@
 # 故障排查
 
-Leikwan Toolkit 1.0.5 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.0.6 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -45,6 +45,10 @@ relay 重启后 easytier-cli 的 peer 列表可能短时间未刷新。脚本会
 - 业务入口端口：常用 `10001-19999`，用于外部客户端访问业务。
 
 不要把 EasyTier 白名单端口误填为业务入口端口。
+
+## 终端显示
+
+窄终端会自动切换为紧凑列表，避免中英文混排导致表格错位。可用 `LEIKWAN_COMPACT=1 lq` 强制紧凑显示；调试输出时可用 `LEIKWAN_NO_CLEAR=1 lq` 禁用清屏。
 
 ## MSS clamp
 

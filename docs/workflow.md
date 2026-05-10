@@ -1,6 +1,6 @@
 # 工作流
 
-本文说明 Leikwan Toolkit 1.0.5 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.0.6 的推荐操作顺序。
 
 ## 角色
 
@@ -42,6 +42,10 @@ public3 -> 公网3
 连接码输出后需要输入 `y` 确认返回菜单；输入 `r` 可重新显示单行码，输入 `p` 可显示保存路径，直接回车不会返回菜单。
 
 A 的 ENTRY 返回码接回 B 后，会按 `ENTRY_ET_IP + EASYTIER_PORT` 清理对应 pending。ENTRY 名称和 pending 名称不同也允许保存。
+
+## 终端显示
+
+窄 SSH 终端会自动切换为紧凑列表，避免中英文混排表格错位。可用 `LEIKWAN_COMPACT=1 lq` 强制紧凑列表，用 `LEIKWAN_NO_CLEAR=1 lq` 禁用清屏；调试宽表时可尝试 `LEIKWAN_TABLE=1 lq`。
 
 ## 公网入口管理
 

@@ -1,6 +1,6 @@
 # nftables 转发
 
-Leikwan Toolkit 1.0.5 只管理本项目自己的表：
+Leikwan Toolkit 1.0.6 只管理本项目自己的表：
 
 ```text
 table inet leikwan_forward
