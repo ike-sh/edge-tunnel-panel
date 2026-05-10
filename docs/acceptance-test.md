@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.1.0 正式版验收。
+本页用于 Leikwan Toolkit 1.1.1 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.1.0"
-leikwan-toolkit 1.1.0
+TOOL_VERSION="1.1.1"
+leikwan-toolkit 1.1.1
 ```
 
 ## 打包
@@ -29,8 +29,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.1.0.tar.gz
-dist/leikwan-toolkit-1.1.0.tar.gz.sha256
+dist/leikwan-toolkit-1.1.1.tar.gz
+dist/leikwan-toolkit-1.1.1.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -106,6 +106,40 @@ cat /etc/leikwan-toolkit/status/last-ddns.env
 ```
 
 期望日志包含开始 / 结束、changed / failed 统计，不包含 EasyTier secret。
+
+## 自更新
+
+```bash
+lq update check
+lq --update-check
+```
+
+期望显示当前版本和最新 GitHub Release 版本；当前已最新时显示 `[OK] 当前已是最新版本`。
+
+在测试环境中使用旧版本脚本执行：
+
+```bash
+lq update run
+```
+
+期望：
+
+- 下载 release tar.gz 和 sha256。
+- sha256 校验通过。
+- 解包得到 `leikwan-toolkit.sh`。
+- `bash -n` 通过。
+- 新脚本 `--version` 符合预期。
+- 备份旧脚本到 `/var/backups/leikwan-toolkit/root__leikwan-toolkit.sh.*.bak`。
+- 替换 `/root/leikwan-toolkit.sh`。
+- `lq --version` 显示新版本。
+
+回滚：
+
+```bash
+lq update rollback
+```
+
+期望根据 `last-update.env` 找到备份，恢复旧脚本，并把 `LAST_UPDATE_RESULT` 记为 `rollback`。
 
 ## 状态总览与缓存
 

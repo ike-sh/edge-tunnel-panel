@@ -1,6 +1,6 @@
-# DDNS 后端自动刷新
+﻿# DDNS 后端自动刷新
 
-Leikwan Toolkit 1.1.0 增加 DDNS 后端自动刷新。它用于处理转发目标中的域名后端，例如：
+Leikwan Toolkit 1.1.1 增加 DDNS 后端自动刷新。它用于处理转发目标中的域名后端，例如：
 
 ```text
 tw    10004    tw.example.com    52936    eth1    T_CN2    true    tw-target

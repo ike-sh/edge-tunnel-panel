@@ -2,7 +2,7 @@
 
 Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 构建公网入口和中转主机之间的虚拟网络，并使用 nftables 在中转主机上管理 TCP/UDP 转发。
 
-当前版本：`1.1.0`
+当前版本：`1.1.1`
 
 ## 功能特性
 
@@ -17,6 +17,7 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 - 配置快照 / 回滚，高危操作前自动快照
 - 端口冲突预检与端口推荐避让
 - DDNS 后端自动刷新、自动重应用转发规则
+- GitHub Release 自更新、sha256 校验与安全回滚
 - 一键诊断与脱敏报告
 - 完整卸载
 
@@ -193,6 +194,8 @@ lq pbr show
 lq pbr sync-from-forwards
 lq ddns status
 lq ddns run
+lq update check
+lq update run
 lq forward list
 lq forward apply-relay --auto-fix-route
 lq --uninstall
@@ -215,7 +218,31 @@ LEIKWAN_TABLE=1 lq
 
 ## 升级
 
-重新运行 bootstrap 即可安装最新版脚本：
+推荐使用内置自更新。它只从 GitHub Release 包更新，下载 `.tar.gz` 和 `.sha256`，校验通过后才替换 `/root/leikwan-toolkit.sh`：
+
+```bash
+lq update check
+lq update run
+lq update status
+lq update rollback
+```
+
+也可以使用短参数：
+
+```bash
+lq --update-check
+lq --self-update
+```
+
+如果国内网络访问 GitHub 较慢，可设置镜像：
+
+```bash
+export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+```
+
+自更新只替换脚本，不删除 `/etc/leikwan-toolkit` 配置。更新失败会保留旧脚本；替换后版本校验失败会自动恢复更新前备份。
+
+也可以重新运行 bootstrap 安装最新版脚本：
 
 ```bash
 curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh
@@ -255,11 +282,11 @@ lq --uninstall
 
 ## Release
 
-当前正式版本：`1.1.0`
+当前正式版本：`1.1.1`
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.1.0.tar.gz
-leikwan-toolkit-1.1.0.tar.gz.sha256
+leikwan-toolkit-1.1.1.tar.gz
+leikwan-toolkit-1.1.1.tar.gz.sha256
 ```

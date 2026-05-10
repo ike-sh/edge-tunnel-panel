@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.1.0 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.1.1 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -158,6 +158,38 @@ lq pbr sync-from-forwards
 ```text
 /var/log/leikwan-ddns-refresh.log
 /etc/leikwan-toolkit/status/last-ddns.env
+```
+
+## 自更新
+
+检查版本：
+
+```bash
+lq update check
+```
+
+执行更新：
+
+```bash
+lq update run
+```
+
+如果下载失败，请检查网络或设置 GitHub 镜像：
+
+```bash
+export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+```
+
+sha256 校验失败时不会替换脚本。替换后版本异常时会自动恢复更新前备份。需要手动恢复时执行：
+
+```bash
+lq update rollback
+```
+
+最近更新状态：
+
+```text
+/etc/leikwan-toolkit/status/last-update.env
 ```
 
 ## 脱敏报告

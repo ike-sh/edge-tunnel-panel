@@ -41,7 +41,7 @@ IPv4 多出口策略路由 / PBR
 
 写入规则会记录来源转发名和 `target_host`。以后 `pbr_apply` 会重新解析来源域名；IP 变化时更新对应 PBR 规则。
 
-也可以用 1.1.0 的同步命令按当前 enabled forwards 重建 forward 来源 PBR：
+也可以用 1.1.1 的同步命令按当前 enabled forwards 重建 forward 来源 PBR：
 
 ```bash
 sudo lq pbr sync-from-forwards

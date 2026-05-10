@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.1.0"
+TOOL_VERSION="1.1.1"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -47,6 +47,10 @@ DDNS_SERVICE="/etc/systemd/system/${DDNS_SERVICE_NAME}.service"
 DDNS_TIMER="/etc/systemd/system/${DDNS_SERVICE_NAME}.timer"
 LEIKWAN_LOCK_PATH="/run/leikwan-toolkit.lock"
 DDNS_LOCK_PATH="/run/leikwan-ddns-refresh.lock"
+UPDATE_LOCK_PATH="/run/leikwan-update.lock"
+UPDATE_STATUS_FILE="${STATUS_DIR}/last-update.env"
+UPDATE_TARGET_SCRIPT="/root/leikwan-toolkit.sh"
+UPDATE_REPO="ike-sh/leikwan-toolkit"
 
 ENTRIES_TSV="${ENTRIES_DIR}/entries.tsv"
 PENDING_ENTRIES_TSV="${ENTRIES_DIR}/pending-entries.tsv"
@@ -658,11 +662,17 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh forward apply-relay --auto-fix-route
   sudo bash leikwan-toolkit.sh pbr delete 203.0.113.10/32
   sudo bash leikwan-toolkit.sh pbr sync-from-forwards
+  sudo bash leikwan-toolkit.sh update check
+  sudo bash leikwan-toolkit.sh update run
+  sudo bash leikwan-toolkit.sh update status
+  sudo bash leikwan-toolkit.sh update rollback
   sudo bash leikwan-toolkit.sh ddns run
   sudo bash leikwan-toolkit.sh ddns status
   sudo bash leikwan-toolkit.sh ddns enable
   sudo bash leikwan-toolkit.sh ddns disable
   sudo bash leikwan-toolkit.sh ddns logs
+  sudo bash leikwan-toolkit.sh --self-update
+  sudo bash leikwan-toolkit.sh --update-check
   sudo bash leikwan-toolkit.sh --ddns-run
   sudo bash leikwan-toolkit.sh --pbr-apply
   sudo bash leikwan-toolkit.sh --pbr-delete 203.0.113.10/32
@@ -676,6 +686,7 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   默认 EasyTier 虚拟网段：${ET_NET}，relay：${RELAY_ET_IP}。
   默认 EasyTier 传输：TCP+UDP / ${DEFAULT_EASYTIER_PORT}，位于利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。
   DDNS 自动刷新可监控域名后端 IP 变化，并安全重应用转发规则。
+  自更新只从 GitHub Release 包更新，并校验 sha256。
   不部署后端协议，不生成代理客户端链接。
 
 一键安装：
@@ -1206,6 +1217,342 @@ download_with_fallback() {
 download_github_asset() {
   local raw_url="$1" dest_file="$2"
   download_with_fallback "$raw_url" "$dest_file"
+}
+
+normalize_version() {
+  local version="$1"
+  version="${version#v}"
+  version="${version#V}"
+  if [[ "$version" =~ ^([0-9]+)(\.([0-9]+))?(\.([0-9]+))?$ ]]; then
+    printf '%s.%s.%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]:-0}" "${BASH_REMATCH[5]:-0}"
+    return 0
+  fi
+  return 1
+}
+
+version_eq() {
+  local left right
+  left="$(normalize_version "$1" 2>/dev/null)" || return 1
+  right="$(normalize_version "$2" 2>/dev/null)" || return 1
+  [[ "$left" == "$right" ]]
+}
+
+version_gt() {
+  local left right l1 l2 l3 r1 r2 r3
+  left="$(normalize_version "$1" 2>/dev/null)" || return 1
+  right="$(normalize_version "$2" 2>/dev/null)" || return 1
+  IFS=. read -r l1 l2 l3 <<<"$left"
+  IFS=. read -r r1 r2 r3 <<<"$right"
+  (( l1 > r1 )) && return 0
+  (( l1 < r1 )) && return 1
+  (( l2 > r2 )) && return 0
+  (( l2 < r2 )) && return 1
+  (( l3 > r3 ))
+}
+
+update_latest_release() {
+  local api tmp tag version effective
+  command -v curl >/dev/null 2>&1 || { fail "缺少 curl，无法检查 GitHub Release。"; return 1; }
+  api="https://api.github.com/repos/${UPDATE_REPO}/releases/latest"
+  tmp="$(mktemp)"
+  if curl -fsSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -o "$tmp" "$api"; then
+    if command -v jq >/dev/null 2>&1; then
+      tag="$(jq -r '.tag_name // empty' "$tmp" 2>/dev/null || true)"
+    else
+      tag="$(sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -n 1)"
+    fi
+  fi
+  rm -f "$tmp"
+  if [[ -z "${tag:-}" ]]; then
+    effective="$(curl -fsSLI --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' "https://github.com/${UPDATE_REPO}/releases/latest" 2>/dev/null || true)"
+    tag="${effective##*/}"
+  fi
+  version="$(normalize_version "${tag:-}" 2>/dev/null || true)"
+  [[ -n "$version" ]] || { fail "无法解析 latest release 版本：${tag:-unknown}"; return 1; }
+  printf '%s\t%s\n' "${tag:-v${version}}" "$version"
+}
+
+update_release_asset_url() {
+  local tag="$1" version="$2" suffix="$3"
+  printf 'https://github.com/%s/releases/download/%s/leikwan-toolkit-%s.tar.gz%s\n' "$UPDATE_REPO" "$tag" "$version" "$suffix"
+}
+
+update_download_asset() {
+  local raw_url="$1" dest_file="$2" candidate tmp mirror seen_line
+  local -a seen=()
+  tmp="${dest_file}.tmp.$$"
+  rm -f "$tmp"
+  info "正在下载：${raw_url}"
+  if curl -fL --retry 1 --connect-timeout 15 --max-time 120 -o "$tmp" "$raw_url"; then
+    mv -f "$tmp" "$dest_file"
+    ok "下载成功：${raw_url}"
+    return 0
+  fi
+  warn "GitHub Release 下载失败，正在尝试镜像。"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" && "$candidate" != "$raw_url" ]] || continue
+    for seen_line in "${seen[@]}"; do
+      [[ "$seen_line" == "$candidate" ]] && continue 2
+    done
+    seen+=("$candidate")
+    info "正在尝试镜像：${candidate}"
+    if curl -fL --retry 1 --connect-timeout 15 --max-time 120 -o "$tmp" "$candidate"; then
+      mv -f "$tmp" "$dest_file"
+      ok "下载成功：${candidate}"
+      return 0
+    fi
+    warn "镜像下载失败，尝试下一个地址。"
+  done < <(github_url_candidates "$raw_url")
+  rm -f "$tmp"
+  fail "无法下载最新 release，请检查网络或设置 LEIKWAN_GITHUB_MIRRORS。"
+  return 1
+}
+
+file_sha256() {
+  local file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  else
+    fail "缺少 sha256sum 或 shasum，无法校验 release 包。"
+    return 1
+  fi
+}
+
+update_verify_sha256() {
+  local archive="$1" sha_file="$2" expected actual
+  expected="$(awk 'NF {print $1; exit}' "$sha_file" 2>/dev/null || true)"
+  [[ "$expected" =~ ^[A-Fa-f0-9]{64}$ ]] || { fail "sha256 文件格式无效。"; return 1; }
+  actual="$(file_sha256 "$archive")" || return 1
+  if [[ "${actual,,}" == "${expected,,}" ]]; then
+    ok "sha256 校验通过。"
+    return 0
+  fi
+  fail "sha256 校验失败，已取消更新。"
+  return 1
+}
+
+update_write_status() {
+  local result="$1" from="$2" to="$3" backup="$4" source="$5"
+  (( DRY_RUN == 1 )) && return 0
+  mkdir -p "$STATUS_DIR"
+  {
+    printf 'LAST_UPDATE_TIME=%s\n' "$(status_now)"
+    printf 'LAST_UPDATE_FROM=%s\n' "$from"
+    printf 'LAST_UPDATE_TO=%s\n' "$to"
+    printf 'LAST_UPDATE_RESULT=%s\n' "$result"
+    printf 'LAST_UPDATE_BACKUP=%s\n' "$backup"
+    printf 'LAST_UPDATE_SOURCE=%s\n' "$source"
+    printf 'LAST_UPDATE_VERSION=%s\n' "$TOOL_VERSION"
+  } >"$UPDATE_STATUS_FILE"
+  chmod 600 "$UPDATE_STATUS_FILE" 2>/dev/null || true
+}
+
+update_status_line() {
+  local time from to result
+  time="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_TIME)"
+  from="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_FROM)"
+  to="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_TO)"
+  result="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_RESULT)"
+  if [[ -z "$time" ]]; then
+    printf '无记录'
+  else
+    printf '%s / %s -> %s / %s' "$time" "${from:-?}" "${to:-?}" "$(status_result_display "$result")"
+  fi
+}
+
+update_check() {
+  local latest tag latest_version current_norm
+  latest="$(update_latest_release)" || return 1
+  IFS=$'\t' read -r tag latest_version <<<"$latest"
+  current_norm="$(normalize_version "$TOOL_VERSION" 2>/dev/null || true)"
+  if [[ -z "$current_norm" ]]; then
+    warn "本地版本无法解析：${TOOL_VERSION}"
+    info "最新版本：${latest_version} (${tag})"
+    return 0
+  fi
+  if version_gt "$latest_version" "$TOOL_VERSION"; then
+    info "当前版本：${TOOL_VERSION}"
+    info "最新版本：${latest_version}"
+    info "可执行：lq update run"
+  else
+    ok "当前已是最新版本：${TOOL_VERSION}"
+  fi
+}
+
+update_status() {
+  local time from to result backup source
+  time="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_TIME)"
+  from="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_FROM)"
+  to="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_TO)"
+  result="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_RESULT)"
+  backup="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_BACKUP)"
+  source="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_SOURCE)"
+  echo "脚本更新状态"
+  echo "----------------------------------------"
+  echo "current: ${TOOL_VERSION}"
+  if [[ -z "$time" ]]; then
+    echo "last update: 无记录"
+    return 0
+  fi
+  echo "last update: ${time}"
+  echo "from: ${from:-"-"}"
+  echo "to: ${to:-"-"}"
+  echo "result: ${result:-"-"}"
+  echo "backup: ${backup:-"-"}"
+  echo "source: ${source%%\?*}"
+}
+
+update_prepare_script_from_archive() {
+  local archive="$1" dest="$2" extract script
+  extract="$(mktemp -d)"
+  tar -xzf "$archive" -C "$extract"
+  script="$(find "$extract" -type f -name 'leikwan-toolkit.sh' | head -n 1)"
+  if [[ -z "$script" ]]; then
+    rm -rf "$extract"
+    fail "release 包中未找到 leikwan-toolkit.sh。"
+    return 1
+  fi
+  cp -a "$script" "$dest"
+  rm -rf "$extract"
+}
+
+update_backup_current_script() {
+  local dest
+  mkdir -p "$BACKUP_DIR"
+  dest="${BACKUP_DIR}/root__leikwan-toolkit.sh.$(date '+%Y%m%d-%H%M%S').bak"
+  if [[ -f "$UPDATE_TARGET_SCRIPT" ]]; then
+    cp -a "$UPDATE_TARGET_SCRIPT" "$dest"
+  else
+    cp -a "$0" "$dest"
+  fi
+  printf '%s' "$dest"
+}
+
+update_restore_backup() {
+  local backup="$1"
+  [[ -f "$backup" ]] || { fail "备份脚本不存在：${backup}"; return 1; }
+  bash -n "$backup" || { fail "备份脚本 bash -n 校验失败，拒绝回滚。"; return 1; }
+  install -m 755 "$backup" "$UPDATE_TARGET_SCRIPT"
+  install_shortcuts || true
+}
+
+update_run() {
+  local force="${1:-0}" update_lock="" tmp="" latest tag latest_version package_url sha_url archive sha_file new_script
+  local new_version backup="" old_version="$TOOL_VERSION" installed_version lq_version rc
+  need_root_unless_dry_run
+  command -v curl >/dev/null 2>&1 || { fail "缺少 curl，无法执行自更新。"; return 1; }
+  command -v tar >/dev/null 2>&1 || { fail "缺少 tar，无法解压 release 包。"; return 1; }
+  if ! lock_acquire "$UPDATE_LOCK_PATH" "更新任务" update_lock; then
+    warn "已有更新任务运行中，请稍后再试。"
+    return 1
+  fi
+  tmp="$(mktemp -d /tmp/leikwan-update.XXXXXX)"
+  set +e
+  (
+    latest="$(update_latest_release)" || exit 1
+    IFS=$'\t' read -r tag latest_version <<<"$latest"
+    if normalize_version "$TOOL_VERSION" >/dev/null 2>&1; then
+      if ! version_gt "$latest_version" "$TOOL_VERSION"; then
+        ok "当前已是最新版本：${TOOL_VERSION}"
+        exit 0
+      fi
+    else
+      warn "本地版本无法解析：${TOOL_VERSION}"
+      if is_interactive && [[ "$force" != "1" ]]; then
+        prompt_yes_no "是否继续更新到 ${latest_version}？" "N" || exit 0
+      fi
+    fi
+    warn "即将替换 ${UPDATE_TARGET_SCRIPT}。"
+    info "当前配置目录 ${STATE_DIR} 不会被删除。"
+    if is_interactive && [[ "$force" != "1" ]]; then
+      prompt_yes_no "是否继续更新？" "N" || exit 0
+    fi
+    package_url="$(update_release_asset_url "$tag" "$latest_version" "")"
+    sha_url="$(update_release_asset_url "$tag" "$latest_version" ".sha256")"
+    archive="${tmp}/leikwan-toolkit-${latest_version}.tar.gz"
+    sha_file="${archive}.sha256"
+    new_script="${tmp}/leikwan-toolkit.sh"
+    update_download_asset "$package_url" "$archive" || exit 1
+    update_download_asset "$sha_url" "$sha_file" || exit 1
+    update_verify_sha256 "$archive" "$sha_file" || exit 1
+    update_prepare_script_from_archive "$archive" "$new_script" || exit 1
+    bash -n "$new_script" || { fail "新脚本 bash -n 校验失败，已取消更新。"; exit 1; }
+    new_version="$(bash "$new_script" --version 2>/dev/null | awk '{print $2; exit}')"
+    if ! version_eq "$new_version" "$latest_version"; then
+      fail "新脚本版本不符合预期：${new_version:-unknown}，期望 ${latest_version}。"
+      exit 1
+    fi
+    backup="$(update_backup_current_script)" || exit 1
+    install -m 755 "$new_script" "$UPDATE_TARGET_SCRIPT" || exit 1
+    install_shortcuts || true
+    installed_version="$(bash "$UPDATE_TARGET_SCRIPT" --version 2>/dev/null | awk '{print $2; exit}')"
+    if ! version_eq "$installed_version" "$latest_version"; then
+      warn "替换后版本不符合预期，正在自动恢复备份。"
+      update_restore_backup "$backup" || true
+      update_write_status "fail" "$old_version" "$latest_version" "$backup" "$package_url"
+      exit 1
+    fi
+    if command -v lq >/dev/null 2>&1; then
+      lq_version="$(lq --version 2>/dev/null | awk '{print $2; exit}')"
+      if ! version_eq "$lq_version" "$latest_version"; then
+        warn "lq --version 未返回新版本，正在自动恢复备份。"
+        update_restore_backup "$backup" || true
+        update_write_status "fail" "$old_version" "$latest_version" "$backup" "$package_url"
+        exit 1
+      fi
+    fi
+    update_write_status "ok" "$old_version" "$latest_version" "$backup" "$package_url"
+    ok "已更新到版本：${latest_version}"
+    bash "$UPDATE_TARGET_SCRIPT" --version || true
+  )
+  rc=$?
+  set -e
+  rm -rf "$tmp"
+  lock_release "$update_lock"
+  return "$rc"
+}
+
+update_rollback() {
+  local backup from to current_version
+  need_root_unless_dry_run
+  backup="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_BACKUP)"
+  from="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_FROM)"
+  to="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_TO)"
+  [[ -n "$backup" ]] || { warn "没有可回滚的更新备份记录。"; return 0; }
+  [[ -f "$backup" ]] || { fail "备份脚本不存在：${backup}"; return 1; }
+  warn "即将用备份脚本恢复 ${UPDATE_TARGET_SCRIPT}。"
+  warn "备份：${backup}"
+  prompt_yes_no "第一次确认：继续回滚？" "N" || return 0
+  prompt_yes_no "第二次确认：确实恢复上一个脚本版本？" "N" || return 0
+  update_restore_backup "$backup"
+  current_version="$(bash "$UPDATE_TARGET_SCRIPT" --version 2>/dev/null | awk '{print $2; exit}')"
+  update_write_status "rollback" "${to:-$TOOL_VERSION}" "${current_version:-$from}" "$backup" "rollback"
+  ok "已回滚脚本版本：${current_version:-unknown}"
+  command -v lq >/dev/null 2>&1 && lq --version || true
+}
+
+update_menu() {
+  local choice
+  while true; do
+    print_menu_header "脚本更新"
+    echo "1. 检查最新版本"
+    echo "2. 更新到最新版本"
+    echo "3. 查看最近更新状态"
+    echo "4. 回滚到上一个脚本版本"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause update_check ;;
+      2) run_menu_action_pause update_run ;;
+      3) run_menu_action_pause update_status ;;
+      4) run_menu_action_pause update_rollback ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
 }
 
 archive_integrity_ok() {
@@ -5940,7 +6287,8 @@ status_overview() {
   role="$(detect_role)"
   echo "Leikwan 状态总览"
   echo "----------------------------------------"
-  echo "版本: ${TOOL_VERSION}"
+  echo "脚本版本: ${TOOL_VERSION}"
+  echo "最近更新: $(update_status_line)"
   case "$role" in
     leikwan-relay) status_overview_relay ;;
     cloud-entry) status_overview_entry ;;
@@ -6203,6 +6551,12 @@ generate_debug_report() {
   tmp="$(mktemp)"
   {
     echo "leikwan-toolkit debug report ${TOOL_VERSION}"
+    bash "$UPDATE_TARGET_SCRIPT" --version 2>&1 || true
+    if command -v lq >/dev/null 2>&1; then
+      lq --version 2>&1 || true
+      readlink -f "$SHORTCUT_LQ" 2>&1 || true
+    fi
+    ls -lh "$UPDATE_TARGET_SCRIPT" 2>&1 || true
     cat /etc/os-release 2>/dev/null || true
     ip -br addr || true
     ip route || true
@@ -6216,6 +6570,8 @@ generate_debug_report() {
     [[ -f "$DDNS_CONFIG" ]] && sed -n '1,120p' "$DDNS_CONFIG"
     echo "last-ddns.env:"
     [[ -f "$DDNS_STATUS_FILE" ]] && sed -n '1,120p' "$DDNS_STATUS_FILE"
+    echo "last-update.env:"
+    [[ -f "$UPDATE_STATUS_FILE" ]] && sed -n '1,120p' "$UPDATE_STATUS_FILE"
     echo "ddns log tail:"
     [[ -f "$DDNS_LOG_FILE" ]] && tail -n 100 "$DDNS_LOG_FILE"
     echo "outputs:"
@@ -6223,6 +6579,7 @@ generate_debug_report() {
   } >"$tmp" 2>&1
   sed -E \
     -e 's/(EASYTIER_NETWORK_SECRET=).*/\1<redacted>/g' \
+    -e 's#(LAST_UPDATE_SOURCE=https?://[^?[:space:]]+)\?[^[:space:]]+#\1?<redacted>#g' \
     -e 's/(PrivateKey[[:space:]]*=[[:space:]]*)[^[:space:]]+/\1<redacted>/g' \
     -e 's#(vless|vmess|trojan|ss|hysteria)://[^[:space:]]+#<proxy-link-redacted>#g' \
     "$tmp" >"$REPORT_FILE"
@@ -6467,6 +6824,7 @@ uninstall_new_mode() {
   cleanup_leikwan_policy_routes
   safe_rm_file "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN" "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER" \
     "/root/leikwan-toolkit.sh" "$OLD_ROOT_SCRIPT" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF" "$LOG_FILE" "$OLD_LOG_FILE" "$DDNS_LOG_FILE"
+  rm -rf /tmp/leikwan-update.* 2>/dev/null || true
   safe_rm_dir "$STATE_DIR" "$OLD_STATE_DIR" "$BACKUP_DIR" "$OLD_BACKUP_DIR"
   rm -f "$LOG_FILE" "$OLD_LOG_FILE" 2>/dev/null || true
   systemd_reload_reset_failed
@@ -7088,7 +7446,8 @@ advanced_menu() {
     echo "7. 配置快照 / 回滚"
     echo "8. 端口冲突预检"
     echo "9. 生成脱敏故障报告"
-    echo "10. legacy 清理"
+    echo "10. 检查并更新脚本"
+    echo "11. legacy 清理"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -7101,7 +7460,8 @@ advanced_menu() {
       7) snapshot_menu ;;
       8) run_menu_action_pause port_check ;;
       9) run_menu_action generate_debug_report ;;
-      10) legacy_cleanup_menu ;;
+      10) update_menu ;;
+      11) legacy_cleanup_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -7205,11 +7565,22 @@ main() {
         *) fail "未知 ddns 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
+    update)
+      case "${2:-}" in
+        check) update_check || exit $? ;;
+        run) update_run || exit $? ;;
+        status) update_status || exit $? ;;
+        rollback) update_rollback || exit $? ;;
+        *) fail "未知 update 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
+      ;;
     --help|-h) print_help ;;
     --version|-v) echo "${PROJECT_NAME} ${TOOL_VERSION}" ;;
     --status) status_overview ;;
     --port-check) port_check ;;
     --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
+    --self-update) update_run 1 || exit $? ;;
+    --update-check) update_check || exit $? ;;
     --ddns-run) ddns_refresh_once ;;
     --pbr-apply) pbr_apply ;;
     --pbr-delete) delete_pbr_rule "${2:-}" ;;

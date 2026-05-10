@@ -1,6 +1,6 @@
 ﻿# 工作流
 
-本文说明 Leikwan Toolkit 1.1.0 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.1.1 的推荐操作顺序。
 
 ## 角色
 
@@ -99,6 +99,22 @@ lq --status
 `status` 输出角色、版本、入口数量、转发数量、nftables、MSS clamp、最近应用和最近诊断，适合快速确认状态。它只做轻量检查，不执行 ping、nc 或 apt update，也不会自动修改系统。
 
 `doctor` 适合排障，会做更完整的链路、DNAT、MSS、依赖和 DNS 检查；交互菜单中可按提示执行修复。
+
+## 脚本更新
+
+检查 GitHub Release 最新版本：
+
+```bash
+lq update check
+```
+
+更新到最新正式 release：
+
+```bash
+lq update run
+```
+
+更新只替换 `/root/leikwan-toolkit.sh`，不会删除 `/etc/leikwan-toolkit` 配置。更新失败会保留旧脚本，替换后版本校验失败会自动恢复备份。
 
 ## 配置快照 / 回滚
 
