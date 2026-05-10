@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.1.2 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.2.0 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -98,6 +98,41 @@ MSS clamp 用于提高 EasyTier/tun 场景下 TCP 转发稳定性。doctor 和�
 
 自动快照只保留最近 10 个。恢复快照前会二次确认，恢复后会询问是否立即 reload systemd 并重启相关服务。
 
+## 配置包
+
+导出完整配置包：
+
+```bash
+lq config export --full
+```
+
+完整包包含 EasyTier network secret，只适合自己保存和迁移。排错给别人看时使用：
+
+```bash
+lq config export --redacted
+```
+
+脱敏包会替换 secret、配对码 base64、token/password 类字段。它不能完整恢复运行。
+
+查看配置包：
+
+```bash
+lq config inspect /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
+```
+
+导入配置包前会自动创建 `auto-before-config-import-*` 快照。如果导入后状态异常，先执行：
+
+```bash
+lq status
+lq --doctor
+```
+
+需要重渲染转发规则时再执行：
+
+```bash
+lq forward apply-relay --auto-fix-route
+```
+
 ## pending reservation
 
 未完成接入码保存在：
@@ -183,6 +218,19 @@ PBR 自动管理边界：
 lq pbr domain sync
 lq --pbr-apply
 ```
+
+## 端点输出
+
+生成端点分享：
+
+```bash
+lq output generate
+lq output show
+lq output json
+lq output html
+```
+
+端点输出只包含公网入口和业务端口，不包含 EasyTier secret 或配对码。它不是代理链接。若安装了 `qrencode`，`lq output qr` 会生成 endpoint 字符串二维码；未安装时会跳过。
 
 ## 自更新
 

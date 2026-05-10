@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.1.2"
+TOOL_VERSION="1.2.0"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -48,6 +48,7 @@ DDNS_TIMER="/etc/systemd/system/${DDNS_SERVICE_NAME}.timer"
 LEIKWAN_LOCK_PATH="/run/leikwan-toolkit.lock"
 DDNS_LOCK_PATH="/run/leikwan-ddns-refresh.lock"
 UPDATE_LOCK_PATH="/run/leikwan-update.lock"
+CONFIG_LOCK_PATH="/run/leikwan-config.lock"
 UPDATE_STATUS_FILE="${STATUS_DIR}/last-update.env"
 UPDATE_TARGET_SCRIPT="/root/leikwan-toolkit.sh"
 UPDATE_REPO="ike-sh/leikwan-toolkit"
@@ -59,6 +60,9 @@ FORWARDS_TSV="${FORWARDS_DIR}/forwards.tsv"
 RESOLVED_TSV="${FORWARDS_DIR}/resolved.tsv"
 FORWARD_TXT="${OUTPUT_DIR}/forward-endpoints.txt"
 FORWARD_TSV="${OUTPUT_DIR}/forward-endpoints.tsv"
+FORWARD_JSON="${OUTPUT_DIR}/forward-endpoints.json"
+FORWARD_HTML="${OUTPUT_DIR}/forward-endpoints.html"
+FORWARD_QR_DIR="${OUTPUT_DIR}/qr"
 ENTRY_EXPOSE_ENV="${ENTRY_DIR}/expose.env"
 NETWORK_ENV="${EASYTIER_DIR}/network.env"
 NETWORK_PAIRING_FILE="${OUTPUT_DIR}/easytier-network-code.env"
@@ -662,6 +666,11 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh --doctor --verbose
   sudo bash leikwan-toolkit.sh port check
   sudo bash leikwan-toolkit.sh --port-check
+  sudo bash leikwan-toolkit.sh config export [--full|--redacted]
+  sudo bash leikwan-toolkit.sh config inspect /path/to/leikwan-config.tar.gz
+  sudo bash leikwan-toolkit.sh config import /path/to/leikwan-config.tar.gz [--mode config-only|apply|full] [--yes]
+  sudo bash leikwan-toolkit.sh config list
+  sudo bash leikwan-toolkit.sh output generate|show|json|html|qr
   sudo bash leikwan-toolkit.sh pair relay-init
   sudo bash leikwan-toolkit.sh pair entry-join [pairing-file|-]
   sudo bash leikwan-toolkit.sh pair relay-join [pairing-file|-]
@@ -854,6 +863,21 @@ write_status_cache() {
   {
     printf '%s_TIME=%s\n' "$prefix" "$(status_now)"
     [[ -n "$action" ]] && printf '%s_ACTION=%s\n' "$prefix" "$action"
+    printf '%s_RESULT=%s\n' "$prefix" "$result"
+    printf '%s_VERSION=%s\n' "$prefix" "$TOOL_VERSION"
+  } >"$file"
+  chmod 600 "$file" 2>/dev/null || true
+}
+
+write_named_status() {
+  local file="$1" prefix="$2" result="$3" mode="${4:-}" path="${5:-}"
+  (( DRY_RUN == 1 )) && return 0
+  [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
+  mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
+  {
+    printf '%s_TIME=%s\n' "$prefix" "$(status_now)"
+    [[ -n "$mode" ]] && printf '%s_MODE=%s\n' "$prefix" "$mode"
+    [[ -n "$path" ]] && printf '%s_PATH=%s\n' "$prefix" "$path"
     printf '%s_RESULT=%s\n' "$prefix" "$result"
     printf '%s_VERSION=%s\n' "$prefix" "$TOOL_VERSION"
   } >"$file"
@@ -1459,12 +1483,20 @@ update_restore_backup() {
 update_run() {
   local force="${1:-0}" update_lock="" tmp="" latest tag latest_version package_url sha_url archive sha_file new_script
   local new_version backup="" old_version="$TOOL_VERSION" installed_version lq_version rc
+  local release_global_lock=0
   need_root_unless_dry_run
   command -v curl >/dev/null 2>&1 || { fail "缺少 curl，无法执行自更新。"; return 1; }
   command -v tar >/dev/null 2>&1 || { fail "缺少 tar，无法解压 release 包。"; return 1; }
   if ! lock_acquire "$UPDATE_LOCK_PATH" "更新任务" update_lock; then
     warn "已有更新任务运行中，请稍后再试。"
     return 1
+  fi
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    if ! global_lock_acquire; then
+      lock_release "$update_lock"
+      return 1
+    fi
+    release_global_lock=1
   fi
   tmp="$(mktemp -d /tmp/leikwan-update.XXXXXX)"
   set +e
@@ -1528,6 +1560,7 @@ update_run() {
   rc=$?
   set -e
   rm -rf "$tmp"
+  (( release_global_lock == 1 )) && global_lock_release
   lock_release "$update_lock"
   return "$rc"
 }
@@ -6217,22 +6250,103 @@ pbr_sync_from_forwards() {
   return "$rc"
 }
 
+json_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
+html_escape() {
+  local value="$1"
+  value="${value//&/&amp;}"
+  value="${value//</&lt;}"
+  value="${value//>/&gt;}"
+  value="${value//\"/&quot;}"
+  printf '%s' "$value"
+}
+
+output_generated_at() {
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+write_output_status() {
+  write_named_status "${STATUS_DIR}/last-output.env" "LAST_OUTPUT" "ok" "forward-endpoints" "$FORWARD_TXT"
+}
+
 generate_forward_outputs() {
+  local quiet="${1:-0}"
   ensure_tsv_files
   validate_forwards_tsv || return 1
   mkdir -p "$OUTPUT_DIR"
-  local txt tsv name entry_port target_host target_port out_iface route_table enabled comment
-  local e_name e_label public_host et_ip proto port weight e_enabled tcp_health udp_health role rank
+  local generated_at txt tsv json html name entry_port target_host target_port out_iface route_table enabled comment
+  local e_name e_label public_host et_ip proto port weight e_enabled tcp_health udp_health role rank enabled_entries enabled_forwards
+  local first_entry=1 first_forward=1 first_endpoint=1 tcp_endpoint udp_endpoint protocols_json
+  generated_at="$(output_generated_at)"
+  enabled_entries="$(enabled_entries_sorted | awk 'END{print NR+0}')"
+  enabled_forwards="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
   txt="【转发入口清单】"$'\n'
-  tsv=$'target_name\tentry_name\tpublic_host\tentry_port\ttarget_host\ttarget_port\thealth\tweight'
+  txt="${txt}生成时间：${generated_at}"$'\n'
+  txt="${txt}脚本版本：${TOOL_VERSION}"$'\n'
+  txt="${txt}公网入口：${enabled_entries} enabled"$'\n'
+  txt="${txt}转发目标：${enabled_forwards} enabled"$'\n'
+  tsv=$'generated_at\tversion\ttarget_name\tentry_name\tentry_label\trole\tpublic_host\tentry_port\tprotocols\ttcp_endpoint\tudp_endpoint\ttarget_host\ttarget_port\troute_table\tcomment\ttcp_health\tudp_health\tweight\tenabled'
+  json="{"
+  json="${json}"$'\n'"  \"version\": \"$(json_escape "$TOOL_VERSION")\","
+  json="${json}"$'\n'"  \"generated_at\": \"$(json_escape "$generated_at")\","
+  json="${json}"$'\n'"  \"entries\": ["
+  rank=0
+  while IFS=$'\t' read -r e_name public_host et_ip proto port weight e_enabled; do
+    rank=$((rank + 1))
+    if (( rank == 1 )); then role="PRIMARY"; else role="BACKUP"; fi
+    e_label="$(entry_label "$e_name")"
+    protocols_json="[\"tcp\", \"udp\"]"
+    tcp_endpoint="tcp://${public_host}:${port}"
+    udp_endpoint="udp://${public_host}:${port}"
+    (( first_entry == 0 )) && json="${json},"
+    first_entry=0
+    json="${json}"$'\n'"    {\"name\":\"$(json_escape "$e_name")\",\"label\":\"$(json_escape "$e_label")\",\"role\":\"${role}\",\"public_host\":\"$(json_escape "$public_host")\",\"protocols\":${protocols_json},\"port\":${port},\"easytier_port\":${port},\"tcp_endpoint\":\"$(json_escape "$tcp_endpoint")\",\"udp_endpoint\":\"$(json_escape "$udp_endpoint")\",\"enabled\":$([[ "$e_enabled" == "true" ]] && printf 'true' || printf 'false')}"
+  done < <(enabled_entries_sorted)
+  json="${json}"$'\n'"  ],"
+  json="${json}"$'\n'"  \"forwards\": ["
   while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
     [[ "$enabled" == "true" ]] || continue
-    txt="${txt}"$'\n'"目标：${name}"$'\n'"后端：${target_host}:${target_port}"$'\n'"入口："$'\n'
+    (( first_forward == 0 )) && json="${json},"
+    first_forward=0
+    json="${json}"$'\n'"    {\"name\":\"$(json_escape "$name")\",\"entry_port\":${entry_port},\"protocols\":[\"tcp\", \"udp\"],\"target_host\":\"$(json_escape "$target_host")\",\"target_port\":${target_port},\"route_table\":\"$(json_escape "${route_table:-}")\",\"comment\":\"$(json_escape "$comment")\",\"enabled\":true}"
+  done < <(forwards_rows_usv)
+  json="${json}"$'\n'"  ],"
+  json="${json}"$'\n'"  \"endpoints\": ["
+
+  html='<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+  html="${html}<title>Leikwan 转发端点</title><style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;margin:0;background:#f6f7f9;color:#172033}main{max-width:1100px;margin:auto;padding:24px}h1{font-size:24px}h2{font-size:18px;margin-top:28px}.note{background:#fff7d6;border:1px solid #ead27a;padding:12px;border-radius:6px}.target{background:white;border:1px solid #d8dde6;border-radius:8px;margin:16px 0;padding:16px}.endpoint{display:grid;grid-template-columns:92px 1fr;gap:8px;border-top:1px solid #edf0f5;padding:10px 0}.badge{font-weight:700}.primary{color:#126c3a}.backup{color:#6b5870}code{word-break:break-all}@media(max-width:640px){main{padding:14px}.endpoint{grid-template-columns:1fr}}</style></head><body><main>"
+  html="${html}<h1>Leikwan 转发端点</h1><p>生成时间：$(html_escape "$generated_at")<br>脚本版本：$(html_escape "$TOOL_VERSION")</p>"
+  html="${html}<div class=\"note\">端点输出仅用于分享 TCP/UDP 访问入口，不是代理链接，不包含 EasyTier network secret 或配对码。</div>"
+  html="${html}<h2>公网入口</h2>"
+  rank=0
+  while IFS=$'\t' read -r e_name public_host et_ip proto port weight e_enabled; do
+    [[ "$e_enabled" == "true" ]] || continue
+    rank=$((rank + 1))
+    if (( rank == 1 )); then role="PRIMARY"; else role="BACKUP"; fi
+    e_label="$(entry_label "$e_name")"
+    tcp_endpoint="tcp://${public_host}:${port}"
+    udp_endpoint="udp://${public_host}:${port}"
+    html="${html}<div class=\"endpoint\"><div><span class=\"badge $([[ "$role" == "PRIMARY" ]] && printf 'primary' || printf 'backup')\">${role}</span><br>$(html_escape "$e_label")</div><div><strong>TCP</strong> <code>$(html_escape "$tcp_endpoint")</code><br><strong>UDP</strong> <code>$(html_escape "$udp_endpoint")</code><br>enabled=true</div></div>"
+  done < <(enabled_entries_sorted)
+  html="${html}<h2>转发目标</h2>"
+
+  while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
+    [[ "$enabled" == "true" ]] || continue
+    txt="${txt}"$'\n'"目标：${name}"$'\n'"后端：${target_host}:${target_port}"$'\n'"入口端口：${entry_port} TCP+UDP"$'\n'"route_table：${route_table:-"-"}"$'\n'"备注：${comment:-"-"}"$'\n'"入口："$'\n'
+    html="${html}<section class=\"target\"><h2>$(html_escape "$name")</h2><p>后端：<code>$(html_escape "$target_host"):${target_port}</code><br>入口端口：${entry_port} TCP / UDP<br>route_table：$(html_escape "${route_table:-"-"}")<br>备注：$(html_escape "${comment:-"-"}")</p>"
     rank=0
     while IFS=$'\t' read -r e_name public_host et_ip proto port weight e_enabled; do
       [[ "$e_enabled" == "true" ]] || continue
       rank=$((rank + 1))
-      if (( rank == 1 )); then role="PRIMARY"; else role="BACKUP "; fi
+      if (( rank == 1 )); then role="PRIMARY"; else role="BACKUP"; fi
       tcp_health="UNKNOWN"
       udp_health="UNKNOWN"
       if command -v nc >/dev/null 2>&1; then
@@ -6240,17 +6354,527 @@ generate_forward_outputs() {
         if nc -uvz -w 2 "$public_host" "$entry_port" >/dev/null 2>&1; then udp_health="PROBED"; fi
       fi
       e_label="$(entry_label "$e_name")"
-      txt="${txt}* ${role} ${e_label}  ${public_host}:${entry_port}  TCP+UDP  状态：TCP=${tcp_health} UDP=${udp_health}  权重：${weight}"$'\n'
-      tsv="${tsv}"$'\n'"${name}"$'\t'"${e_name}"$'\t'"${public_host}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${tcp_health}"$'\t'"${weight}"
+      tcp_endpoint="tcp://${public_host}:${entry_port}"
+      udp_endpoint="udp://${public_host}:${entry_port}"
+      txt="${txt}* ${role} ${e_label}  TCP ${tcp_endpoint}  UDP ${udp_endpoint}  状态：TCP=${tcp_health} UDP=${udp_health}  权重：${weight}"$'\n'
+      tsv="${tsv}"$'\n'"${generated_at}"$'\t'"${TOOL_VERSION}"$'\t'"${name}"$'\t'"${e_name}"$'\t'"${e_label}"$'\t'"${role}"$'\t'"${public_host}"$'\t'"${entry_port}"$'\t'"tcp,udp"$'\t'"${tcp_endpoint}"$'\t'"${udp_endpoint}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${route_table}"$'\t'"${comment}"$'\t'"${tcp_health}"$'\t'"${udp_health}"$'\t'"${weight}"$'\t'"${e_enabled}"
+      (( first_endpoint == 0 )) && json="${json},"
+      first_endpoint=0
+      json="${json}"$'\n'"    {\"target\":\"$(json_escape "$name")\",\"entry\":\"$(json_escape "$e_name")\",\"label\":\"$(json_escape "$e_label")\",\"role\":\"${role}\",\"entry_port\":${entry_port},\"protocols\":[\"tcp\", \"udp\"],\"tcp_endpoint\":\"$(json_escape "$tcp_endpoint")\",\"udp_endpoint\":\"$(json_escape "$udp_endpoint")\"}"
+      html="${html}<div class=\"endpoint\"><div><span class=\"badge $([[ "$role" == "PRIMARY" ]] && printf 'primary' || printf 'backup')\">${role}</span><br>$(html_escape "$e_label")</div><div><strong>TCP</strong> <code>$(html_escape "$tcp_endpoint")</code><br><strong>UDP</strong> <code>$(html_escape "$udp_endpoint")</code><br>状态：TCP=$(html_escape "$tcp_health") UDP=$(html_escape "$udp_health")</div></div>"
     done < <(enabled_entries_sorted)
+    html="${html}</section>"
   done < <(forwards_rows_usv)
+  json="${json}"$'\n'"  ]"$'\n'"}"
+  html="${html}</main></body></html>"
   txt="${txt}"$'\n'"[INFO] 本工具不会自动把外部客户端流量按权重分流；权重用于排序和推荐。"$'\n'
   txt="${txt}[INFO] 真正负载均衡需要客户端、DNS 或外部 LB 配合。"$'\n'
-  txt="${txt}[INFO] 如需手动切换入口，请使用：公网入口列表管理 -> 切换主公网入口。"
+  txt="${txt}[INFO] 如需手动切换入口，请使用：公网入口列表管理 -> 切换主公网入口。"$'\n'
+  txt="${txt}[INFO] 端点输出不包含 EasyTier secret，不等于代理链接。"
   write_file "$FORWARD_TXT" "$txt" 644
   write_file "$FORWARD_TSV" "$tsv" 644
+  write_file "$FORWARD_JSON" "$json" 644
+  write_file "$FORWARD_HTML" "$html" 644
+  write_output_status
+  if (( quiet == 0 )); then
+    cat "$FORWARD_TXT"
+    echo
+    ok "已生成：${FORWARD_TXT}"
+    ok "已生成：${FORWARD_TSV}"
+    ok "已生成：${FORWARD_JSON}"
+    ok "已生成：${FORWARD_HTML}"
+  fi
+}
+
+output_show() {
+  [[ -f "$FORWARD_TXT" ]] || generate_forward_outputs 1
   cat "$FORWARD_TXT"
-  wait_file_output_confirm "转发入口输出" "$FORWARD_TXT"
+}
+
+output_json() {
+  [[ -f "$FORWARD_JSON" ]] || generate_forward_outputs 1
+  cat "$FORWARD_JSON"
+}
+
+output_html() {
+  [[ -f "$FORWARD_HTML" ]] || generate_forward_outputs 1
+  ok "HTML 输出：${FORWARD_HTML}"
+}
+
+output_qr() {
+  ensure_tsv_files
+  validate_forwards_tsv || return 1
+  if ! command -v qrencode >/dev/null 2>&1; then
+    info "未安装 qrencode，跳过二维码输出。"
+    return 0
+  fi
+  mkdir -p "$FORWARD_QR_DIR"
+  local name entry_port target_host target_port out_iface route_table enabled comment
+  local e_name public_host et_ip proto port weight e_enabled tcp_endpoint udp_endpoint tcp_png udp_png count=0
+  while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
+    [[ "$enabled" == "true" ]] || continue
+    while IFS=$'\t' read -r e_name public_host et_ip proto port weight e_enabled; do
+      [[ "$e_enabled" == "true" ]] || continue
+      tcp_endpoint="tcp://${public_host}:${entry_port}"
+      udp_endpoint="udp://${public_host}:${entry_port}"
+      tcp_png="${FORWARD_QR_DIR}/$(safe_name "${name}-${e_name}-tcp").png"
+      udp_png="${FORWARD_QR_DIR}/$(safe_name "${name}-${e_name}-udp").png"
+      qrencode -o "$tcp_png" "$tcp_endpoint"
+      qrencode -o "$udp_png" "$udp_endpoint"
+      count=$((count + 2))
+    done < <(enabled_entries_sorted)
+  done < <(forwards_rows_usv)
+  ok "已生成二维码 ${count} 个：${FORWARD_QR_DIR}"
+}
+
+config_export_time() {
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+config_sensitive_redact_tree() {
+  local root="$1" file
+  [[ -d "$root" ]] || return 0
+  while IFS= read -r -d '' file; do
+    [[ -f "$file" ]] || continue
+    LC_ALL=C grep -Iq . "$file" 2>/dev/null || continue
+    sed -E -i \
+      -e 's/(EASYTIER_NETWORK_SECRET=).*/\1REDACTED/g' \
+      -e 's/(([A-Za-z0-9_]*PAIRING[A-Za-z0-9_]*BASE64=)).*/\1REDACTED/g' \
+      -e 's/(LEIKWAN_[A-Z0-9_]*_BASE64=).*/\1REDACTED/g' \
+      -e 's/(([A-Za-z0-9_]*)(SECRET|Secret|secret|TOKEN|Token|token|PASSWORD|Password|password)([A-Za-z0-9_]*)([[:space:]_=-]+))[^[:space:]]+/\1REDACTED/g' \
+      -e 's/(PrivateKey[[:space:]]*=[[:space:]]*)[^[:space:]]+/\1REDACTED/g' \
+      "$file" 2>/dev/null || true
+  done < <(find "$root" -type f -size -5M -print0 2>/dev/null)
+}
+
+config_package_mode_label() {
+  case "${1:-full}" in
+    redacted) printf 'redacted' ;;
+    *) printf 'full' ;;
+  esac
+}
+
+write_config_export_status() {
+  write_named_status "${STATUS_DIR}/last-config-export.env" "LAST_CONFIG_EXPORT" "$1" "$2" "$3"
+}
+
+write_config_import_status() {
+  write_named_status "${STATUS_DIR}/last-config-import.env" "LAST_CONFIG_IMPORT" "$1" "$2" "$3"
+}
+
+config_export_copy_path() {
+  local src="$1" dest_dir="$2"
+  [[ -e "$src" ]] || return 0
+  mkdir -p "$dest_dir"
+  cp -a "$src" "$dest_dir/"
+}
+
+config_manifest_env() {
+  local mode="$1" contains_secret="$2" export_time="$3" role="$4" entries_count="$5" forwards_count="$6" pbr_count="$7" ddns_enabled="$8" hostname
+  hostname="$(hostname 2>/dev/null || printf 'unknown')"
+  cat <<EOF
+LEIKWAN_CONFIG_FORMAT=1
+EXPORT_TIME=${export_time}
+EXPORT_VERSION=${TOOL_VERSION}
+EXPORT_HOSTNAME=${hostname}
+EXPORT_ROLE=${role}
+EXPORT_MODE=${mode}
+CONTAINS_SECRET=${contains_secret}
+ENTRIES_COUNT=${entries_count}
+FORWARDS_COUNT=${forwards_count}
+PBR_COUNT=${pbr_count}
+DDNS_ENABLED=${ddns_enabled}
+EOF
+}
+
+config_manifest_json() {
+  local mode="$1" contains_secret="$2" export_time="$3" role="$4" entries_count="$5" forwards_count="$6" pbr_count="$7" ddns_enabled="$8" hostname
+  hostname="$(hostname 2>/dev/null || printf 'unknown')"
+  cat <<EOF
+{
+  "format": 1,
+  "export_time": "$(json_escape "$export_time")",
+  "export_version": "$(json_escape "$TOOL_VERSION")",
+  "export_hostname": "$(json_escape "$hostname")",
+  "export_role": "$(json_escape "$role")",
+  "export_mode": "$(json_escape "$mode")",
+  "contains_secret": ${contains_secret},
+  "entries_count": ${entries_count},
+  "forwards_count": ${forwards_count},
+  "pbr_count": ${pbr_count},
+  "ddns_enabled": ${ddns_enabled}
+}
+EOF
+}
+
+config_export() {
+  need_root_unless_dry_run
+  ensure_tsv_files
+  local mode="full" explicit_full=0 arg config_lock="" ts package_name dest tmp stage state_work checksums_tmp
+  local export_time role entries_count forwards_count pbr_count ddns_enabled contains_secret base_name sha_file
+  while (($# > 0)); do
+    arg="$1"
+    case "$arg" in
+      --redacted) mode="redacted"; shift ;;
+      --full) mode="full"; explicit_full=1; shift ;;
+      *) fail "未知 config export 参数：${arg}"; return 1 ;;
+    esac
+  done
+  if ! lock_acquire "$CONFIG_LOCK_PATH" "配置导入/导出" config_lock; then
+    warn "已有 Leikwan 任务运行中，请稍后再试。"
+    return 1
+  fi
+  if [[ "$mode" == "full" ]]; then
+    warn "完整配置包包含 EasyTier network secret。"
+    warn "泄露后可能导致别人加入你的 EasyTier 网络。"
+    if (( explicit_full == 1 )) && is_interactive; then
+      prompt_yes_no "确认继续导出完整配置包？" "N" || { lock_release "$config_lock"; return 0; }
+    fi
+    contains_secret=true
+    base_name="leikwan-config"
+  else
+    contains_secret=false
+    base_name="leikwan-config-redacted"
+  fi
+  ts="$(snapshot_timestamp)"
+  package_name="${base_name}-${ts}"
+  dest="/root/${package_name}.tar.gz"
+  sha_file="${dest}.sha256"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] export ${mode} config package ${dest}"
+    lock_release "$config_lock"
+    return 0
+  fi
+  tmp="$(mktemp -d /tmp/leikwan-config-export.XXXXXX)"
+  stage="${tmp}/${package_name}"
+  state_work="${tmp}/state-work"
+  mkdir -p "$stage/state" "$stage/systemd" "$stage/nft" "$stage/iproute" "$stage/sysctl" "$stage/status" "$stage/outputs" "$stage/logs" "$state_work"
+  export_time="$(config_export_time)"
+  role="$(detect_role)"
+  entries_count="$(entries_rows | awk 'END{print NR+0}')"
+  forwards_count="$(forwards_rows | awk 'END{print NR+0}')"
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  if [[ "$(ddns_timer_state 2>/dev/null || true)" == "active" ]]; then ddns_enabled=true; else ddns_enabled=false; fi
+  config_manifest_env "$mode" "$contains_secret" "$export_time" "$role" "$entries_count" "$forwards_count" "$pbr_count" "$ddns_enabled" >"${stage}/manifest.env"
+  config_manifest_json "$mode" "$contains_secret" "$export_time" "$role" "$entries_count" "$forwards_count" "$pbr_count" "$ddns_enabled" >"${stage}/manifest.json"
+  if [[ -d "$STATE_DIR" ]]; then
+    tar --exclude='etc/leikwan-toolkit/snapshots' -C / -cf - etc/leikwan-toolkit 2>/dev/null | tar -C "$state_work" -xf - 2>/dev/null || true
+  else
+    mkdir -p "${state_work}${STATE_DIR}"
+  fi
+  if [[ "$mode" == "redacted" ]]; then
+    config_sensitive_redact_tree "$state_work"
+  fi
+  tar -czf "${stage}/state/etc-leikwan-toolkit.tar.gz" -C "$state_work" etc/leikwan-toolkit 2>/dev/null || tar -czf "${stage}/state/etc-leikwan-toolkit.tar.gz" -C "$state_work" . 2>/dev/null
+  config_export_copy_path "$EASYTIER_RELAY_SERVICE" "${stage}/systemd"
+  while IFS= read -r svc; do config_export_copy_path "$svc" "${stage}/systemd"; done < <(find /etc/systemd/system -maxdepth 1 -type f -name 'easytier-entry-*.service' 2>/dev/null || true)
+  config_export_copy_path "$NFT_SERVICE" "${stage}/systemd"
+  config_export_copy_path "$DDNS_SERVICE" "${stage}/systemd"
+  config_export_copy_path "$DDNS_TIMER" "${stage}/systemd"
+  command -v nft >/dev/null 2>&1 && nft list ruleset >"${stage}/nft/ruleset.nft" 2>&1 || echo "nft command not found" >"${stage}/nft/ruleset.nft"
+  config_export_copy_path "$NFT_RULE_FILE" "${stage}/nft"
+  config_export_copy_path "$PBR_RT_TABLES" "${stage}/iproute"
+  command -v ip >/dev/null 2>&1 && ip rule show >"${stage}/iproute/ip_rule_show.txt" 2>&1 || echo "ip command not found" >"${stage}/iproute/ip_rule_show.txt"
+  command -v ip >/dev/null 2>&1 && ip route show table all >"${stage}/iproute/ip_route_show_table_all.txt" 2>&1 || echo "ip command not found" >"${stage}/iproute/ip_route_show_table_all.txt"
+  config_export_copy_path "$FORWARD_SYSCTL" "${stage}/sysctl"
+  config_export_copy_path "$BBR_SYSCTL_CONF" "${stage}/sysctl"
+  (LOG_DISABLED=1 status_overview >"${stage}/status/lq-status.txt" 2>&1) || true
+  (LOG_DISABLED=1 doctor >"${stage}/status/lq-doctor.txt" 2>&1) || true
+  generate_forward_outputs 1 >/dev/null 2>&1 || true
+  for file in "$FORWARD_TXT" "$FORWARD_TSV" "$FORWARD_JSON" "$FORWARD_HTML"; do
+    config_export_copy_path "$file" "${stage}/outputs"
+  done
+  [[ -f "$LOG_FILE" ]] && tail -n 200 "$LOG_FILE" >"${stage}/logs/leikwan-toolkit.tail.log" 2>/dev/null || true
+  [[ -f "$DDNS_LOG_FILE" ]] && tail -n 200 "$DDNS_LOG_FILE" >"${stage}/logs/leikwan-ddns-refresh.tail.log" 2>/dev/null || true
+  if [[ "$mode" == "redacted" ]]; then
+    config_sensitive_redact_tree "$stage"
+  fi
+  checksums_tmp="${tmp}/checksums.sha256"
+  (cd "$stage" && find . -type f ! -name checksums.sha256 -print | sort | while IFS= read -r file; do sha256sum "$file"; done >"$checksums_tmp")
+  mv "$checksums_tmp" "${stage}/checksums.sha256"
+  tar -czf "$dest" -C "$tmp" "$package_name"
+  (cd "$(dirname "$dest")" && sha256sum "$(basename "$dest")" >"$(basename "$sha_file")")
+  rm -rf "$tmp"
+  ok "已导出配置包：${dest}"
+  ok "sha256：${sha_file}"
+  if [[ "$mode" == "full" ]]; then
+    warn "完整配置包包含 EasyTier network secret，请妥善保存。"
+  else
+    info "脱敏配置包适合排错和 issue 附件，不适合完整恢复运行。"
+  fi
+  write_config_export_status "ok" "$mode" "$dest"
+  lock_release "$config_lock"
+}
+
+config_verify_external_sha() {
+  local pkg="$1" required="${2:-0}" sha
+  sha="${pkg}.sha256"
+  if [[ ! -f "$sha" ]]; then
+    if (( required == 1 )); then
+      fail "未找到外部 sha256 文件：${sha}"
+      return 1
+    fi
+    warn "未找到外部 sha256 文件：${sha}"
+    return 0
+  fi
+  (cd "$(dirname "$pkg")" && sha256sum -c "$(basename "$sha")" >/dev/null)
+}
+
+config_extract_package() {
+  local pkg="$1" out_tmp="$2" out_root="$3" tmp root
+  tmp="$(mktemp -d /tmp/leikwan-config-inspect.XXXXXX)"
+  tar -xzf "$pkg" -C "$tmp"
+  root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  [[ -n "$root" && -f "${root}/manifest.env" ]] || { rm -rf "$tmp"; fail "配置包 manifest.env 缺失。"; return 1; }
+  printf -v "$out_tmp" '%s' "$tmp"
+  printf -v "$out_root" '%s' "$root"
+}
+
+config_verify_internal_checksums() {
+  local root="$1"
+  [[ -f "${root}/checksums.sha256" ]] || { warn "配置包缺少 checksums.sha256。"; return 1; }
+  (cd "$root" && sha256sum -c checksums.sha256 >/dev/null)
+}
+
+config_inspect_root() {
+  local root="$1" manifest
+  local export_time export_version export_role export_mode contains_secret entries_count forwards_count pbr_count ddns_enabled
+  manifest="${root}/manifest.env"
+  export_time="$(env_file_get "$manifest" EXPORT_TIME)"
+  export_version="$(env_file_get "$manifest" EXPORT_VERSION)"
+  export_role="$(env_file_get "$manifest" EXPORT_ROLE)"
+  export_mode="$(env_file_get "$manifest" EXPORT_MODE)"
+  contains_secret="$(env_file_get "$manifest" CONTAINS_SECRET)"
+  entries_count="$(env_file_get "$manifest" ENTRIES_COUNT)"
+  forwards_count="$(env_file_get "$manifest" FORWARDS_COUNT)"
+  pbr_count="$(env_file_get "$manifest" PBR_COUNT)"
+  ddns_enabled="$(env_file_get "$manifest" DDNS_ENABLED)"
+  echo "配置包信息"
+  echo "----------------------------------------"
+  echo "导出时间: ${export_time:-unknown}"
+  echo "导出版本: ${export_version:-unknown}"
+  echo "角色: ${export_role:-unknown}"
+  echo "模式: ${export_mode:-unknown}"
+  echo "包含 secret: ${contains_secret:-unknown}"
+  echo "entries 数量: ${entries_count:-0}"
+  echo "forwards 数量: ${forwards_count:-0}"
+  echo "PBR 数量: ${pbr_count:-0}"
+  echo "DDNS 启用: ${ddns_enabled:-unknown}"
+  echo "包含 systemd: $([[ -d "${root}/systemd" ]] && find "${root}/systemd" -type f | grep -q . && echo yes || echo no)"
+  echo "包含 nft: $([[ -s "${root}/nft/ruleset.nft" || -s "${root}/nft/leikwan-forward.nft" ]] && echo yes || echo no)"
+  echo "包含 ip rule 快照: $([[ -s "${root}/iproute/ip_rule_show.txt" ]] && echo yes || echo no)"
+}
+
+config_inspect() {
+  local pkg="$1" tmp="" root=""
+  [[ -n "$pkg" ]] || { fail "请提供配置包路径。"; return 1; }
+  [[ -f "$pkg" ]] || { fail "配置包不存在：${pkg}"; return 1; }
+  if config_verify_external_sha "$pkg"; then
+    ok "外部 sha256 校验通过。"
+  else
+    fail "外部 sha256 校验失败：${pkg}.sha256"
+    return 1
+  fi
+  config_extract_package "$pkg" tmp root || return 1
+  if config_verify_internal_checksums "$root"; then
+    ok "内部 checksums.sha256 校验通过。"
+  else
+    fail "内部 checksums.sha256 校验失败。"
+    rm -rf "$tmp"
+    return 1
+  fi
+  config_inspect_root "$root"
+  rm -rf "$tmp"
+}
+
+config_import_auto_snapshot_or_confirm() {
+  local dest
+  dest="${AUTO_SNAPSHOT_DIR}/auto-before-config-import-$(snapshot_timestamp).tar.gz"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] create auto snapshot ${dest}"
+    return 0
+  fi
+  ensure_base_dirs
+  if create_snapshot_archive "$dest"; then
+    ok "已创建自动快照：${dest}"
+    prune_auto_snapshots
+    return 0
+  fi
+  warn "自动快照失败，导入风险较高。"
+  prompt_yes_no "是否继续？" "N"
+}
+
+config_restore_full_assets() {
+  local root="$1" svc
+  mkdir -p /etc/systemd/system "$(dirname "$NFT_RULE_FILE")" "$(dirname "$FORWARD_SYSCTL")" "$(dirname "$BBR_SYSCTL_CONF")" "$(dirname "$PBR_RT_TABLES")"
+  for svc in easytier-relay.service leikwan-nft-forward.service leikwan-ddns-refresh.service leikwan-ddns-refresh.timer; do
+    [[ -f "${root}/systemd/${svc}" ]] && cp -a "${root}/systemd/${svc}" "/etc/systemd/system/${svc}"
+  done
+  while IFS= read -r svc; do
+    cp -a "$svc" "/etc/systemd/system/$(basename "$svc")"
+  done < <(find "${root}/systemd" -maxdepth 1 -type f -name 'easytier-entry-*.service' 2>/dev/null || true)
+  [[ -f "${root}/nft/leikwan-forward.nft" ]] && cp -a "${root}/nft/leikwan-forward.nft" "$NFT_RULE_FILE"
+  [[ -f "${root}/sysctl/99-leikwan-forward.conf" ]] && cp -a "${root}/sysctl/99-leikwan-forward.conf" "$FORWARD_SYSCTL"
+  [[ -f "${root}/sysctl/99-leikwan-bbr.conf" ]] && cp -a "${root}/sysctl/99-leikwan-bbr.conf" "$BBR_SYSCTL_CONF"
+  [[ -f "${root}/iproute/rt_tables" ]] && cp -a "${root}/iproute/rt_tables" "$PBR_RT_TABLES"
+  command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
+  command -v sysctl >/dev/null 2>&1 && sysctl --system >/dev/null 2>&1 || true
+}
+
+config_apply_after_import() {
+  local mode="$1" assume_yes="$2" role
+  [[ "$mode" == "apply" || "$mode" == "full" ]] || return 0
+  warn "应用导入配置可能重新渲染 systemd、nftables、PBR，并重启 EasyTier 服务。"
+  if is_interactive && (( assume_yes == 0 )); then
+    prompt_yes_no "是否继续应用导入配置？" "N" || return 0
+  fi
+  role="$(detect_role)"
+  case "$role" in
+    leikwan-relay)
+      apply_easytier_relay_service confirmed || warn "relay service 重渲染/重启未完成。"
+      apply_nft_rules "leikwan-relay" 1 || warn "relay nftables 应用未完成。"
+      ;;
+    cloud-entry)
+      apply_easytier_entry_services || warn "entry service 重渲染/重启未完成。"
+      apply_nft_rules "cloud-entry" || warn "entry nftables 应用未完成。"
+      ;;
+    *)
+      warn "无法识别角色，跳过 EasyTier/nftables 自动应用。"
+      ;;
+  esac
+  pbr_apply || warn "PBR 应用未完成。"
+}
+
+config_import() {
+  need_root_unless_dry_run
+  local pkg="${1:-}" mode="" assume_yes=0 arg config_lock="" tmp="" root="" manifest contains_secret import_mode
+  [[ -n "$pkg" ]] || { fail "请提供配置包路径。"; return 1; }
+  shift || true
+  while (($# > 0)); do
+    arg="$1"
+    case "$arg" in
+      --mode) mode="${2:-}"; shift 2 ;;
+      --yes|-y) assume_yes=1; shift ;;
+      *) fail "未知 config import 参数：${arg}"; return 1 ;;
+    esac
+  done
+  [[ -f "$pkg" ]] || { fail "配置包不存在：${pkg}"; return 1; }
+  case "$mode" in
+    ""|config-only|apply|full) ;;
+    *) fail "导入模式无效：${mode}"; return 1 ;;
+  esac
+  if [[ "$mode" == "full" && "$assume_yes" != "1" ]] && ! is_interactive; then
+    fail "非交互 full import 必须显式添加 --yes。"
+    return 1
+  fi
+  if ! lock_acquire "$CONFIG_LOCK_PATH" "配置导入/导出" config_lock; then
+    warn "已有 Leikwan 任务运行中，请稍后再试。"
+    return 1
+  fi
+  if ! global_lock_acquire; then
+    warn "已有 Leikwan 任务运行中，请稍后再试。"
+    lock_release "$config_lock"
+    return 1
+  fi
+  config_verify_external_sha "$pkg" 1 || { global_lock_release; lock_release "$config_lock"; return 1; }
+  config_extract_package "$pkg" tmp root || { global_lock_release; lock_release "$config_lock"; return 1; }
+  config_verify_internal_checksums "$root" || { rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 1; }
+  manifest="${root}/manifest.env"
+  [[ "$(env_file_get "$manifest" LEIKWAN_CONFIG_FORMAT)" == "1" ]] || { fail "配置包格式不支持。"; rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 1; }
+  config_inspect_root "$root"
+  contains_secret="$(env_file_get "$manifest" CONTAINS_SECRET)"
+  if [[ "$contains_secret" != "true" ]]; then
+    warn "这是脱敏配置包，不能恢复 EasyTier network secret。"
+    info "仅适合排错查看，不适合直接恢复运行。"
+    if [[ "$mode" == "full" ]]; then
+      fail "脱敏配置包不能使用 full 模式导入。"
+      rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 1
+    fi
+  fi
+  if [[ -z "$mode" ]]; then
+    if is_interactive; then
+      echo
+      echo "选择导入模式："
+      echo "1. 仅导入 /etc/leikwan-toolkit 配置"
+      echo "2. 导入配置并重新渲染 systemd / nftables / PBR"
+      echo "3. 完整迁移恢复，包括 systemd service、nftables、PBR、sysctl"
+      echo "0. 返回"
+      case "$(prompt_menu_choice "请选择：")" in
+        1) mode="config-only" ;;
+        2) mode="apply" ;;
+        3) mode="full" ;;
+        0|"") rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 0 ;;
+        *) warn "无效选择。"; rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 0 ;;
+      esac
+    else
+      mode="config-only"
+    fi
+  fi
+  echo "[WARN] 即将导入配置包，可能覆盖当前 /etc/leikwan-toolkit。"
+  echo "[WARN] 当前服务不会立即重启，除非你选择应用配置。"
+  if is_interactive && (( assume_yes == 0 )); then
+    prompt_yes_no "确认继续？" "N" || { rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 0; }
+  fi
+  config_import_auto_snapshot_or_confirm || { rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 1; }
+  import_mode="$mode"
+  if [[ -f "${root}/state/etc-leikwan-toolkit.tar.gz" ]]; then
+    tar -xzf "${root}/state/etc-leikwan-toolkit.tar.gz" -C /
+  else
+    fail "配置包缺少 state/etc-leikwan-toolkit.tar.gz。"
+    rm -rf "$tmp"; global_lock_release; lock_release "$config_lock"; return 1
+  fi
+  if [[ "$mode" == "full" ]]; then
+    config_restore_full_assets "$root"
+  fi
+  config_apply_after_import "$mode" "$assume_yes"
+  ok "配置导入完成：${pkg}"
+  info "建议下一步执行：lq status"
+  info "建议下一步执行：lq --doctor"
+  info "如需重应用转发规则：lq forward apply-relay --auto-fix-route"
+  write_config_import_status "ok" "$import_mode" "$pkg"
+  rm -rf "$tmp"
+  global_lock_release
+  lock_release "$config_lock"
+}
+
+config_list() {
+  local files=() file size i=0
+  mapfile -t files < <(find /root -maxdepth 1 -type f \( -name 'leikwan-config-*.tar.gz' -o -name 'leikwan-config-redacted-*.tar.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk '{sub(/^[^ ]+ /, ""); print}')
+  if (( ${#files[@]} == 0 )); then
+    warn "未找到已导出的配置包。"
+    return 0
+  fi
+  echo "已导出的配置包"
+  echo "----------------------------------------"
+  for file in "${files[@]}"; do
+    i=$((i + 1))
+    size="$(du -h "$file" 2>/dev/null | awk '{print $1}')"
+    printf '%d. %s (%s)\n' "$i" "$file" "${size:-unknown}"
+  done
+}
+
+config_menu() {
+  local choice pkg
+  while true; do
+    print_menu_header "配置导入 / 导出"
+    echo "1. 导出完整配置包"
+    echo "2. 导出脱敏配置包"
+    echo "3. 查看配置包信息"
+    echo "4. 导入配置包"
+    echo "5. 查看已导出的配置包"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause config_export --full ;;
+      2) run_menu_action_pause config_export --redacted ;;
+      3) pkg="$(prompt_value "配置包路径")"; [[ -n "$pkg" ]] && run_menu_action_pause config_inspect "$pkg" ;;
+      4) pkg="$(prompt_value "配置包路径")"; [[ -n "$pkg" ]] && run_menu_action_pause config_import "$pkg" ;;
+      5) run_menu_action_pause config_list ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
 }
 
 report() {
@@ -6760,6 +7384,24 @@ status_cache_summary() {
   fi
 }
 
+named_status_summary() {
+  local file="$1" prefix="$2" default_text="${3:-无记录}" time result mode
+  time="$(env_file_get "$file" "${prefix}_TIME")"
+  result="$(env_file_get "$file" "${prefix}_RESULT")"
+  mode="$(env_file_get "$file" "${prefix}_MODE")"
+  if [[ -n "$time" ]]; then
+    if [[ -n "$mode" ]]; then
+      printf '%s / %s' "$time" "$mode"
+    elif [[ -n "$result" ]]; then
+      printf '%s / %s' "$time" "$(status_result_display "$result")"
+    else
+      printf '%s' "$time"
+    fi
+  else
+    printf '%s' "$default_text"
+  fi
+}
+
 status_ddns_entry_summary() {
   local changed failed relay_needed
   changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_CHANGED)"
@@ -7107,6 +7749,9 @@ status_overview() {
       status_mark_result warn
       ;;
   esac
+  echo "最近配置导出: $(named_status_summary "${STATUS_DIR}/last-config-export.env" LAST_CONFIG_EXPORT)"
+  echo "最近配置导入: $(named_status_summary "${STATUS_DIR}/last-config-import.env" LAST_CONFIG_IMPORT)"
+  echo "最近端点输出: $(named_status_summary "${STATUS_DIR}/last-output.env" LAST_OUTPUT)"
   echo "整体状态: $(status_result_display "$STATUS_OVERVIEW_RESULT")"
   write_status_cache status "$STATUS_OVERVIEW_RESULT"
   if [[ "$STATUS_OVERVIEW_RESULT" == "ok" ]]; then
@@ -7380,6 +8025,12 @@ generate_debug_report() {
     [[ -f "$DDNS_STATUS_FILE" ]] && sed -n '1,120p' "$DDNS_STATUS_FILE"
     echo "last-update.env:"
     [[ -f "$UPDATE_STATUS_FILE" ]] && sed -n '1,120p' "$UPDATE_STATUS_FILE"
+    echo "last-config-export.env:"
+    [[ -f "${STATUS_DIR}/last-config-export.env" ]] && sed -n '1,120p' "${STATUS_DIR}/last-config-export.env"
+    echo "last-config-import.env:"
+    [[ -f "${STATUS_DIR}/last-config-import.env" ]] && sed -n '1,120p' "${STATUS_DIR}/last-config-import.env"
+    echo "last-output.env:"
+    [[ -f "${STATUS_DIR}/last-output.env" ]] && sed -n '1,120p' "${STATUS_DIR}/last-output.env"
     echo "ddns log tail:"
     [[ -f "$DDNS_LOG_FILE" ]] && tail -n 100 "$DDNS_LOG_FILE"
     echo "resolved-entries.tsv:"
@@ -7389,7 +8040,10 @@ generate_debug_report() {
     echo "pbr/resolved-pbr-domains.tsv:"
     [[ -f "$PBR_RESOLVED_DOMAIN_TSV" ]] && sed -n '1,160p' "$PBR_RESOLVED_DOMAIN_TSV"
     echo "outputs:"
+    find "$OUTPUT_DIR" -maxdepth 2 -type f -printf '%p\t%s bytes\n' 2>/dev/null || true
     [[ -f "$FORWARD_TSV" ]] && sed -n '1,120p' "$FORWARD_TSV"
+    echo "forward-endpoints.json summary:"
+    [[ -f "$FORWARD_JSON" ]] && sed -n '1,220p' "$FORWARD_JSON"
   } >"$tmp" 2>&1
   sed -E \
     -e 's/(EASYTIER_NETWORK_SECRET=).*/\1<redacted>/g' \
@@ -8265,10 +8919,11 @@ advanced_menu() {
     echo "5. 状态总览"
     echo "6. 一键诊断"
     echo "7. 配置快照 / 回滚"
-    echo "8. 端口冲突预检"
-    echo "9. 生成脱敏故障报告"
-    echo "10. 检查并更新脚本"
-    echo "11. legacy 清理"
+    echo "8. 配置导入 / 导出"
+    echo "9. 端口冲突预检"
+    echo "10. 生成脱敏故障报告"
+    echo "11. 检查并更新脚本"
+    echo "12. legacy 清理"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -8279,10 +8934,11 @@ advanced_menu() {
       5) run_menu_action_pause status_overview ;;
       6) run_menu_action run_doctor_interactive ;;
       7) snapshot_menu ;;
-      8) run_menu_action_pause port_check ;;
-      9) run_menu_action generate_debug_report ;;
-      10) update_menu ;;
-      11) legacy_cleanup_menu ;;
+      8) config_menu ;;
+      9) run_menu_action_pause port_check ;;
+      10) run_menu_action generate_debug_report ;;
+      11) update_menu ;;
+      12) legacy_cleanup_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -8327,6 +8983,33 @@ main() {
   case "${1:-}" in
     status)
       status_overview
+      ;;
+    config)
+      case "${2:-}" in
+        export) shift 2; config_export "$@" ;;
+        import) shift 2; config_import "$@" ;;
+        inspect) config_inspect "${3:-}" ;;
+        list) config_list ;;
+        *) fail "未知 config 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
+      ;;
+    export-config)
+      shift
+      config_export "$@"
+      ;;
+    import-config)
+      shift
+      config_import "$@"
+      ;;
+    output)
+      case "${2:-}" in
+        generate) generate_forward_outputs ;;
+        show) output_show ;;
+        json) output_json ;;
+        html) output_html ;;
+        qr) output_qr ;;
+        *) fail "未知 output 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
       ;;
     pair)
       case "${2:-}" in

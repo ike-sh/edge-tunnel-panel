@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.1.2 正式版验收。
+本页用于 Leikwan Toolkit 1.2.0 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.1.2"
-leikwan-toolkit 1.1.2
+TOOL_VERSION="1.2.0"
+leikwan-toolkit 1.2.0
 ```
 
 ## 打包
@@ -29,8 +29,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.1.2.tar.gz
-dist/leikwan-toolkit-1.1.2.tar.gz.sha256
+dist/leikwan-toolkit-1.2.0.tar.gz
+dist/leikwan-toolkit-1.2.0.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -216,6 +216,76 @@ cat /etc/leikwan-toolkit/status/last-apply.env
 - 恢复快照前二次确认，恢复后询问是否 reload systemd 并重启相关服务。
 
 高危操作前，例如删除转发目标、删除公网入口、重新应用利群转发规则，应生成 `/etc/leikwan-toolkit/snapshots/auto/auto-before-*.tar.gz`，且只保留最近 10 个自动快照。
+
+## 配置导入 / 导出
+
+```bash
+lq config export --full
+lq config export --redacted
+lq config inspect /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
+lq config list
+```
+
+期望：
+
+- 完整配置包输出到 `/root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz`，同时生成 `.sha256`。
+- `--full` 明确警告包含 EasyTier network secret。
+- 脱敏配置包输出到 `/root/leikwan-config-redacted-YYYYMMDD-HHMMSS.tar.gz`，secret、配对码 base64、token / password 类字段被替换为 `REDACTED`。
+- inspect 只展示 manifest、entries / forwards / PBR / DDNS 摘要和 systemd / nft / ip rule 快照状态，不导入、不修改系统。
+- 配置包内包含 `manifest.env`、`manifest.json`、`state/etc-leikwan-toolkit.tar.gz`、`checksums.sha256` 和 outputs 文件。
+
+导入测试：
+
+```bash
+lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
+lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz --mode config-only
+lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz --mode full --yes
+```
+
+期望：
+
+- 导入前展示 inspect 摘要并校验外部 `.sha256` 与包内 `checksums.sha256`。
+- 导入前自动创建 `auto-before-config-import-YYYYMMDD-HHMMSS.tar.gz` 快照。
+- 交互导入可选择 config-only / apply / full。
+- 非交互 full import 没有 `--yes` 时拒绝执行。
+- 脱敏包不能用于 full 恢复运行。
+- 导入后提示执行 `lq status`、`lq --doctor` 和必要时 `lq forward apply-relay --auto-fix-route`。
+
+菜单路径：
+
+```text
+高级功能 -> 配置导入 / 导出
+```
+
+动作输出必须停留，按回车返回。
+
+## 转发端点输出
+
+```bash
+lq output generate
+lq output show
+lq output json
+lq output html
+lq output qr
+```
+
+期望生成：
+
+```text
+/etc/leikwan-toolkit/outputs/forward-endpoints.txt
+/etc/leikwan-toolkit/outputs/forward-endpoints.tsv
+/etc/leikwan-toolkit/outputs/forward-endpoints.json
+/etc/leikwan-toolkit/outputs/forward-endpoints.html
+```
+
+验收：
+
+- TXT / TSV / JSON / HTML 都包含生成时间、脚本版本、enabled entries、enabled forwards、PRIMARY / BACKUP、TCP / UDP endpoint。
+- JSON 可被 `jq` 或其它 JSON 解析器读取。
+- HTML 是静态文件，移动端可读，不需要 Web 服务。
+- 输出不包含 EasyTier network secret、配对码 base64、token 或 password。
+- 未安装 `qrencode` 时 `lq output qr` 输出 INFO 并跳过；已安装时只把 endpoint 字符串写入二维码。
+- `lq status` 显示最近端点输出时间。
 
 ## 端口预检
 

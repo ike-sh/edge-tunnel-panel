@@ -1,6 +1,6 @@
 ﻿# 工作流
 
-本文说明 Leikwan Toolkit 1.1.2 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.2.0 的推荐操作顺序。
 
 ## 角色
 
@@ -130,6 +130,26 @@ lq update run
 
 高危操作前会自动创建轻量快照，包括重启 relay、重新应用 nftables 转发规则、删除公网入口、批量禁用公网入口、删除转发目标、删除 PBR 规则、卸载全部和恢复快照前。自动快照保存在 `/etc/leikwan-toolkit/snapshots/auto/`，只保留最近 10 个。
 
+## 配置导入 / 导出
+
+迁移到新机器或排错前，可以导出配置包：
+
+```bash
+lq config export --full
+lq config export --redacted
+lq config inspect /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
+```
+
+完整配置包包含 EasyTier network secret，可用于迁移恢复；脱敏配置包把 secret、配对码 base64、token/password 类字段替换为 `REDACTED`，适合排错但不能完整恢复运行。
+
+导入配置包：
+
+```bash
+lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
+```
+
+导入前会校验 sha256 和 manifest，并自动创建 `auto-before-config-import-*` 快照。交互模式可选择 config-only、apply 或 full。非交互 full import 需要显式添加 `--yes`。
+
 ## PBR
 
 如果需要 CN2、9929 或其它指定出口：
@@ -190,6 +210,24 @@ lq pbr sync-from-forwards
 
 ```bash
 lq pbr domain sync
+```
+
+## 转发端点输出
+
+生成转发端点分享文件：
+
+```bash
+lq output generate
+lq output json
+lq output html
+```
+
+输出会生成 TXT、TSV、JSON 和静态 HTML，包含 PRIMARY / BACKUP、TCP / UDP endpoint、enabled entries 和 enabled forwards。端点输出不包含 EasyTier secret，不等于代理链接。
+
+如果安装了 `qrencode`，可选生成二维码：
+
+```bash
+lq output qr
 ```
 
 ## 诊断

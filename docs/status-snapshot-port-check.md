@@ -1,6 +1,6 @@
 ﻿# 状态、快照与端口预检
 
-本文记录状态总览、快照 / 回滚、端口预检，以及 1.1.2 的 DDNS 状态集成。
+本文记录状态总览、快照 / 回滚、端口预检，以及 1.2.0 的 DDNS 状态集成。
 
 ## 状态总览
 
@@ -24,7 +24,7 @@ lq --status
 
 缓存只记录时间、动作、结果和版本，不写 EasyTier secret。
 
-1.1.2 起，B 利群主机状态总览还会显示 DDNS scope 和三类 DDNS 状态：
+1.2.0 起，B 利群主机状态总览还会显示 DDNS scope 和三类 DDNS 状态：
 
 ```text
 DDNS 自动刷新: active / disabled
@@ -33,19 +33,25 @@ DDNS scopes: forwards=yes entries=yes pbr=yes
 后端 DDNS: OK
 公网入口 DDNS: public3 changed，relay restart needed
 PBR DDNS: OK
+最近配置导出: 2026-05-10 06:00:00 / full
+最近配置导入: 无记录
+最近端点输出: 2026-05-10 06:01:00 / forward-endpoints
 ```
 
 DDNS 最近状态缓存：
 
 ```text
 /etc/leikwan-toolkit/status/last-ddns.env
+/etc/leikwan-toolkit/status/last-config-export.env
+/etc/leikwan-toolkit/status/last-config-import.env
+/etc/leikwan-toolkit/status/last-output.env
 ```
 
 脚本自更新最近状态也会显示在 `lq status` 中：
 
 ```text
-脚本版本: 1.1.2
-最近更新: 2026-05-10 05:30:00 / 1.1.1 -> 1.1.2 / OK
+脚本版本: 1.2.0
+最近更新: 2026-05-10 05:30:00 / 1.1.2 -> 1.2.0 / OK
 ```
 
 `status` 不联网检查 latest release；联网检查只由 `lq update check` 执行。
@@ -66,6 +72,23 @@ DDNS 最近状态缓存：
 ```
 
 快照内容包含 leikwan 配置、相关 systemd unit、sysctl、rt_tables，以及 nft/ip rule/ip route 的只读导出。快照可能包含 EasyTier network secret，请妥善保存。
+
+## 配置导入 / 导出状态
+
+`lq config export` 和 `lq config import` 会分别写入：
+
+```text
+/etc/leikwan-toolkit/status/last-config-export.env
+/etc/leikwan-toolkit/status/last-config-import.env
+```
+
+`lq output generate` 会写入：
+
+```text
+/etc/leikwan-toolkit/status/last-output.env
+```
+
+状态总览会读取这些文件，不会打开完整配置包，也不会把完整配置包放入 debug report。
 
 高危操作前会自动创建轻量快照，失败时会 WARN 并询问是否继续。自动快照只保留最近 10 个。
 

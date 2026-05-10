@@ -2,7 +2,7 @@
 
 Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 构建公网入口和中转主机之间的虚拟网络，并使用 nftables 在中转主机上管理 TCP/UDP 转发。
 
-当前版本：`1.1.2`
+当前版本：`1.2.0`
 
 ## 功能特性
 
@@ -15,7 +15,9 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 - IPv4 PBR 策略路由
 - 状态总览与最近 apply / doctor / status 缓存
 - 配置快照 / 回滚，高危操作前自动快照
+- 配置导入 / 导出 / 迁移包
 - 端口冲突预检与端口推荐避让
+- 转发端点分享输出：TXT / TSV / JSON / HTML / 可选 QR
 - DDNS 后端 / 公网入口 / 域名 PBR 自动刷新
 - GitHub Release 自更新、sha256 校验与安全回滚
 - 一键诊断与脱敏报告
@@ -92,6 +94,24 @@ lq port check
 lq --port-check
 ```
 
+配置导入 / 导出：
+
+```bash
+lq config export --full
+lq config export --redacted
+lq config inspect /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
+lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
+```
+
+转发端点输出：
+
+```bash
+lq output generate
+lq output json
+lq output html
+lq output qr
+```
+
 `status` 适合日常查看，轻量读取配置文件、systemd 状态和 nftables 表，不做 ping、nc、apt update，也不自动修改系统。`doctor` 用于详细诊断，会检查更多链路细节；交互模式下可按提示修复部分问题。
 
 如果升级脚本后看到 TCP/UDP DNAT 缺失，交互菜单中的“一键诊断 / 查看状态”会提示是否立即执行 `lq forward apply-relay --auto-fix-route` 重新渲染当前模板；非交互 `lq --doctor` 只提示命令，不会自动改规则。
@@ -119,6 +139,47 @@ EasyTier 组网端口和业务入口端口不是一回事：`8301` 用于 A/B �
 快照可能包含 EasyTier network secret，请按敏感文件妥善保存，不要公开上传。
 
 以下高危操作前会自动创建轻量快照，自动快照只保留最近 10 个：重启 relay、重新应用 nftables 转发规则、删除公网入口、批量禁用公网入口、删除转发目标、删除 PBR 规则、卸载全部、恢复快照前。
+
+## 配置导入 / 导出
+
+菜单路径：
+
+```text
+高级功能 -> 配置导入 / 导出
+```
+
+完整配置包用于迁移或恢复，默认输出到：
+
+```text
+/root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
+/root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz.sha256
+```
+
+完整配置包包含 `/etc/leikwan-toolkit` 和 EasyTier network secret。泄露后可能导致别人加入你的 EasyTier 网络，务必妥善保存。
+
+脱敏配置包用于排错或提交 issue：
+
+```bash
+lq config export --redacted
+```
+
+脱敏包会把 EasyTier secret、配对码 base64、token/password/secret 类字段替换为 `REDACTED`，不适合直接恢复运行。
+
+导入前会先 inspect 包内容、校验 sha256、校验 manifest，并自动创建 `auto-before-config-import-YYYYMMDD-HHMMSS.tar.gz` 快照。交互导入可选择：
+
+```text
+1. 仅导入 /etc/leikwan-toolkit 配置
+2. 导入配置并重新渲染 systemd / nftables / PBR
+3. 完整迁移恢复，包括 systemd service、nftables、PBR、sysctl
+```
+
+非交互示例：
+
+```bash
+lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz --mode config-only
+lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz --mode apply
+lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz --mode full --yes
+```
 
 ## 多公网入口
 
@@ -215,6 +276,33 @@ lq pbr sync-from-forwards
 lq pbr domain sync
 ```
 
+## 转发端点分享输出
+
+生成端点分享文件：
+
+```bash
+lq output generate
+```
+
+输出文件：
+
+```text
+/etc/leikwan-toolkit/outputs/forward-endpoints.txt
+/etc/leikwan-toolkit/outputs/forward-endpoints.tsv
+/etc/leikwan-toolkit/outputs/forward-endpoints.json
+/etc/leikwan-toolkit/outputs/forward-endpoints.html
+```
+
+HTML 是静态文件，不需要 Web 服务；JSON 适合脚本读取；TXT 适合直接复制给使用方。端点输出只包含公网入口、业务端口、PRIMARY / BACKUP、TCP / UDP endpoint 和后端摘要，不包含 EasyTier network secret，不包含配对码，也不是代理链接。
+
+如果系统安装了 `qrencode`，可以生成端点二维码：
+
+```bash
+lq output qr
+```
+
+二维码内容只是 `tcp://host:port` 或 `udp://host:port` 这种端点字符串。
+
 ## 常用命令
 
 ```bash
@@ -224,6 +312,10 @@ lq --status
 lq --doctor
 lq port check
 lq --port-check
+lq config export --redacted
+lq config list
+lq output generate
+lq output html
 lq pair status
 lq pbr show
 lq pbr sync-from-forwards
@@ -312,17 +404,19 @@ lq --uninstall
 
 - 配对码包含 EasyTier network secret，应视为敏感信息。
 - 配置快照可能包含 EasyTier network secret，应视为敏感文件。
+- 完整配置包包含 EasyTier network secret，应视为敏感文件。
+- 脱敏配置包和端点输出不包含 secret，但仍建议发布前快速检查。
 - 不要把配对码公开到工单、聊天记录或仓库。
 - debug report 会脱敏后输出，但仍建议人工检查后再发送。
 - 本工具只管理组网和四层转发，不保存代理协议链接，不管理后端业务认证。
 
 ## Release
 
-当前正式版本：`1.1.2`
+当前正式版本：`1.2.0`
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.1.2.tar.gz
-leikwan-toolkit-1.1.2.tar.gz.sha256
+leikwan-toolkit-1.2.0.tar.gz
+leikwan-toolkit-1.2.0.tar.gz.sha256
 ```
