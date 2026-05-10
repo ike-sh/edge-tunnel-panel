@@ -1,12 +1,29 @@
 # 故障排查
 
-Leikwan Toolkit 1.0.6 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.0.7 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
 ```
 
 ## 一键诊断
+
+日常查看先用轻量状态总览：
+
+```bash
+lq status
+lq --status
+```
+
+状态总览只读取配置、systemd 和 nftables，不做 ping、nc、apt update，也不会修改系统。它会显示最近一次 apply / doctor / status 缓存，缓存文件位于：
+
+```text
+/etc/leikwan-toolkit/status/last-apply.env
+/etc/leikwan-toolkit/status/last-doctor.env
+/etc/leikwan-toolkit/status/last-status.env
+```
+
+需要详细排障时再执行：
 
 ```bash
 lq --doctor
@@ -46,6 +63,17 @@ relay 重启后 easytier-cli 的 peer 列表可能短时间未刷新。脚本会
 
 不要把 EasyTier 白名单端口误填为业务入口端口。
 
+遇到端口占用或 DNAT 不一致时，先运行：
+
+```bash
+lq port check
+lq --port-check
+```
+
+端口预检会检查 EasyTier 端口、业务入口端口、本机监听和 nftables dport。它只读，不修改系统。新增入口或转发目标时，脚本也会拦截重复端口并允许重新输入。
+
+如果业务入口端口池没有可推荐端口，会提示清理旧转发目标或调整端口池。
+
 ## 终端显示
 
 窄终端会自动切换为紧凑列表，避免中英文混排导致表格错位。可用 `LEIKWAN_COMPACT=1 lq` 强制紧凑显示；调试输出时可用 `LEIKWAN_NO_CLEAR=1 lq` 禁用清屏。
@@ -53,6 +81,22 @@ relay 重启后 easytier-cli 的 peer 列表可能短时间未刷新。脚本会
 ## MSS clamp
 
 MSS clamp 用于提高 EasyTier/tun 场景下 TCP 转发稳定性。doctor 和状态页面只检测，不自动修改；应用 A 侧端口池或 B 侧转发规则时会重新渲染 nftables，并明确输出是否自动启用 MSS clamp。
+
+## 快照与回滚
+
+菜单路径：
+
+```text
+高级功能 -> 配置快照 / 回滚
+```
+
+快照可能包含 EasyTier network secret，排障转交前必须确认保存范围。高危操作前会自动创建轻量快照，自动快照保存在：
+
+```text
+/etc/leikwan-toolkit/snapshots/auto/
+```
+
+自动快照只保留最近 10 个。恢复快照前会二次确认，恢复后会询问是否立即 reload systemd 并重启相关服务。
 
 ## pending reservation
 

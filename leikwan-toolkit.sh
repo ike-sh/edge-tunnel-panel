@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.0.6"
+TOOL_VERSION="1.0.7"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -14,6 +14,10 @@ LOG_DISABLED=0
 MENU_ACTION_PAUSE_DONE=0
 DOCTOR_INTERACTIVE_FIX=0
 APPLY_NFT_LAST_STATUS=""
+REPORT_WARN_COUNT=0
+REPORT_FAIL_COUNT=0
+PORT_CHECK_RESULT="ok"
+STATUS_OVERVIEW_RESULT="ok"
 
 LOG_FILE="/var/log/leikwan-toolkit.log"
 STATE_DIR="/etc/leikwan-toolkit"
@@ -29,6 +33,9 @@ ENTRIES_DIR="${STATE_DIR}/entries"
 FORWARDS_DIR="${STATE_DIR}/forwards"
 PBR_DIR="${STATE_DIR}/pbr"
 EASYTIER_DIR="${STATE_DIR}/easytier"
+STATUS_DIR="${STATE_DIR}/status"
+SNAPSHOT_DIR="${STATE_DIR}/snapshots"
+AUTO_SNAPSHOT_DIR="${SNAPSHOT_DIR}/auto"
 REPORT_FILE="/root/leikwan-debug-report.txt"
 APPLY_RELAY_LOG="/root/lq-apply-relay.log"
 
@@ -618,8 +625,12 @@ ${PROJECT_NAME} ${TOOL_VERSION}
 
 用法：
   sudo bash leikwan-toolkit.sh
+  sudo bash leikwan-toolkit.sh status
+  sudo bash leikwan-toolkit.sh --status
   sudo bash leikwan-toolkit.sh --doctor
   sudo bash leikwan-toolkit.sh --doctor --verbose
+  sudo bash leikwan-toolkit.sh port check
+  sudo bash leikwan-toolkit.sh --port-check
   sudo bash leikwan-toolkit.sh pair relay-init
   sudo bash leikwan-toolkit.sh pair entry-join [pairing-file|-]
   sudo bash leikwan-toolkit.sh pair relay-join [pairing-file|-]
@@ -690,7 +701,7 @@ migrate_legacy_paths() {
 ensure_base_dirs() {
   if (( DRY_RUN == 0 )); then
     migrate_legacy_paths
-    install -d -m 700 "$STATE_DIR" "$ENTRY_DIR" "$ENTRIES_DIR" "$FORWARDS_DIR" "$OUTPUT_DIR" "$NFT_DIR" "$PBR_DIR" "$EASYTIER_DIR"
+    install -d -m 700 "$STATE_DIR" "$ENTRY_DIR" "$ENTRIES_DIR" "$FORWARDS_DIR" "$OUTPUT_DIR" "$NFT_DIR" "$PBR_DIR" "$EASYTIER_DIR" "$STATUS_DIR" "$SNAPSHOT_DIR" "$AUTO_SNAPSHOT_DIR"
   fi
 }
 
@@ -775,6 +786,49 @@ env_file_get() {
       exit
     }
   ' "$file" 2>/dev/null || true
+}
+
+status_now() {
+  date '+%F %T'
+}
+
+write_status_cache() {
+  local kind="$1" result="$2" action="${3:-}" file prefix
+  (( DRY_RUN == 1 )) && return 0
+  [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
+  mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
+  case "$kind" in
+    apply) file="${STATUS_DIR}/last-apply.env"; prefix="LAST_APPLY" ;;
+    doctor) file="${STATUS_DIR}/last-doctor.env"; prefix="LAST_DOCTOR" ;;
+    status) file="${STATUS_DIR}/last-status.env"; prefix="LAST_STATUS" ;;
+    *) return 0 ;;
+  esac
+  {
+    printf '%s_TIME=%s\n' "$prefix" "$(status_now)"
+    [[ -n "$action" ]] && printf '%s_ACTION=%s\n' "$prefix" "$action"
+    printf '%s_RESULT=%s\n' "$prefix" "$result"
+    printf '%s_VERSION=%s\n' "$prefix" "$TOOL_VERSION"
+  } >"$file"
+  chmod 600 "$file" 2>/dev/null || true
+}
+
+status_result_from_counts() {
+  if (( REPORT_FAIL_COUNT > 0 )); then
+    printf 'fail'
+  elif (( REPORT_WARN_COUNT > 0 )); then
+    printf 'warn'
+  else
+    printf 'ok'
+  fi
+}
+
+status_result_display() {
+  case "${1,,}" in
+    ok) printf 'OK' ;;
+    warn) printf 'WARN' ;;
+    fail) printf 'FAIL' ;;
+    *) printf '%s' "${1:-unknown}" ;;
+  esac
 }
 
 ensure_nc_for_test() {
@@ -1955,7 +2009,7 @@ entry_pool_for_prompt() {
 next_available_forward_entry_port() {
   local start="$1" end="$2" port
   for ((port=start; port<=end; port++)); do
-    if ! forwards_rows | awk -F'\t' -v p="$port" '$2==p {found=1} END{exit !found}'; then
+    if forward_entry_port_available_for_recommend "$port"; then
       printf '%s' "$port"
       return 0
     fi
@@ -1964,10 +2018,17 @@ next_available_forward_entry_port() {
 }
 
 prompt_forward_entry_port() {
-  local current_name="${1:-}" current_port="${2:-}" kind start end recommended default prompt value used_by
+  local current_name="${1:-}" current_port="${2:-}" kind start end recommended default prompt value conflict
   IFS=$'\t' read -r kind start end <<<"$(entry_pool_for_prompt)"
   recommended="$(next_available_forward_entry_port "$start" "$end" 2>/dev/null || true)"
-  [[ -n "$recommended" ]] || recommended="$start"
+  if [[ -z "$recommended" ]]; then
+    if [[ -n "$current_port" ]] && port_in_range "$current_port" "$start" "$end"; then
+      recommended="$current_port"
+    else
+      fail "业务入口端口池已无可推荐端口，请调整端口池或清理旧转发目标。"
+      return 1
+    fi
+  fi
   default="${current_port:-$recommended}"
   if [[ "$kind" == "pool" ]]; then
     prompt="公网入口端口，入口端口池 ${start}-${end}，推荐 ${recommended}"
@@ -1984,9 +2045,11 @@ prompt_forward_entry_port() {
       warn "公网入口端口 ${value} 不在 ${start}-${end} 范围内。"
       continue
     fi
-    used_by="$(forwards_rows | awk -F'\t' -v p="$value" -v n="$current_name" '$2==p && $1!=n {print $1; exit}')"
-    if [[ -n "$used_by" ]]; then
-      warn "公网入口端口 ${value} 已被转发目标 ${used_by} 使用。"
+    conflict="$(forward_entry_port_conflict_message "$value" "$current_name" "$current_port" || true)"
+    if [[ -n "$conflict" ]]; then
+      warn "端口 ${value} ${conflict}。"
+      prompt_yes_no "是否重新输入？" "Y" || return 1
+      default="$recommended"
       continue
     fi
     printf '%s' "$value"
@@ -2046,6 +2109,7 @@ enabled_forwards_count() {
 }
 
 nft_project_table_text() {
+  command -v nft >/dev/null 2>&1 || return 0
   nft list table inet leikwan_forward 2>/dev/null || true
 }
 
@@ -2131,6 +2195,130 @@ nft_has_mss_clamp() {
     }
     END { exit !found }
   '
+}
+
+ss_port_listening() {
+  local proto="$1" port="$2" opt
+  command -v ss >/dev/null 2>&1 || return 1
+  case "$proto" in
+    tcp) opt="-lntH" ;;
+    udp) opt="-lunH" ;;
+    *) return 1 ;;
+  esac
+  ss "$opt" 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END{exit !found}'
+}
+
+port_listening_any() {
+  local port="$1"
+  ss_port_listening tcp "$port" || ss_port_listening udp "$port"
+}
+
+nft_ruleset_text() {
+  command -v nft >/dev/null 2>&1 || return 0
+  nft list ruleset 2>/dev/null || true
+}
+
+nft_text_has_dport() {
+  local port="$1" proto="${2:-}" source="${3:-project}" text
+  if [[ "$source" == "ruleset" ]]; then
+    text="$(nft_ruleset_text)"
+  else
+    text="$(nft_project_table_text)"
+  fi
+  awk -v p="$port" -v proto="$proto" '
+    function token_match(t, r) {
+      gsub(/[,{};]/, " ", t)
+      if (t ~ /^[0-9]+$/) return t == p
+      if (t ~ /^[0-9]+-[0-9]+$/) {
+        split(t, r, "-")
+        return p >= r[1] && p <= r[2]
+      }
+      return 0
+    }
+    {
+      if (proto != "" && $0 !~ proto "[[:space:]]+dport") next
+      n = split($0, parts, /dport[[:space:]]+/)
+      for (i = 2; i <= n; i++) {
+        rest = parts[i]
+        gsub(/[{};,]/, " ", rest)
+        split(rest, tokens, /[[:space:]]+/)
+        for (j in tokens) {
+          if (token_match(tokens[j])) found = 1
+        }
+      }
+    }
+    END { exit !found }
+  ' <<<"$text"
+}
+
+nft_project_has_dport() {
+  nft_text_has_dport "$1" "${2:-}" project
+}
+
+nft_ruleset_has_dport() {
+  nft_text_has_dport "$1" "${2:-}" ruleset
+}
+
+easytier_port_conflict_message() {
+  local port="$1" current_name="${2:-}" name _public_host _et_ip _proto _port _weight _enabled
+  local pending_name _pending_ip _pending_proto _pending_port _pending_created_at
+  if [[ -n "$current_name" ]] && entries_rows | awk -F'\t' -v n="$current_name" -v p="$port" '$1==n && $5==p {found=1} END{exit !found}'; then
+    return 1
+  fi
+  while IFS=$'\t' read -r name _public_host _et_ip _proto _port _weight _enabled; do
+    [[ "$_port" == "$port" && "$name" != "$current_name" ]] || continue
+    printf '已被公网入口 %s 使用' "$(entry_label "$name")"
+    return 0
+  done < <(entries_rows)
+  while IFS=$'\t' read -r pending_name _pending_ip _pending_proto _pending_port _pending_created_at; do
+    [[ "$_pending_port" == "$port" && "$pending_name" != "$current_name" ]] || continue
+    printf '已被 pending 公网入口 %s 预占' "$(entry_label "$pending_name")"
+    return 0
+  done < <(pending_entries_rows)
+  if port_listening_any "$port"; then
+    printf '已被本机监听进程占用'
+    return 0
+  fi
+  if nft_ruleset_has_dport "$port"; then
+    printf '已出现在 nftables dport 规则中'
+    return 0
+  fi
+  return 1
+}
+
+easytier_port_available_for_recommend() {
+  local port="$1" conflict
+  is_fast_port "$port" || return 1
+  conflict="$(easytier_port_conflict_message "$port" "" || true)"
+  [[ -z "$conflict" ]]
+}
+
+forward_entry_port_conflict_message() {
+  local port="$1" current_name="${2:-}" current_port="${3:-}"
+  local name _port _target_host _target_port _out_iface _route_table _enabled _comment
+  while IFS=$'\t' read -r name _port _target_host _target_port _out_iface _route_table _enabled _comment; do
+    [[ "$_port" == "$port" && "$name" != "$current_name" ]] || continue
+    printf '已被转发目标 %s 使用' "$name"
+    return 0
+  done < <(forwards_rows)
+  if [[ "$port" == "$current_port" ]]; then
+    return 1
+  fi
+  if port_listening_any "$port"; then
+    printf '已被本机监听进程占用'
+    return 0
+  fi
+  if nft_ruleset_has_dport "$port"; then
+    printf '已出现在 nftables dport 规则中'
+    return 0
+  fi
+  return 1
+}
+
+forward_entry_port_available_for_recommend() {
+  local port="$1" conflict
+  conflict="$(forward_entry_port_conflict_message "$port" "" "" || true)"
+  [[ -z "$conflict" ]]
 }
 
 entry_exists() {
@@ -2307,13 +2495,13 @@ next_entry_easytier_port() {
   for ((; slot<=253; slot++)); do
     port=$((DEFAULT_EASYTIER_PORT + slot - 1))
     (( port <= FAST_PORT_RANGE_END )) || break
-    if ! entry_easytier_port_reserved "$port"; then
+    if easytier_port_available_for_recommend "$port"; then
       printf '%s' "$port"
       return 0
     fi
   done
   for ((port=FAST_PORT_RANGE_START; port<DEFAULT_EASYTIER_PORT; port++)); do
-    if ! entry_easytier_port_reserved "$port"; then
+    if easytier_port_available_for_recommend "$port"; then
       printf '%s' "$port"
       return 0
     fi
@@ -2369,7 +2557,7 @@ relay_network_env_ready() {
 }
 
 validate_entry_official_fields() {
-  local name="$1" et_ip="$2" port="$3" current_name="${4:-}"
+  local name="$1" et_ip="$2" port="$3" current_name="${4:-}" used_by
   [[ -n "$name" ]] || { warn "公网入口名称不能为空。"; return 1; }
   [[ -n "$et_ip" ]] || { warn "EasyTier IP 不能为空。"; return 1; }
   if ! is_ipv4 "$et_ip"; then
@@ -2390,15 +2578,17 @@ validate_entry_official_fields() {
     warn "EasyTier IP 已被使用：${et_ip}"
     return 1
   fi
-  if entries_rows | awk -F'\t' -v p="$port" -v cur="$current_name" '$5==p && $1!=cur {found=1} END{exit !found}'; then
-    warn "EasyTier 端口已被使用：${port}"
+  used_by="$(entries_rows | awk -F'\t' -v p="$port" -v cur="$current_name" '$5==p && $1!=cur {print $1; exit}')"
+  if [[ -n "$used_by" ]]; then
+    warn "端口 ${port} 已被公网入口 $(entry_label "$used_by") 使用。"
+    prompt_yes_no "是否重新输入？" "Y" || return 1
     return 1
   fi
   return 0
 }
 
 validate_unique_entry_fields() {
-  local name="$1" et_ip="$2" port="$3" current_name="${4:-}"
+  local name="$1" et_ip="$2" port="$3" current_name="${4:-}" conflict used_by
   validate_entry_official_fields "$name" "$et_ip" "$port" "$current_name" || return 1
   if pending_entries_rows | awk -F'\t' -v n="$name" '$1==n {found=1} END{exit !found}'; then
     warn "公网入口名称已被未完成接入码预占：${name}"
@@ -2408,8 +2598,16 @@ validate_unique_entry_fields() {
     warn "EasyTier IP 已被未完成接入码预占：${et_ip}"
     return 1
   fi
-  if pending_entries_rows | awk -F'\t' -v p="$port" '$4==p {found=1} END{exit !found}'; then
-    warn "EasyTier 端口已被未完成接入码预占：${port}"
+  used_by="$(pending_entries_rows | awk -F'\t' -v p="$port" '$4==p {print $1; exit}')"
+  if [[ -n "$used_by" ]]; then
+    warn "端口 ${port} 已被 pending 公网入口 $(entry_label "$used_by") 预占。"
+    prompt_yes_no "是否重新输入？" "Y" || return 1
+    return 1
+  fi
+  conflict="$(easytier_port_conflict_message "$port" "$current_name" || true)"
+  if [[ -n "$conflict" ]]; then
+    warn "端口 ${port} ${conflict}。"
+    prompt_yes_no "是否重新输入？" "Y" || return 1
     return 1
   fi
   return 0
@@ -2780,6 +2978,7 @@ delete_entry() {
   local name tmp
   name="$(select_entry_name)" || return 0
   prompt_yes_no "确认删除入口 ${name}？" "N" || return 0
+  auto_snapshot_or_confirm "delete-entry" || return 0
   tmp="$(mktemp)"
   awk -F'\t' -v n="$name" '$1==n {next} {print}' "$ENTRIES_TSV" >"$tmp"
   write_file "$ENTRIES_TSV" "$(cat "$tmp")" 600
@@ -2873,6 +3072,7 @@ bulk_entry_enable_menu() {
       2)
         warn "禁用所有入口会导致 relay 没有公网入口 peer。"
         prompt_yes_no "是否继续？" "N" || return 0
+        auto_snapshot_or_confirm "bulk-disable-entries" || return 0
         content="$(entries_rows | awk -F'\t' 'BEGIN{OFS="\t"} {$7="false"; print}')"
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已禁用所有公网入口。"
@@ -2882,6 +3082,7 @@ bulk_entry_enable_menu() {
         ;;
       3)
         name="$(select_entry_name all "请选择要保留 enabled 的编号或名称，直接回车返回")" || return 0
+        auto_snapshot_or_confirm "bulk-disable-entries" || return 0
         content="$(entries_rows | awk -F'\t' -v n="$name" 'BEGIN{OFS="\t"} {$7=($1==n ? "true" : "false"); print}')"
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已只保留公网入口 enabled：${name}"
@@ -3119,6 +3320,7 @@ apply_easytier_relay_service() {
       return 0
     fi
   fi
+  auto_snapshot_or_confirm "restart-relay" || return 0
   install_easytier_binary
   service="$(render_relay_service)" || return 1
   write_file "$EASYTIER_RELAY_SERVICE" "$service" 644
@@ -3428,7 +3630,7 @@ add_forward() {
   ensure_tsv_files
   local name entry_port target_host target_port out_iface route_table enabled comment row target_ip route_defaults existing_name existing_port tcp_rc
   name="$(safe_name "$(prompt_value "转发名称" "service-a")")"
-  entry_port="$(prompt_forward_entry_port "$name")"
+  entry_port="$(prompt_forward_entry_port "$name")" || return 0
   if reserved_entry_port "$entry_port"; then
     warn "该端口属于保留/常用端口：${entry_port}"
     prompt_yes_no "确定强制使用？" "N" || return 0
@@ -3482,6 +3684,7 @@ delete_forward() {
   name="$(safe_name "$name")"
   forward_exists "$name" || { warn "转发不存在。"; return 0; }
   prompt_yes_no "确认删除转发 ${name}？" "N" || return 0
+  auto_snapshot_or_confirm "delete-forward" || return 0
   tmp="$(mktemp)"
   awk -F'\t' -v n="$name" '$1==n {next} {print}' "$FORWARDS_TSV" >"$tmp"
   write_file "$FORWARDS_TSV" "$(cat "$tmp")" 600
@@ -3522,7 +3725,7 @@ edit_forward() {
   row="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print; found=1} END{exit !found}')"
   [[ -n "$row" ]] || { warn "转发不存在。"; return 0; }
   IFS=$'\034' read -r old_name old_port old_host old_tport old_iface old_route old_enabled old_comment <<<"$(awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} {print $1,$2,$3,$4,$5,$6,$7,$8}' <<<"$row")"
-  entry_port="$(prompt_forward_entry_port "$old_name" "$old_port")"
+  entry_port="$(prompt_forward_entry_port "$old_name" "$old_port")" || return 0
   warn_if_forward_port_outside_expose "$entry_port"
   if [[ "$entry_port" != "$old_port" ]] && forwards_rows | awk -F'\t' -v p="$entry_port" '$2==p {found=1} END{exit !found}'; then
     fail "entry_port 已存在：${entry_port}"
@@ -3882,6 +4085,7 @@ entry_expose_range() {
   need_root_unless_dry_run
   ensure_base_dirs
   local start="$ENTRY_EXPOSE_START_DEFAULT" end="$ENTRY_EXPOSE_END_DEFAULT" relay_ip="" apply="ask" arg range parsed
+  local conflict_ports
   while (($# > 0)); do
     arg="$1"
     case "$arg" in
@@ -3911,6 +4115,26 @@ entry_expose_range() {
   if ! is_port "$start" || ! is_port "$end" || (( start > end )); then
     fail "入口端口范围非法：${start}-${end}"
     return 1
+  fi
+  conflict_ports=""
+  if command -v ss >/dev/null 2>&1; then
+    conflict_ports="$({
+      ss -lntH 2>/dev/null
+      ss -lunH 2>/dev/null
+    } | awk -v s="$start" -v e="$end" '
+      {
+        p=$4
+        sub(/^.*:/, "", p)
+        if (p ~ /^[0-9]+$/ && p >= s && p <= e) seen[p]=1
+      }
+      END {
+        for (p in seen) print p
+      }
+    ' | sort -n | paste -sd, -)"
+  fi
+  if [[ -n "$conflict_ports" ]]; then
+    warn "入口端口池 ${start}-${end} 中发现本机监听端口：${conflict_ports}"
+    prompt_yes_no "是否继续配置端口池？" "N" || return 0
   fi
   is_ipv4 "${relay_ip:-$RELAY_ET_IP}" || { fail "Relay EasyTier IP 非法：${relay_ip:-$RELAY_ET_IP}"; return 1; }
   relay_ip="${relay_ip:-$RELAY_ET_IP}"
@@ -4066,6 +4290,10 @@ apply_nft_rules() {
       ;;
     *) fail "无法识别角色：${role}"; return 1 ;;
   esac
+  case "$role" in
+    leikwan-relay) auto_snapshot_or_confirm "apply-relay-nft" || return 1 ;;
+    cloud-entry) auto_snapshot_or_confirm "apply-entry-nft" || return 1 ;;
+  esac
   write_file "$NFT_RULE_FILE" "$content" 644
   write_file "$NFT_SERVICE" "$(render_nft_service)" 644
   (( DRY_RUN == 1 )) && return 0
@@ -4106,6 +4334,9 @@ apply_nft_rules() {
     return 1
   fi
   rm -f "$tmp" "$old" "$rollback"
+  if [[ "$role" == "leikwan-relay" ]]; then
+    write_status_cache apply ok "forward apply-relay"
+  fi
 }
 
 nft_project_table_exists() {
@@ -4506,6 +4737,7 @@ delete_pbr_rule() {
   fi
   IFS=$'\t' read -r line_no cidr table _source <<<"$selected"
   prompt_yes_no "确认删除 PBR 规则 ${cidr} -> ${table}？" "N" || return 0
+  auto_snapshot_or_confirm "delete-pbr-rule" || return 0
   tmp="$(mktemp)"
   awk -v del="$line_no" 'NR != del {print}' "$PBR_STATIC_CONF" >"$tmp"
   write_file "$PBR_STATIC_CONF" "$(cat "$tmp")" 600
@@ -4556,6 +4788,10 @@ generate_forward_outputs() {
 
 report() {
   local status="$1" msg="$2"
+  case "$status" in
+    WARN) REPORT_WARN_COUNT=$((REPORT_WARN_COUNT + 1)) ;;
+    FAIL) REPORT_FAIL_COUNT=$((REPORT_FAIL_COUNT + 1)) ;;
+  esac
   case "$status" in
     OK) echo "${GREEN}[OK]${RESET} ${msg}" ;;
     WARN) echo "${YELLOW}[WARN]${RESET} ${msg}" ;;
@@ -5005,6 +5241,8 @@ doctor_apt_sources() {
 
 doctor() {
   local role bbr_cc bbr_qdisc
+  REPORT_WARN_COUNT=0
+  REPORT_FAIL_COUNT=0
   role="$(detect_role)"
   bbr_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
   bbr_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
@@ -5023,6 +5261,329 @@ doctor() {
     report DEBUG "network.env=${NETWORK_ENV}"
     report DEBUG "nft=${NFT_RULE_FILE}"
   fi
+  write_status_cache doctor "$(status_result_from_counts)"
+}
+
+status_mark_result() {
+  case "$1" in
+    fail) STATUS_OVERVIEW_RESULT="fail" ;;
+    warn) [[ "$STATUS_OVERVIEW_RESULT" == "fail" ]] || STATUS_OVERVIEW_RESULT="warn" ;;
+  esac
+}
+
+status_cache_summary() {
+  local kind="$1" file prefix time result
+  case "$kind" in
+    apply) file="${STATUS_DIR}/last-apply.env"; prefix="LAST_APPLY" ;;
+    doctor) file="${STATUS_DIR}/last-doctor.env"; prefix="LAST_DOCTOR" ;;
+    status) file="${STATUS_DIR}/last-status.env"; prefix="LAST_STATUS" ;;
+    *) return 0 ;;
+  esac
+  time="$(env_file_get "$file" "${prefix}_TIME")"
+  result="$(env_file_get "$file" "${prefix}_RESULT")"
+  if [[ -n "$time" && -n "$result" ]]; then
+    printf '%s / %s' "$time" "$(status_result_display "$result")"
+  elif [[ -n "$time" ]]; then
+    printf '%s' "$time"
+  else
+    printf '-'
+  fi
+}
+
+systemd_active_state() {
+  local service="$1" state
+  if ! command -v systemctl >/dev/null 2>&1; then
+    printf 'unknown'
+    return 1
+  fi
+  state="$(systemctl is-active "$service" 2>/dev/null || true)"
+  printf '%s' "${state:-inactive}"
+  [[ "$state" == "active" ]]
+}
+
+status_nft_summary() {
+  local mode="$1" relay_ip="${2:-}" start="${3:-}" end="${4:-}" forwards_enabled="${5:-0}"
+  if ! command -v nft >/dev/null 2>&1; then
+    printf 'WARN，建议执行 lq --doctor'
+    status_mark_result warn
+    return 0
+  fi
+  if ! nft_project_table_exists; then
+    printf 'WARN，建议执行 lq --doctor'
+    status_mark_result warn
+    return 0
+  fi
+  case "$mode" in
+    cloud-entry)
+      if [[ -n "$relay_ip" && -n "$start" && -n "$end" ]] &&
+        nft_has_cloud_dnat tcp "$relay_ip" "${start}-${end}" &&
+        nft_has_cloud_dnat udp "$relay_ip" "${start}-${end}"; then
+        printf 'OK'
+      else
+        printf 'WARN，建议执行 lq --doctor'
+        status_mark_result warn
+      fi
+      ;;
+    leikwan-relay)
+      if (( forwards_enabled == 0 )) || nft_has_dnat_rules; then
+        printf 'OK'
+      else
+        printf 'WARN，建议执行 lq --doctor'
+        status_mark_result warn
+      fi
+      ;;
+    *)
+      printf 'OK'
+      ;;
+  esac
+}
+
+status_mss_summary() {
+  if ! mss_clamp_enabled; then
+    printf 'disabled'
+    return 0
+  fi
+  if nft_has_mss_clamp; then
+    printf 'OK'
+  else
+    printf 'WARN，建议执行 lq forward apply-relay --auto-fix-route'
+    status_mark_result warn
+  fi
+}
+
+status_overview_relay() {
+  local service_state relay_ip entries_total entries_enabled forwards_total forwards_enabled
+  local primary_row primary_name primary_proto primary_port pbr_count last_apply last_doctor
+  service_state="$(systemd_active_state "${EASYTIER_RELAY_SERVICE_NAME}.service" || true)"
+  [[ "$service_state" == "active" ]] || status_mark_result warn
+  relay_ip="$(current_relay_et_ip)"
+  entries_total="$(entries_rows | awk 'END{print NR+0}')"
+  entries_enabled="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  forwards_total="$(forwards_rows | awk 'END{print NR+0}')"
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  primary_row="$(enabled_entries_sorted | awk -F'\t' 'BEGIN{OFS=sprintf("%c", 28)} NR==1 {print $1,$4,$5; exit}')"
+  if [[ -n "$primary_row" ]]; then
+    IFS=$'\034' read -r primary_name primary_proto primary_port <<<"$primary_row"
+  else
+    primary_name="无"
+    primary_proto="-"
+    primary_port="-"
+    status_mark_result warn
+  fi
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  last_apply="$(status_cache_summary apply)"
+  last_doctor="$(status_cache_summary doctor)"
+  echo "角色: leikwan-relay"
+  echo "EasyTier: relay ${service_state}"
+  echo "Relay IP: ${relay_ip}"
+  echo "公网入口: ${entries_enabled} enabled / ${entries_total} total"
+  if [[ "$primary_name" == "无" ]]; then
+    echo "主入口: 无"
+  else
+    echo "主入口: $(entry_label "$primary_name") $(easytier_protocols_display "$primary_proto")/${primary_port}"
+  fi
+  echo "转发目标: ${forwards_enabled} enabled / ${forwards_total} total"
+  echo "PBR 规则: ${pbr_count}"
+  echo "nftables: $(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")"
+  echo "MSS clamp: $(status_mss_summary)"
+  echo "最近应用: ${last_apply}"
+  echo "最近诊断: ${last_doctor}"
+}
+
+status_overview_entry() {
+  local entry_name display_name et_ip proto port service_name service_state start end relay_ip last_doctor
+  entry_name="$(env_file_get "$NETWORK_ENV" ENTRY_NAME)"
+  [[ -n "$entry_name" ]] || entry_name="$(env_file_get "$ENTRY_PAIRING_FILE" ENTRY_NAME)"
+  display_name="$(env_file_get "$NETWORK_ENV" ENTRY_DISPLAY_NAME)"
+  [[ -n "$display_name" ]] || display_name="$(env_file_get "$ENTRY_PAIRING_FILE" ENTRY_DISPLAY_NAME)"
+  [[ -n "$entry_name" ]] || entry_name="entry"
+  [[ -n "$display_name" ]] || display_name="$(entry_label "$entry_name")"
+  et_ip="$(current_entry_et_ip)"
+  proto="$(easytier_protocols_from_env "$NETWORK_ENV" EASYTIER_PROTOCOLS EASYTIER_PROTOCOL "$EASYTIER_PROTOCOLS_DEFAULT" 2>/dev/null || printf '%s' "$EASYTIER_PROTOCOLS_DEFAULT")"
+  port="$(easytier_port_from_env "$NETWORK_ENV" "$proto" EASYTIER_TCP_PORT EASYTIER_UDP_PORT EASYTIER_LISTEN_PORT 2>/dev/null || true)"
+  [[ -n "$port" ]] || port="$(easytier_port_from_env "$ENTRY_PAIRING_FILE" "$proto" EASYTIER_TCP_PORT EASYTIER_UDP_PORT EASYTIER_PORT 2>/dev/null || printf '%s' "$EASYTIER_PORT_DEFAULT")"
+  service_name="$(entry_service_name "$entry_name").service"
+  service_state="$(systemd_active_state "$service_name" || true)"
+  [[ "$service_state" == "active" ]] || status_mark_result warn
+  start="$(entry_expose_start)"
+  end="$(entry_expose_end)"
+  relay_ip="$(entry_expose_relay_ip)"
+  last_doctor="$(status_cache_summary doctor)"
+  echo "角色: cloud-entry"
+  echo "入口名称: ${display_name}"
+  echo "EasyTier IP: ${et_ip}"
+  echo "EasyTier service: ${service_state}"
+  echo "监听: $(easytier_protocols_display "$proto")/${port}"
+  echo "公网入口端口池: ${start}-${end}"
+  echo "nftables: $(status_nft_summary cloud-entry "$relay_ip" "$start" "$end" 0)"
+  echo "MSS clamp: $(status_mss_summary)"
+  echo "最近诊断: ${last_doctor}"
+}
+
+status_overview() {
+  local role
+  STATUS_OVERVIEW_RESULT="ok"
+  role="$(detect_role)"
+  echo "Leikwan 状态总览"
+  echo "----------------------------------------"
+  echo "版本: ${TOOL_VERSION}"
+  case "$role" in
+    leikwan-relay) status_overview_relay ;;
+    cloud-entry) status_overview_entry ;;
+    *)
+      echo "角色: unknown"
+      echo "nftables: $(status_nft_summary unknown)"
+      echo "MSS clamp: $(status_mss_summary)"
+      status_mark_result warn
+      ;;
+  esac
+  echo "整体状态: $(status_result_display "$STATUS_OVERVIEW_RESULT")"
+  write_status_cache status "$STATUS_OVERVIEW_RESULT"
+  if [[ "$STATUS_OVERVIEW_RESULT" == "ok" ]]; then
+    echo "[OK] 当前状态正常。"
+  else
+    echo "[INFO] 建议执行：lq --doctor"
+  fi
+}
+
+port_check_mark() {
+  case "$1" in
+    fail) PORT_CHECK_RESULT="fail" ;;
+    warn) [[ "$PORT_CHECK_RESULT" == "fail" ]] || PORT_CHECK_RESULT="warn" ;;
+  esac
+}
+
+port_check_line() {
+  local level="$1" msg="$2"
+  case "$level" in
+    OK) printf '[OK] %s\n' "$msg" ;;
+    WARN) printf '[WARN] %s\n' "$msg"; port_check_mark warn ;;
+    FAIL) printf '[FAIL] %s\n' "$msg"; port_check_mark fail ;;
+    INFO) printf '[INFO] %s\n' "$msg" ;;
+  esac
+}
+
+check_easytier_ports() {
+  local any=0 name _public_host _et_ip proto port _weight enabled count conflict
+  local pending_name _pending_ip _pending_proto pending_port _pending_created_at
+  echo "EasyTier 端口:"
+  while IFS=$'\t' read -r name _public_host _et_ip proto port _weight enabled; do
+    any=1
+    count="$(entries_rows | awk -F'\t' -v p="$port" '$5==p{c++} END{print c+0}')"
+    if [[ "$enabled" != "true" ]]; then
+      port_check_line WARN "${port} ${name} 已 disabled，但端口仍在历史配置中"
+    elif (( count > 1 )); then
+      port_check_line WARN "${port} ${name} 与其它公网入口重复"
+    elif ! is_fast_port "$port"; then
+      port_check_line WARN "${port} ${name} $(easytier_protocols_display "$proto")，不在 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END} 白名单"
+    else
+      conflict="$(easytier_port_conflict_message "$port" "$name" || true)"
+      if [[ -n "$conflict" ]]; then
+        port_check_line WARN "${port} ${name} ${conflict}"
+      else
+        port_check_line OK "${port} ${name} $(easytier_protocols_display "$proto")，位于 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END} 白名单"
+      fi
+    fi
+  done < <(entries_rows)
+  while IFS=$'\t' read -r pending_name _pending_ip _pending_proto pending_port _pending_created_at; do
+    any=1
+    if is_fast_port "$pending_port"; then
+      port_check_line WARN "${pending_port} ${pending_name} pending 预占，尚未完成接入"
+    else
+      port_check_line WARN "${pending_port} ${pending_name} pending 预占且不在白名单"
+    fi
+  done < <(pending_entries_rows)
+  (( any == 1 )) || port_check_line INFO "未发现公网入口或 pending 接入码。"
+  echo
+}
+
+check_forward_ports() {
+  local any=0 name entry_port _target_host _target_port _out_iface _route_table enabled _comment count
+  local _kind start end
+  IFS=$'\t' read -r _kind start end <<<"$(entry_pool_for_prompt)"
+  echo "业务入口端口:"
+  while IFS=$'\t' read -r name entry_port _target_host _target_port _out_iface _route_table enabled _comment; do
+    any=1
+    count="$(forwards_rows | awk -F'\t' -v p="$entry_port" '$2==p{c++} END{print c+0}')"
+    if (( count > 1 )); then
+      port_check_line WARN "${entry_port} ${name} 与其它转发目标重复"
+    elif [[ "$enabled" != "true" ]]; then
+      port_check_line WARN "${entry_port} ${name} 已 disabled，但端口仍在历史配置中"
+    elif ! port_in_range "$entry_port" "$start" "$end"; then
+      port_check_line WARN "${entry_port} ${name} 不在入口端口池 ${start}-${end}"
+    else
+      port_check_line OK "${entry_port} ${name}"
+    fi
+  done < <(forwards_rows)
+  (( any == 1 )) || port_check_line INFO "未发现转发目标。"
+  echo
+}
+
+check_listening_conflicts() {
+  local name entry_port _target_host _target_port _out_iface _route_table _enabled _comment conflict=0
+  echo "本机监听:"
+  if ! command -v ss >/dev/null 2>&1; then
+    port_check_line INFO "未找到 ss，跳过本机监听检查。"
+    echo
+    return 0
+  fi
+  while IFS=$'\t' read -r name entry_port _target_host _target_port _out_iface _route_table _enabled _comment; do
+    if port_listening_any "$entry_port"; then
+      conflict=1
+      port_check_line WARN "${entry_port} ${name} 已被本机监听进程占用"
+    fi
+  done < <(forwards_rows)
+  (( conflict == 1 )) || port_check_line OK "未发现业务入口端口被其它进程监听"
+  if ss_port_listening tcp 22; then
+    port_check_line INFO "22/tcp ssh 正常，未纳入 leikwan 管理"
+  fi
+  echo
+}
+
+check_nft_port_conflicts() {
+  local name entry_port _target_host _target_port _out_iface _route_table enabled _comment
+  local any=0 tcp_ok udp_ok
+  echo "nftables:"
+  if ! command -v nft >/dev/null 2>&1; then
+    port_check_line WARN "未找到 nft，跳过 nftables dport 检查。"
+    echo
+    return 0
+  fi
+  if ! nft_project_table_exists; then
+    port_check_line WARN "未发现项目 nftables 表 inet leikwan_forward"
+    echo
+    return 0
+  fi
+  while IFS=$'\t' read -r name entry_port _target_host _target_port _out_iface _route_table enabled _comment; do
+    [[ "$enabled" == "true" ]] || continue
+    any=1
+    tcp_ok=0
+    udp_ok=0
+    nft_project_has_dport "$entry_port" tcp && tcp_ok=1
+    nft_project_has_dport "$entry_port" udp && udp_ok=1
+    if (( tcp_ok == 1 && udp_ok == 1 )); then
+      port_check_line OK "${entry_port} tcp/udp DNAT 存在"
+    elif (( tcp_ok == 1 )); then
+      port_check_line WARN "${entry_port} tcp DNAT 存在，udp DNAT 缺失"
+    elif (( udp_ok == 1 )); then
+      port_check_line WARN "${entry_port} udp DNAT 存在，tcp DNAT 缺失"
+    else
+      port_check_line WARN "${entry_port} ${name} tcp/udp DNAT 未发现"
+    fi
+  done < <(forwards_rows)
+  (( any == 1 )) || port_check_line INFO "没有 enabled 转发目标需要检查 DNAT。"
+  echo
+}
+
+port_check() {
+  PORT_CHECK_RESULT="ok"
+  echo "端口冲突预检"
+  echo "----------------------------------------"
+  check_easytier_ports
+  check_forward_ports
+  check_listening_conflicts
+  check_nft_port_conflicts
+  echo "整体状态: $(status_result_display "$PORT_CHECK_RESULT")"
 }
 
 run_doctor_interactive() {
@@ -5364,6 +5925,7 @@ uninstall_new_mode() {
   echo "- ${NFT_RULE_FILE} / ${NFT_SERVICE}"
   prompt_yes_no "第一次确认：继续卸载全部？" "N" || return 0
   prompt_yes_no "第二次确认：确实删除本脚本生成的组件？" "N" || return 0
+  auto_snapshot_or_confirm "uninstall-all" || return 0
 
   LOG_DISABLED=1
   set +e
@@ -5416,43 +5978,251 @@ uninstall_new_mode() {
   rm -f "$LOG_FILE" "$OLD_LOG_FILE" 2>/dev/null || true
 }
 
-backup_snapshot() {
+snapshot_timestamp() {
+  date '+%Y%m%d-%H%M%S'
+}
+
+snapshot_copy_path() {
+  local stage="$1" path="$2" dest
+  [[ -e "$path" ]] || return 0
+  dest="${stage}${path}"
+  mkdir -p "$(dirname "$dest")"
+  cp -a "$path" "$dest"
+}
+
+snapshot_collect_runtime_info() {
+  local stage="$1"
+  local info_dir="${stage}${STATE_DIR}/snapshot-info"
+  mkdir -p "$info_dir"
+  {
+    echo "leikwan-toolkit ${TOOL_VERSION}"
+    echo "created_at=$(status_now)"
+  } >"${info_dir}/manifest.txt"
+  if command -v nft >/dev/null 2>&1; then
+    nft list ruleset >"${info_dir}/nft-ruleset.txt" 2>&1 || true
+  else
+    echo "nft command not found" >"${info_dir}/nft-ruleset.txt"
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    ip rule show >"${info_dir}/ip-rule-show.txt" 2>&1 || true
+    ip route show table all >"${info_dir}/ip-route-show-table-all.txt" 2>&1 || true
+  else
+    echo "ip command not found" >"${info_dir}/ip-rule-show.txt"
+    echo "ip command not found" >"${info_dir}/ip-route-show-table-all.txt"
+  fi
+}
+
+create_snapshot_archive() {
+  local dest="$1" tmp stage svc
+  tmp="$(mktemp -d)"
+  stage="${tmp}/root"
+  mkdir -p "$stage"
+  if [[ -d "$STATE_DIR" ]]; then
+    tar --exclude='etc/leikwan-toolkit/snapshots' -C / -cf - etc/leikwan-toolkit 2>/dev/null | tar -C "$stage" -xf - 2>/dev/null || true
+  else
+    mkdir -p "${stage}${STATE_DIR}"
+  fi
+  snapshot_copy_path "$stage" "$EASYTIER_RELAY_SERVICE"
+  while IFS= read -r svc; do
+    snapshot_copy_path "$stage" "$svc"
+  done < <(find /etc/systemd/system -maxdepth 1 -type f -name 'easytier-entry-*.service' 2>/dev/null || true)
+  snapshot_copy_path "$stage" "$NFT_SERVICE"
+  snapshot_copy_path "$stage" "$FORWARD_SYSCTL"
+  snapshot_copy_path "$stage" "$BBR_SYSCTL_CONF"
+  snapshot_copy_path "$stage" "$PBR_RT_TABLES"
+  snapshot_collect_runtime_info "$stage"
+  mkdir -p "$(dirname "$dest")"
+  tar -czf "$dest" -C "$stage" .
+  rm -rf "$tmp"
+}
+
+create_snapshot() {
   need_root_unless_dry_run
   local dest
-  dest="${BACKUP_DIR}/leikwan-1.0-snapshot.$(date '+%Y%m%d-%H%M%S').tar.gz"
+  echo "[WARN] 快照可能包含 EasyTier network secret，请妥善保存。"
+  dest="${SNAPSHOT_DIR}/snapshot-$(snapshot_timestamp).tar.gz"
   if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] tar -czf ${dest} ${STATE_DIR} ${FORWARD_SYSCTL}"
+    echo "[DRY-RUN] create snapshot ${dest}"
     return 0
   fi
-  mkdir -p "$BACKUP_DIR"
-  tar -czf "$dest" "$STATE_DIR" "$FORWARD_SYSCTL" 2>/dev/null || true
-  ok "已生成备份：${dest}"
+  ensure_base_dirs
+  create_snapshot_archive "$dest"
+  ok "已创建配置快照：${dest}"
+}
+
+snapshot_files() {
+  {
+    find "$SNAPSHOT_DIR" -maxdepth 1 -type f -name 'snapshot-*.tar.gz' 2>/dev/null || true
+    find "$AUTO_SNAPSHOT_DIR" -maxdepth 1 -type f -name 'auto-before-*.tar.gz' 2>/dev/null || true
+  } | sort
+}
+
+latest_snapshot_file() {
+  {
+    find "$SNAPSHOT_DIR" -maxdepth 1 -type f -name 'snapshot-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null || true
+    find "$AUTO_SNAPSHOT_DIR" -maxdepth 1 -type f -name 'auto-before-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null || true
+  } | sort -nr | awk 'NR==1 {sub(/^[^ ]+ /, ""); print}'
+}
+
+list_snapshots() {
+  local files=() i file size
+  mapfile -t files < <(snapshot_files)
+  if (( ${#files[@]} == 0 )); then
+    warn "当前没有快照。"
+    return 0
+  fi
+  echo "配置快照列表"
+  echo "----------------------------------------"
+  i=0
+  for file in "${files[@]}"; do
+    i=$((i + 1))
+    size="$(du -h "$file" 2>/dev/null | awk '{print $1}')"
+    printf '%d. %s (%s)\n' "$i" "$file" "${size:-unknown}"
+  done
+}
+
+select_snapshot_by_number() {
+  local prompt="${1:-请输入快照编号，直接回车返回}" files=() choice
+  mapfile -t files < <(snapshot_files)
+  if (( ${#files[@]} == 0 )); then
+    warn "当前没有快照。"
+    return 1
+  fi
+  list_snapshots
+  choice="$(prompt_value "$prompt")"
+  [[ -n "$choice" ]] || return 1
+  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#files[@]} )); then
+    printf '%s' "${files[$((choice - 1))]}"
+    return 0
+  fi
+  warn "快照编号无效：${choice}"
+  return 1
+}
+
+restart_restored_services() {
+  local svc
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "未找到 systemctl，跳过服务重启。"
+    return 0
+  fi
+  systemctl daemon-reload || warn "systemd daemon-reload 失败。"
+  [[ -f "$EASYTIER_RELAY_SERVICE" ]] && systemctl restart "${EASYTIER_RELAY_SERVICE_NAME}.service" || true
+  while IFS= read -r svc; do
+    systemctl restart "$(basename "$svc")" || warn "重启 $(basename "$svc") 失败。"
+  done < <(find /etc/systemd/system -maxdepth 1 -type f -name 'easytier-entry-*.service' 2>/dev/null || true)
+  [[ -f "$NFT_SERVICE" ]] && systemctl restart "${NFT_SERVICE_NAME}.service" || true
 }
 
 restore_snapshot() {
   need_root_unless_dry_run
-  local path
-  path="$(prompt_value "请输入备份 tar.gz 路径")"
+  local path="${1:-}"
+  [[ -n "$path" ]] || path="$(select_snapshot_by_number "请输入要恢复的快照编号")" || return 0
+  if [[ ! -f "$path" ]]; then
+    [[ "$path" == *.tar.gz ]] || { warn "快照不存在：${path}"; return 0; }
+  fi
   [[ -f "$path" ]] || { warn "文件不存在：${path}"; return 0; }
-  confirm_summary "恢复备份摘要" "来源：${path}\n动作：解包到 /，覆盖本项目配置；不删除用户其它规则。" || return 0
-  (( DRY_RUN == 1 )) && return 0
+  echo "[WARN] 恢复快照会覆盖当前 leikwan 配置和相关 systemd/nftables 状态。"
+  prompt_yes_no "确认恢复？" "N" || return 0
+  auto_snapshot_or_confirm "restore-snapshot" || return 0
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] tar -xzf ${path} -C /"
+    return 0
+  fi
   tar -xzf "$path" -C /
-  systemctl daemon-reload || true
-  ok "备份已恢复。请按需重启 EasyTier/nft 服务。"
+  ok "快照已恢复：${path}"
+  if prompt_yes_no "是否立即重新加载 systemd 并重启相关服务？" "N"; then
+    restart_restored_services
+  else
+    info "已跳过服务重启。请按需手动执行 systemctl daemon-reload / restart。"
+  fi
+}
+
+delete_snapshot() {
+  need_root_unless_dry_run
+  local path
+  path="$(select_snapshot_by_number "请输入要删除的快照编号")" || return 0
+  prompt_yes_no "确认删除快照 ${path}？" "N" || return 0
+  (( DRY_RUN == 1 )) && { echo "[DRY-RUN] rm -f ${path}"; return 0; }
+  rm -f "$path"
+  ok "已删除快照：${path}"
+}
+
+export_latest_snapshot() {
+  need_root_unless_dry_run
+  local latest dest ts
+  latest="$(latest_snapshot_file)"
+  [[ -n "$latest" && -f "$latest" ]] || { warn "当前没有可导出的快照。"; return 0; }
+  ts="$(snapshot_timestamp)"
+  dest="/root/leikwan-snapshot-${ts}.tar.gz"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] cp -a ${latest} ${dest}"
+    return 0
+  fi
+  cp -a "$latest" "$dest"
+  ok "已导出最新快照：${dest}"
+}
+
+prune_auto_snapshots() {
+  local old=() file
+  mapfile -t old < <(find "$AUTO_SNAPSHOT_DIR" -maxdepth 1 -type f -name 'auto-before-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR>10 {sub(/^[^ ]+ /, ""); print}')
+  for file in "${old[@]}"; do
+    rm -f "$file" 2>/dev/null || true
+  done
+}
+
+auto_snapshot_or_confirm() {
+  local action="$1" safe_action dest
+  need_root_unless_dry_run
+  safe_action="$(safe_name "$action")"
+  dest="${AUTO_SNAPSHOT_DIR}/auto-before-${safe_action}-$(snapshot_timestamp).tar.gz"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] create auto snapshot ${dest}"
+    return 0
+  fi
+  ensure_base_dirs
+  if create_snapshot_archive "$dest"; then
+    ok "已创建自动快照：${dest}"
+    prune_auto_snapshots
+    return 0
+  fi
+  warn "自动快照失败，建议先手动创建快照。"
+  prompt_yes_no "是否继续？" "N"
+}
+
+snapshot_menu() {
+  local choice
+  while true; do
+    print_menu_header "配置快照 / 回滚"
+    echo "1. 创建当前完整快照"
+    echo "2. 查看快照列表"
+    echo "3. 恢复指定快照"
+    echo "4. 删除旧快照"
+    echo "5. 导出最新快照到 /root"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause create_snapshot ;;
+      2) run_menu_action_pause list_snapshots ;;
+      3) run_menu_action_pause restore_snapshot ;;
+      4) run_menu_action_pause delete_snapshot ;;
+      5) run_menu_action_pause export_latest_snapshot ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
+backup_snapshot() {
+  create_snapshot "$@"
+}
+
+snapshot_restore_legacy() {
+  restore_snapshot "$@"
 }
 
 backup_restore_menu() {
-  local choice
-  while true; do
-    print_menu_header "备份 / 恢复"
-    echo "1. 生成配置快照"; echo "2. 从快照恢复"; echo "0. 返回"
-    choice="$(prompt_menu_choice "请选择：")"
-    case "$choice" in
-      1) run_menu_action_pause backup_snapshot ;;
-      2) run_menu_action_pause restore_snapshot ;;
-      0) return 0 ;;
-    esac
-  done
+  snapshot_menu "$@"
 }
 
 easytier_menu() {
@@ -5729,7 +6499,8 @@ relay_host_menu() {
     echo "3. 转发目标管理"
     echo "4. IPv4 多出口策略路由"
     echo "5. IPv6 入站安全收口"
-    echo "6. 查看利群主机状态"
+    echo "6. 查看状态总览"
+    echo "7. 一键诊断"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -5738,7 +6509,8 @@ relay_host_menu() {
       3) forwards_menu ;;
       4) pbr_menu ;;
       5) run_menu_action_pause ipv6_lockdown ;;
-      6) run_menu_action run_doctor_interactive ;;
+      6) run_menu_action_pause status_overview ;;
+      7) run_menu_action run_doctor_interactive ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -5752,13 +6524,15 @@ entry_host_menu() {
     print_menu_header "公网入口（A 本机）"
     echo "1. 粘贴利群网络码，部署本机入口"
     echo "2. 配置本机入口端口池"
-    echo "3. 查看本机公网入口状态"
+    echo "3. 查看状态总览"
+    echo "4. 一键诊断"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action quick_deploy_entry_from_network_pairing ;;
       2) run_menu_action_pause entry_expose_range ;;
-      3)
+      3) run_menu_action_pause status_overview ;;
+      4)
         if [[ "$(detect_role)" == "leikwan-relay" ]]; then
           warn "当前机器检测为利群主机，不是公网入口机。"
           warn "如需管理已接入的公网入口列表，请进入：利群主机 -> 公网入口列表管理"
@@ -5782,10 +6556,12 @@ advanced_menu() {
     echo "2. 链路测试"
     echo "3. DNS / IPv4 优先修复"
     echo "4. BBR / 系统优化"
-    echo "5. 查看全部状态"
-    echo "6. 备份 / 恢复"
-    echo "7. 生成脱敏故障报告"
-    echo "8. legacy 清理"
+    echo "5. 状态总览"
+    echo "6. 一键诊断"
+    echo "7. 配置快照 / 回滚"
+    echo "8. 端口冲突预检"
+    echo "9. 生成脱敏故障报告"
+    echo "10. legacy 清理"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -5793,10 +6569,12 @@ advanced_menu() {
       2) link_test_menu ;;
       3) run_menu_action fix_dns_ipv4_first || warn_and_pause "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
       4) bbr_menu ;;
-      5) run_menu_action run_doctor_interactive ;;
-      6) backup_restore_menu ;;
-      7) run_menu_action generate_debug_report ;;
-      8) legacy_cleanup_menu ;;
+      5) run_menu_action_pause status_overview ;;
+      6) run_menu_action run_doctor_interactive ;;
+      7) snapshot_menu ;;
+      8) run_menu_action_pause port_check ;;
+      9) run_menu_action generate_debug_report ;;
+      10) legacy_cleanup_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -5816,8 +6594,9 @@ main_menu() {
     echo "2. 利群主机"
     echo "3. 公网入口"
     echo "4. 高级功能"
-    echo "5. 一键诊断"
-    echo "6. 卸载全部"
+    echo "5. 状态总览"
+    echo "6. 一键诊断"
+    echo "7. 卸载全部"
     echo "0. 退出"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -5825,8 +6604,9 @@ main_menu() {
       2) relay_host_menu ;;
       3) entry_host_menu ;;
       4) advanced_menu ;;
-      5) run_menu_action run_doctor_interactive ;;
-      6) uninstall_new_mode ;;
+      5) run_menu_action_pause status_overview ;;
+      6) run_menu_action run_doctor_interactive ;;
+      7) uninstall_new_mode ;;
       0) exit 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -5837,6 +6617,9 @@ main_menu() {
 main() {
   while [[ "${1:-}" == "--dry-run" ]]; do DRY_RUN=1; shift; done
   case "${1:-}" in
+    status)
+      status_overview
+      ;;
     pair)
       case "${2:-}" in
         relay-init) quick_generate_network_pairing ;;
@@ -5870,6 +6653,12 @@ main() {
         *) fail "未知 entry 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
+    port)
+      case "${2:-}" in
+        check) port_check ;;
+        *) fail "未知 port 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
+      ;;
     pbr)
       case "${2:-}" in
         delete) delete_pbr_rule "${3:-}" ;;
@@ -5880,6 +6669,8 @@ main() {
       ;;
     --help|-h) print_help ;;
     --version|-v) echo "${PROJECT_NAME} ${TOOL_VERSION}" ;;
+    --status) status_overview ;;
+    --port-check) port_check ;;
     --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
     --pbr-apply) pbr_apply ;;
     --pbr-delete) delete_pbr_rule "${2:-}" ;;

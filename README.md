@@ -2,7 +2,7 @@
 
 Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 构建公网入口和中转主机之间的虚拟网络，并使用 nftables 在中转主机上管理 TCP/UDP 转发。
 
-当前版本：`1.0.6`
+当前版本：`1.0.7`
 
 ## 功能特性
 
@@ -13,6 +13,9 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 - 多入口 PRIMARY / BACKUP 推荐
 - 手动切换主公网入口
 - IPv4 PBR 策略路由
+- 状态总览与最近 apply / doctor / status 缓存
+- 配置快照 / 回滚，高危操作前自动快照
+- 端口冲突预检与端口推荐避让
 - DDNS / 域名后端解析刷新
 - 一键诊断与脱敏报告
 - 完整卸载
@@ -74,6 +77,22 @@ lq --version
 lq --doctor
 ```
 
+快速状态总览：
+
+```bash
+lq status
+lq --status
+```
+
+端口冲突预检：
+
+```bash
+lq port check
+lq --port-check
+```
+
+`status` 适合日常查看，轻量读取配置文件、systemd 状态和 nftables 表，不做 ping、nc、apt update，也不自动修改系统。`doctor` 用于详细诊断，会检查更多链路细节；交互模式下可按提示修复部分问题。
+
 如果升级脚本后看到 TCP/UDP DNAT 缺失，交互菜单中的“一键诊断 / 查看状态”会提示是否立即执行 `lq forward apply-relay --auto-fix-route` 重新渲染当前模板；非交互 `lq --doctor` 只提示命令，不会自动改规则。
 
 ## 端口说明
@@ -83,6 +102,22 @@ lq --doctor
 - 后端目标端口：由用户填写，同一个转发目标默认生成 TCP+UDP 转发规则。
 
 EasyTier 组网端口和业务入口端口不是一回事：`8301` 用于 A/B 建链，`10001` 这类端口用于外部客户端访问业务。
+
+新增入口或转发目标时，脚本会预检端口是否已被 TSV、pending reservation、本机监听进程或 nftables dport 占用。推荐端口会自动跳过已占用端口；业务入口端口池无可用推荐时会明确报错。
+
+## 快照与回滚
+
+菜单路径：
+
+```text
+高级功能 -> 配置快照 / 回滚
+```
+
+快照保存在 `/etc/leikwan-toolkit/snapshots/`，自动快照保存在 `/etc/leikwan-toolkit/snapshots/auto/`。快照会包含 `/etc/leikwan-toolkit/`、相关 systemd unit、sysctl、rt_tables，以及 nft/ip rule/ip route 的只读导出。
+
+快照可能包含 EasyTier network secret，请按敏感文件妥善保存，不要公开上传。
+
+以下高危操作前会自动创建轻量快照，自动快照只保留最近 10 个：重启 relay、重新应用 nftables 转发规则、删除公网入口、批量禁用公网入口、删除转发目标、删除 PBR 规则、卸载全部、恢复快照前。
 
 ## 多公网入口
 
@@ -125,7 +160,11 @@ lq --doctor
 
 ```bash
 lq
+lq status
+lq --status
 lq --doctor
+lq port check
+lq --port-check
 lq pair status
 lq pbr show
 lq forward list
@@ -183,17 +222,18 @@ lq --uninstall
 ## 安全说明
 
 - 配对码包含 EasyTier network secret，应视为敏感信息。
+- 配置快照可能包含 EasyTier network secret，应视为敏感文件。
 - 不要把配对码公开到工单、聊天记录或仓库。
 - debug report 会脱敏后输出，但仍建议人工检查后再发送。
 - 本工具只管理组网和四层转发，不保存代理协议链接，不管理后端业务认证。
 
 ## Release
 
-当前正式版本：`1.0.6`
+当前正式版本：`1.0.7`
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.0.6.tar.gz
-leikwan-toolkit-1.0.6.tar.gz.sha256
+leikwan-toolkit-1.0.7.tar.gz
+leikwan-toolkit-1.0.7.tar.gz.sha256
 ```

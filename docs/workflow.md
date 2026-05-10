@@ -1,6 +1,6 @@
 # 工作流
 
-本文说明 Leikwan Toolkit 1.0.6 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.0.7 的推荐操作顺序。
 
 ## 角色
 
@@ -75,6 +75,44 @@ A 的 ENTRY 返回码接回 B 后，会按 `ENTRY_ET_IP + EASYTIER_PORT` 清理�
 - EasyTier 组网端口：默认 `8301`、`8302`、`8303`，TCP+UDP，同端口，建议位于 `8000-9000`。
 - 业务入口端口：常用 `10001-19999`，默认 TCP+UDP 转发。
 - 后端目标端口：由用户填写。
+
+新增公网入口前会检查 EasyTier 端口是否已被 `entries.tsv`、`pending-entries.tsv`、本机监听进程或 nftables dport 占用。新增转发目标前会检查业务入口端口是否已被 `forwards.tsv`、本机监听进程或 nftables DNAT 占用。推荐端口会自动跳过这些冲突。
+
+可随时执行轻量端口预检：
+
+```bash
+lq port check
+lq --port-check
+```
+
+端口预检只读，不修改系统。
+
+## 状态总览
+
+日常查看建议使用：
+
+```bash
+lq status
+lq --status
+```
+
+`status` 输出角色、版本、入口数量、转发数量、nftables、MSS clamp、最近应用和最近诊断，适合快速确认状态。它只做轻量检查，不执行 ping、nc 或 apt update，也不会自动修改系统。
+
+`doctor` 适合排障，会做更完整的链路、DNAT、MSS、依赖和 DNS 检查；交互菜单中可按提示执行修复。
+
+## 配置快照 / 回滚
+
+菜单路径：
+
+```text
+高级功能 -> 配置快照 / 回滚
+```
+
+可创建完整快照、查看列表、按编号恢复、删除旧快照，以及导出最新快照到 `/root/leikwan-snapshot-YYYYMMDD-HHMMSS.tar.gz`。
+
+快照可能包含 EasyTier network secret，请按敏感文件保存。恢复快照前会二次确认，恢复后会询问是否立即 reload systemd 并重启相关服务。
+
+高危操作前会自动创建轻量快照，包括重启 relay、重新应用 nftables 转发规则、删除公网入口、批量禁用公网入口、删除转发目标、删除 PBR 规则、卸载全部和恢复快照前。自动快照保存在 `/etc/leikwan-toolkit/snapshots/auto/`，只保留最近 10 个。
 
 ## PBR
 

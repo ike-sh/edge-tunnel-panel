@@ -1,0 +1,58 @@
+# 状态、快照与端口预检
+
+本文记录 1.0.7 新增的三个基础能力。
+
+## 状态总览
+
+```bash
+lq status
+lq --status
+```
+
+`status` 用于日常快速查看，只读取 `/etc/leikwan-toolkit/` 下的配置文件、systemd 状态和 nftables 项目表。它不会执行 ping、nc、apt update，也不会自动修改系统。
+
+`doctor` 用于详细排障，会检查更多链路细节，并在交互菜单中提供部分修复入口。
+
+状态缓存文件：
+
+```text
+/etc/leikwan-toolkit/status/last-apply.env
+/etc/leikwan-toolkit/status/last-doctor.env
+/etc/leikwan-toolkit/status/last-status.env
+```
+
+缓存只记录时间、动作、结果和版本，不写 EasyTier secret。
+
+## 配置快照 / 回滚
+
+菜单路径：
+
+```text
+高级功能 -> 配置快照 / 回滚
+```
+
+快照保存在：
+
+```text
+/etc/leikwan-toolkit/snapshots/
+/etc/leikwan-toolkit/snapshots/auto/
+```
+
+快照内容包含 leikwan 配置、相关 systemd unit、sysctl、rt_tables，以及 nft/ip rule/ip route 的只读导出。快照可能包含 EasyTier network secret，请妥善保存。
+
+高危操作前会自动创建轻量快照，失败时会 WARN 并询问是否继续。自动快照只保留最近 10 个。
+
+## 端口冲突预检
+
+```bash
+lq port check
+lq --port-check
+```
+
+端口预检会检查：
+
+- EasyTier 端口是否在 `8000-9000` 白名单，是否被 entries/pending/本机监听/nftables 占用。
+- 业务入口端口是否被 forwards、本机监听或 nftables DNAT 占用。
+- enabled 转发目标是否能在项目 nftables 表中找到 TCP/UDP dport。
+
+预检只读，不修改系统。新增入口和新增转发目标时也会使用同一套冲突判断，避免普通菜单路径写入重复端口。

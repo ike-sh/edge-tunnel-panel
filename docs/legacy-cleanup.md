@@ -1,6 +1,6 @@
 # legacy 清理
 
-Leikwan Toolkit 1.0.6 主流程只使用 EasyTier、nftables、IPv4 PBR 和 MSS clamp。旧版本残留清理入口：
+Leikwan Toolkit 1.0.7 主流程只使用 EasyTier、nftables、IPv4 PBR 和 MSS clamp。旧版本残留清理入口：
 
 ```text
 高级功能 -> legacy 清理

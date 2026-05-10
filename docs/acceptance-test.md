@@ -1,6 +1,6 @@
 # 验收清单
 
-本页用于 Leikwan Toolkit 1.0.6 正式版验收。
+本页用于 Leikwan Toolkit 1.0.7 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.0.6"
-leikwan-toolkit 1.0.6
+TOOL_VERSION="1.0.7"
+leikwan-toolkit 1.0.7
 ```
 
 ## 打包
@@ -29,8 +29,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.0.6.tar.gz
-dist/leikwan-toolkit-1.0.6.tar.gz.sha256
+dist/leikwan-toolkit-1.0.7.tar.gz
+dist/leikwan-toolkit-1.0.7.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -72,6 +72,73 @@ public2  203.0.113.20   10.198.1.3  tcp,udp  8302  100  true
 - PBR 菜单显示 `0. 返回`。
 - 从现有转发目标添加 PBR 后，默认询问是否立即同步转发规则和 `route_table` 元数据。
 - 删除 PBR 支持编号、CIDR 和裸 IP。
+
+## 状态总览与缓存
+
+```bash
+lq status
+lq --status
+```
+
+期望：
+
+- 输出简洁状态总览，不清屏，不等待回车。
+- 显示版本、角色、入口数量、转发数量、nftables、MSS clamp、整体状态。
+- 不自动修改系统。
+
+执行：
+
+```bash
+lq status
+lq --doctor
+nohup lq forward apply-relay --auto-fix-route >/root/lq-apply-relay.log 2>&1 &
+```
+
+检查：
+
+```bash
+ls -lh /etc/leikwan-toolkit/status/
+cat /etc/leikwan-toolkit/status/last-status.env
+cat /etc/leikwan-toolkit/status/last-doctor.env
+cat /etc/leikwan-toolkit/status/last-apply.env
+```
+
+期望缓存文件存在，包含时间、结果、版本，不包含 EasyTier secret。
+
+## 快照 / 回滚
+
+菜单路径：
+
+```text
+高级功能 -> 配置快照 / 回滚
+```
+
+验收：
+
+- 创建当前完整快照会生成 `snapshot-YYYYMMDD-HHMMSS.tar.gz`。
+- 查看快照列表能按编号显示。
+- 导出最新快照到 `/root/leikwan-snapshot-YYYYMMDD-HHMMSS.tar.gz`。
+- 创建快照时提醒可能包含 EasyTier network secret。
+- 恢复快照前二次确认，恢复后询问是否 reload systemd 并重启相关服务。
+
+高危操作前，例如删除转发目标、删除公网入口、重新应用利群转发规则，应生成 `/etc/leikwan-toolkit/snapshots/auto/auto-before-*.tar.gz`，且只保留最近 10 个自动快照。
+
+## 端口预检
+
+```bash
+lq port check
+lq --port-check
+```
+
+期望：
+
+- 输出 EasyTier 端口、业务入口端口、本机监听、nftables 状态。
+- 不修改系统。
+- 发现端口重复、pending 占用、本机监听或 nftables dport 冲突时输出 WARN。
+
+新增转发目标时尝试使用已存在的 `entry_port`，应提示端口已被对应转发目标使用，不直接写入重复端口，并允许重新输入。
+
+新增公网入口时尝试使用已存在的 EasyTier 端口，应提示端口已被对应入口使用或 pending 占用，不直接写入重复端口，并允许重新输入。
 
 ## 交互
 
