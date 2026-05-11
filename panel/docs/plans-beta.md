@@ -1,12 +1,12 @@
 # Plans Beta
 
-Leikwan Panel `2.0.0-beta.2` is the manual execution guide stage.
+Leikwan Panel Plans remain manual-only in `2.1.0-alpha.1`.
 
 Plans are still safe by design:
 
-- Controller stores drafts and generates text only.
-- Agent does not pull tasks.
-- Agent does not execute commands.
+- Controller stores drafts, classifies safety, and generates text only.
+- Agent may optionally pull only builtin readonly tasks, but Plans are never executed by Agent.
+- Agent does not execute Plan commands.
 - No node system is modified by the Panel.
 - Leikwan Core files, nftables, systemd, EasyTier, DDNS, entries, forwards and PBR remain untouched.
 
@@ -54,6 +54,10 @@ When a plan is generated, Controller stores:
 - `checklist`: manual verification checklist.
 - `markdown`: a redacted execution guide.
 - `warnings`: risk notes.
+- `safety_level`: `safe`, `caution` or `dangerous`.
+- `command_classification`: `readonly`, `manual` or `blocked`.
+- `preflight`: Controller-side checks that do not run node commands.
+- `capability_requirements`: read-only Core commands needed for manual verification.
 
 The Markdown guide always states:
 
@@ -77,6 +81,20 @@ lq ddns overview
 
 If Leikwan Core does not expose a stable non-interactive CLI for an operation, Panel writes a `# TODO` manual step instead of inventing a command.
 
+## Preflight
+
+`POST /api/v1/plans/:id/preflight` checks Controller-known state only:
+
+- target node selected
+- target node known to Controller
+- target node online/offline
+- node role matching the plan type
+- no blocked command text present
+- Markdown generated
+- warnings present
+
+Preflight never SSHs into a node and never asks Agent to run anything.
+
 ## Forbidden Commands
 
 Plans must not generate:
@@ -84,8 +102,10 @@ Plans must not generate:
 ```text
 rm
 systemctl restart
+systemctl stop
 nft
 iptables
+ip route
 curl | bash
 eval
 bash -c
@@ -109,5 +129,4 @@ Authorization
 
 ## Why Not Automatic Execution Yet
 
-Automatic execution needs a permission model, allowlisted tasks, review, audit logs, rollback handling and explicit operator approval. These are out of scope before 2.1.
-
+Automatic write execution needs a permission model, write allowlists, dry-run, snapshots, review, audit logs, rollback handling and explicit operator approval. These are still out of scope.

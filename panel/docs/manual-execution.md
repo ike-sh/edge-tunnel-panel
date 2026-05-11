@@ -1,6 +1,6 @@
 # Manual Execution
 
-Leikwan Panel `2.0.0-beta.2` does not execute configuration changes. It creates an execution guide that an operator copies and runs manually on the target node.
+Leikwan Panel `2.1.0-alpha.1` does not execute configuration changes. It creates an execution guide that an operator copies and runs manually on the target node.
 
 ## Create a Plan
 
@@ -10,6 +10,7 @@ Leikwan Panel `2.0.0-beta.2` does not execute configuration changes. It creates 
 4. Fill the intent fields.
 5. Create the draft.
 6. Generate the guide.
+7. Run preflight.
 
 ## Review the Checklist
 
@@ -23,6 +24,17 @@ The generated checklist is intentionally conservative:
 - After manual execution, run `lq doctor` again.
 
 For `switch_entry`, the checklist also reminds you to verify the new entry first, keep the old entry available and use a low-traffic window.
+
+## Review Safety and Preflight
+
+Each generated plan includes:
+
+- safety level: `safe`, `caution` or `dangerous`
+- command classification: `readonly`, `manual` or `blocked`
+- capability requirements
+- preflight checks
+
+Preflight is Controller-only. It does not run commands on the node.
 
 ## Copy Commands
 
@@ -54,7 +66,7 @@ This only updates Controller audit state. It does not modify the node.
 
 ## Safety Boundary
 
-Panel beta.2 does not:
+Panel 2.1-alpha.1 does not:
 
 - push tasks to Agent
 - run remote commands
@@ -62,4 +74,3 @@ Panel beta.2 does not:
 - write nftables or systemd
 - edit EasyTier, DDNS, entries, forwards or PBR
 - modify `leikwan-toolkit.sh`
-

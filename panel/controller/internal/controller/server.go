@@ -22,10 +22,15 @@ func NewServer(store *Store, token string, logger *log.Logger) http.Handler {
 	s := &Server{store: store, token: token, log: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("/api/v1/bootstrap/agent-command", s.handleBootstrapAgentCommand)
 	mux.HandleFunc("/api/v1/topology", s.handleTopology)
 	mux.HandleFunc("/api/v1/plans", s.handlePlans)
 	mux.HandleFunc("/api/v1/plans/", s.handlePlanByID)
+	mux.HandleFunc("/api/v1/tasks", s.handleTasks)
+	mux.HandleFunc("/api/v1/tasks/", s.handleTaskByID)
+	mux.HandleFunc("/api/v1/agent/tasks", s.handleAgentTasks)
+	mux.HandleFunc("/api/v1/agent/tasks/", s.handleAgentTaskByID)
 	mux.HandleFunc("/api/v1/agent/register", s.handleRegister)
 	mux.HandleFunc("/api/v1/agent/report", s.handleReport)
 	mux.HandleFunc("/api/v1/nodes", s.handleNodes)
@@ -108,6 +113,32 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, HealthResponse{Name: "leikwan-controller", Version: Version, Status: "ok"})
+}
+
+func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGET(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, CapabilitiesResponse{
+		Version: Version,
+		Commands: []CapabilityItem{
+			{Command: "lq --version", Class: "readonly", Note: "Core version check"},
+			{Command: "lq status", Class: "readonly", Note: "Human status overview"},
+			{Command: "lq status --json", Class: "readonly", Note: "Machine-readable status"},
+			{Command: "lq doctor", Class: "readonly", Note: "Human diagnostics"},
+			{Command: "lq doctor --json", Class: "readonly", Note: "Machine-readable diagnostics"},
+			{Command: "lq forward list", Class: "readonly", Note: "Forward inventory"},
+			{Command: "lq ddns overview", Class: "readonly", Note: "DDNS overview"},
+			{Command: "manual TODO steps", Class: "manual", Note: "Operator performs interactive Core menu work"},
+			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "2.1-alpha.1 Agent tasks map actions to fixed argv only"},
+			{Command: "future write tasks", Class: "future", Note: "Reserved for later dry-run, snapshot, rollback, and approval design"},
+		},
+		Blocked:            []string{"rm", "systemctl restart", "systemctl stop", "nft", "iptables", "ip route", "curl | bash", "bash -c", "eval", "write into /etc"},
+		Future:             []string{"write allowlist", "dry-run", "snapshot", "rollback", "operator approval"},
+		SafetyLevels:       []string{"safe", "caution", "dangerous"},
+		TaskSupport:        "2.1-alpha.1 supports readonly allowlisted tasks only; Agents default enable_tasks=false",
+		AllowedTaskActions: allowedTaskActions(),
+	})
 }
 
 func (s *Server) handleBootstrapAgentCommand(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +433,98 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, events)
 }
 
+func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		tasks, err := s.store.ListTasks(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, tasks)
+	case http.MethodPost:
+		var req CreateTaskRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		task, err := s.store.CreateTask(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, task)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGET(w, r) {
+		return
+	}
+	id, ok := parseIDFromPath(w, r.URL.Path, "/api/v1/tasks/", "task not found")
+	if !ok {
+		return
+	}
+	task, err := s.store.GetTask(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *Server) handleAgentTasks(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGET(w, r) || !s.requireAgentAuth(w, r) {
+		return
+	}
+	nodeID := strings.TrimSpace(r.URL.Query().Get("node_id"))
+	tasks, err := s.store.PickTasks(r.Context(), nodeID, queryLimit(r, 5))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tasks)
+}
+
+func (s *Server) handleAgentTaskByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/agent/tasks/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) != 2 || parts[1] != "result" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if !s.requirePOST(w, r) || !s.requireAgentAuth(w, r) {
+		return
+	}
+	var req TaskResultRequest
+	if _, ok := s.decodeBody(w, r, &req); !ok {
+		return
+	}
+	task, err := s.store.FinishTask(r.Context(), id, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+func parseIDFromPath(w http.ResponseWriter, path, prefix, notFound string) (int64, bool) {
+	rest := strings.TrimPrefix(path, prefix)
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 || len(parts) != 1 {
+		writeError(w, http.StatusNotFound, notFound)
+		return 0, false
+	}
+	return id, true
+}
+
 func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -467,6 +590,16 @@ func (s *Server) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			plan, err := s.store.MarkPlan(r.Context(), id, req)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		case "preflight":
+			if !s.requirePOST(w, r) {
+				return
+			}
+			plan, err := s.store.PlanPreflight(r.Context(), id)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return

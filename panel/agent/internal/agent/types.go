@@ -2,15 +2,18 @@ package agent
 
 import "encoding/json"
 
-const Version = "2.0.0-beta.2"
+const Version = "2.1.0-alpha.1"
 
 type Config struct {
-	ControllerURL   string
-	Token           string
-	NodeID          string
-	NodeName        string
-	Role            string
-	IntervalSeconds int
+	ControllerURL       string
+	Token               string
+	NodeID              string
+	NodeName            string
+	Role                string
+	IntervalSeconds     int
+	EnableTasks         bool
+	TaskIntervalSeconds int
+	TaskTimeoutSeconds  int
 }
 
 type RegisterRequest struct {
@@ -42,6 +45,18 @@ type ReportRequest struct {
 	Forwards        []ForwardPayload  `json:"forwards,omitempty"`
 	RecentErrors    []string          `json:"recent_errors,omitempty"`
 	Errors          []string          `json:"errors,omitempty"`
+	Capabilities    Capabilities      `json:"capabilities,omitempty"`
+}
+
+type Capabilities struct {
+	LQAvailable          bool     `json:"lq_available"`
+	CoreVersion          string   `json:"core_version"`
+	SupportsStatusJSON   bool     `json:"supports_status_json"`
+	SupportsDoctorJSON   bool     `json:"supports_doctor_json"`
+	SupportsForwardList  bool     `json:"supports_forward_list"`
+	SupportsDDNSOverview bool     `json:"supports_ddns_overview"`
+	EnableTasks          bool     `json:"enable_tasks"`
+	AllowedTaskActions   []string `json:"allowed_task_actions,omitempty"`
 }
 
 type EntryPayload struct {
@@ -61,4 +76,19 @@ type ForwardPayload struct {
 	Protocol   string          `json:"protocol"`
 	Status     string          `json:"status"`
 	RawJSON    json.RawMessage `json:"raw_json,omitempty"`
+}
+
+type Task struct {
+	ID     int64  `json:"id"`
+	NodeID string `json:"node_id"`
+	Action string `json:"action"`
+	Status string `json:"status"`
+}
+
+type TaskResultRequest struct {
+	Status       string `json:"status"`
+	ResultStdout string `json:"result_stdout"`
+	ResultStderr string `json:"result_stderr"`
+	ExitCode     int    `json:"exit_code"`
+	Error        string `json:"error"`
 }

@@ -168,21 +168,24 @@ lq update status
 
 普通卸载保留配置、快照和备份；深度卸载会删除配置和状态，执行前会生成 final snapshot 并二次确认。
 
-## Leikwan Panel 2.0.0-beta.2
+## Leikwan Panel 2.1.0-alpha.1
 
 `1.4.x` 是 Shell LTS / Leikwan Core，后续只做 bugfix、兼容性、安全和文档维护。
 
-`2.0.0-beta.2` 是人工执行手册版：Plans 会生成 command groups、checklist、Markdown 手册和人工执行结果记录。
+`2.1.0-alpha.1` 在 beta Plans 的基础上新增最小只读任务系统：Controller 只能创建内置 action，Agent 只有在 `enable_tasks=true` 时才拉取任务，并把 action 映射为固定 `lq` 只读 argv。
 
 - Controller / Agent 架构
 - Agent 只采集本机状态并上报
-- Controller 保存节点、入口、转发、事件和 Plans
+- Controller 保存节点、入口、转发、事件、Plans 和只读 Tasks
 - Plans 只生成可复制的人工命令文本和 Markdown 手册
+- preflight 只检查 Controller 已知状态，不执行节点命令
 - mark succeeded / failed / rolled_back 只记录人工结果，不触发节点操作
+- Tasks 仅支持 `probe_core_version`、`run_status`、`run_status_json`、`run_doctor`、`run_doctor_json`、`list_forwards`、`ddns_overview`
+- Controller API 不接受 command 字符串，Agent 不执行 shell / bash -c
 - 不会修改现有转发配置
-- 不会远程执行任意命令
+- 不会远程执行任意写操作或任意命令
 
-详细说明见 [Panel 2.0-alpha/beta 文档](panel/docs/panel-2.0-alpha.md)、[Plans Beta](panel/docs/plans-beta.md) 和 [Manual Execution](panel/docs/manual-execution.md)。
+详细说明见 [Panel 2.0-alpha/beta 文档](panel/docs/panel-2.0-alpha.md)、[Tasks Alpha](panel/docs/tasks-alpha.md)、[Plans Beta](panel/docs/plans-beta.md)、[Manual Execution](panel/docs/manual-execution.md)、[Capabilities](panel/docs/capabilities.md) 和 [Safety Model](panel/docs/safety-model.md)。
 
 ## 文档索引
 

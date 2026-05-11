@@ -4,3 +4,6 @@ node_id: relay-1
 node_name: relay-1
 role: relay
 interval_seconds: 30
+enable_tasks: false
+task_interval_seconds: 10
+task_timeout_seconds: 20

@@ -24,7 +24,13 @@ func Run(ctx context.Context, cfg Config, once bool, debug bool) error {
 		return client.Report(ctx, report)
 	}
 	if once {
-		return reportOnce()
+		if err := reportOnce(); err != nil {
+			return err
+		}
+		if cfg.EnableTasks {
+			processTasks(ctx, cfg, client, collector, debug)
+		}
+		return nil
 	}
 	interval := time.Duration(cfg.IntervalSeconds) * time.Second
 	if interval <= 0 {
@@ -32,14 +38,57 @@ func Run(ctx context.Context, cfg Config, once bool, debug bool) error {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	var taskTicker *time.Ticker
+	if cfg.EnableTasks {
+		taskInterval := time.Duration(cfg.TaskIntervalSeconds) * time.Second
+		if taskInterval <= 0 {
+			taskInterval = 10 * time.Second
+		}
+		taskTicker = time.NewTicker(taskInterval)
+		defer taskTicker.Stop()
+	}
 	for {
 		if err := reportOnce(); err != nil {
 			log.Printf("[WARN] report failed: %s", RedactString(err.Error()))
+		}
+		if cfg.EnableTasks {
+			processTasks(ctx, cfg, client, collector, debug)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+		case <-taskTickerC(taskTicker):
+			if cfg.EnableTasks {
+				processTasks(ctx, cfg, client, collector, debug)
+			}
+		}
+	}
+}
+
+func taskTickerC(t *time.Ticker) <-chan time.Time {
+	if t == nil {
+		return nil
+	}
+	return t.C
+}
+
+func processTasks(ctx context.Context, cfg Config, client Client, collector Collector, debug bool) {
+	tasks, err := client.GetTasks(ctx, cfg.NodeID)
+	if err != nil {
+		log.Printf("[WARN] task poll failed: %s", RedactString(err.Error()))
+		return
+	}
+	for _, task := range tasks {
+		if debug {
+			log.Printf("task picked: %s", RedactForLog(task))
+		}
+		result := ExecuteTask(ctx, collector, cfg, task)
+		if debug {
+			log.Printf("task result: %s", RedactForLog(result))
+		}
+		if err := client.ReportTaskResult(ctx, task.ID, result); err != nil {
+			log.Printf("[WARN] task result failed: %s", RedactString(err.Error()))
 		}
 	}
 }

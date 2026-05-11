@@ -24,12 +24,15 @@ func main() {
 
 	if *initConfig {
 		cfg := agent.Config{
-			ControllerURL:   *controllerURL,
-			Token:           *token,
-			NodeID:          *nodeName,
-			NodeName:        *nodeName,
-			Role:            *role,
-			IntervalSeconds: 30,
+			ControllerURL:       *controllerURL,
+			Token:               *token,
+			NodeID:              *nodeName,
+			NodeName:            *nodeName,
+			Role:                *role,
+			IntervalSeconds:     30,
+			EnableTasks:         false,
+			TaskIntervalSeconds: 10,
+			TaskTimeoutSeconds:  20,
 		}
 		if err := agent.WriteConfig(*configPath, cfg); err != nil {
 			log.Fatal(agent.RedactString(err.Error()))

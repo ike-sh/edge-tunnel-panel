@@ -1,12 +1,12 @@
 # Leikwan Panel 2.0-alpha
 
-Leikwan Panel 2.0-alpha/beta 是 Leikwan Toolkit 的 Web 面板预览版。当前实现版本为 `2.0.0-beta.2`。
+Leikwan Panel 2.0-alpha/beta/2.1-alpha 是 Leikwan Toolkit 的 Web 面板预览版。当前实现版本为 `2.1.0-alpha.1`。
 
 1.4.x Shell 版继续作为 Leikwan Core / LTS，负责真实转发、nftables、EasyTier、DDNS、PBR 和本机维护。2.0-alpha 只做状态采集、汇总和展示，不做配置下发。
 
 ## 安全边界
 
-2.0.0-beta.2 仍然不自动执行配置，明确不做：
+2.1.0-alpha.1 仍然不自动执行配置，明确不做：
 
 - 不远程执行任意命令
 - 不下发 nftables / systemd / EasyTier / DDNS 配置
@@ -24,7 +24,7 @@ lq forward list
 lq ddns overview
 ```
 
-beta.2 扩展 Plans 为人工执行手册：生成 command groups、checklist、Markdown 和人工结果标记，但仍不下发给 Agent 执行。配置下发最早在 2.1 之后再评估，且需要独立的权限、审计和确认设计。
+2.1-alpha.1 在 Plans 之外新增只读 Tasks：Controller 只能创建内置 action，Agent 只有在 `enable_tasks=true` 时拉取，并将 action 映射到固定 `lq` 只读 argv。它不接收 command 字符串，不执行 shell，不执行写操作。
 
 ## 架构
 
@@ -78,7 +78,7 @@ curl http://127.0.0.1:18080/api/v1/health
 ```json
 {
   "name": "leikwan-controller",
-  "version": "2.0.0-beta.2",
+  "version": "2.1.0-alpha.1",
   "status": "ok"
 }
 ```
@@ -160,6 +160,11 @@ GET  /api/v1/plans
 GET  /api/v1/plans/:id
 POST /api/v1/plans/:id/generate
 POST /api/v1/plans/:id/archive
+POST /api/v1/tasks
+GET  /api/v1/tasks
+GET  /api/v1/tasks/:id
+GET  /api/v1/agent/tasks?node_id=...
+POST /api/v1/agent/tasks/:id/result
 ```
 
 Agent 上报接口必须带：
@@ -190,7 +195,7 @@ SQLite 默认开发路径：
 
 `GET /api/v1/bootstrap/agent-command` 返回的安装命令永远只包含 `REDACTED` token。Web API 不返回 Controller 的真实 token。
 
-Plans API 只生成命令文本，不执行命令，也不会改变节点系统。
+Plans API 只生成命令文本，不执行命令，也不会改变节点系统。Tasks API 只支持内置只读 action，不接受任意 command 字符串。
 
 ## Alpha 验收
 

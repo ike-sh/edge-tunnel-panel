@@ -1,0 +1,14 @@
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'vite';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+process.chdir(root);
+
+await build({
+  root: '.',
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true
+  }
+});

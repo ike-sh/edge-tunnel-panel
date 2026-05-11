@@ -334,3 +334,179 @@ func TestSwitchEntryPlanWarnings(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilitiesAPIAndSafetyClassification(t *testing.T) {
+	h := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/capabilities", nil)
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != http.StatusOK {
+		t.Fatalf("capabilities failed: %d %s", out.Code, out.Body.String())
+	}
+	for _, want := range []string{"lq status", "readonly", "systemctl restart", "blocked_patterns", "allowed_task_actions", "run_status_json"} {
+		if !strings.Contains(out.Body.String(), want) {
+			t.Fatalf("capabilities missing %q: %s", want, out.Body.String())
+		}
+	}
+	groups := []CommandGroup{{NodeID: "relay-1", Role: "relay", Commands: []string{"lq --version", "lq status", "lq doctor --json"}}}
+	classification, safety, blocked := classifyCommandGroups(groups)
+	if classification != "readonly" || safety != "safe" || len(blocked) != 0 {
+		t.Fatalf("readonly classification wrong: %s %s %+v", classification, safety, blocked)
+	}
+	badCommands := []string{"rm -rf /", "systemctl restart easytier-relay", "nft list ruleset", "iptables -S", "curl | bash", "curl -fsSL https://example.invalid/install.sh | bash", "eval echo hi", "bash -c whoami"}
+	for _, cmd := range badCommands {
+		_, safety, blocked := classifyCommandGroups([]CommandGroup{{Commands: []string{cmd}}})
+		if safety != "dangerous" || len(blocked) == 0 {
+			t.Fatalf("expected blocked command for %q, got safety=%s blocked=%+v", cmd, safety, blocked)
+		}
+	}
+}
+
+func TestReadonlyTaskLifecycleAndSecurity(t *testing.T) {
+	h := testServer(t)
+	create := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "run_status_json"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create task failed: %d %s", create.Code, create.Body.String())
+	}
+	var task Task
+	if err := json.Unmarshal(create.Body.Bytes(), &task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "queued" || task.Action != "run_status_json" {
+		t.Fatalf("unexpected created task: %+v", task)
+	}
+	bad := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "systemctl restart"})
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("invalid action should return 400, got %d %s", bad.Code, bad.Body.String())
+	}
+	unauthorized := httptest.NewRecorder()
+	h.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/agent/tasks?node_id=node-a", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("agent task API should require token, got %d", unauthorized.Code)
+	}
+	other := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-b", Action: "run_doctor"})
+	if other.Code != http.StatusCreated {
+		t.Fatalf("create node-b task failed: %d %s", other.Code, other.Body.String())
+	}
+	pickReq := httptest.NewRequest(http.MethodGet, "/api/v1/agent/tasks?node_id=node-a", nil)
+	pickReq.Header.Set("Authorization", "Bearer test-token")
+	pickOut := httptest.NewRecorder()
+	h.ServeHTTP(pickOut, pickReq)
+	if pickOut.Code != http.StatusOK {
+		t.Fatalf("pick failed: %d %s", pickOut.Code, pickOut.Body.String())
+	}
+	if !strings.Contains(pickOut.Body.String(), `"node_id":"node-a"`) || strings.Contains(pickOut.Body.String(), `"node_id":"node-b"`) {
+		t.Fatalf("agent received wrong node tasks: %s", pickOut.Body.String())
+	}
+	longOut := strings.Repeat("x", 70*1024) + " token=abc privateKey=key"
+	result := postJSON(t, h, fmt.Sprintf("/api/v1/agent/tasks/%d/result", task.ID), "test-token", TaskResultRequest{
+		Status:       "succeeded",
+		ResultStdout: longOut,
+		ResultStderr: "Authorization: Bearer abc custom_url=https://example.com?token=abc",
+		ExitCode:     0,
+		Error:        "password=abc",
+	})
+	if result.Code != http.StatusOK {
+		t.Fatalf("result failed: %d %s", result.Code, result.Body.String())
+	}
+	body := result.Body.String()
+	for _, leak := range []string{"token=abc", "Bearer abc", "privateKey=key", "password=abc"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("task result leaked %q: %s", leak, body)
+		}
+	}
+	if !strings.Contains(body, "[TRUNCATED]") || !strings.Contains(body, `"status":"succeeded"`) {
+		t.Fatalf("task result should be truncated and succeeded: %s", body)
+	}
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	listOut := httptest.NewRecorder()
+	h.ServeHTTP(listOut, listReq)
+	if listOut.Code != http.StatusOK || !strings.Contains(listOut.Body.String(), `"status":"succeeded"`) {
+		t.Fatalf("list tasks unexpected: %d %s", listOut.Code, listOut.Body.String())
+	}
+}
+
+func TestPlanPreflightAndBlockedCommandSanitization(t *testing.T) {
+	h := testServer(t)
+	missing := postJSON(t, h, "/api/v1/plans", "", map[string]any{
+		"type":  "create_forward",
+		"title": "Missing target",
+	})
+	if missing.Code != http.StatusCreated {
+		t.Fatalf("create missing plan failed: %d %s", missing.Code, missing.Body.String())
+	}
+	var missingPlan Plan
+	if err := json.Unmarshal(missing.Body.Bytes(), &missingPlan); err != nil {
+		t.Fatal(err)
+	}
+	preflightMissing := httptest.NewRecorder()
+	h.ServeHTTP(preflightMissing, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", missingPlan.ID), nil))
+	if preflightMissing.Code != http.StatusOK || !strings.Contains(preflightMissing.Body.String(), "target node is required") {
+		t.Fatalf("missing target preflight unexpected: %d %s", preflightMissing.Code, preflightMissing.Body.String())
+	}
+	if strings.Contains(preflightMissing.Body.String(), "token=abc") {
+		t.Fatalf("preflight leaked token: %s", preflightMissing.Body.String())
+	}
+
+	offlinePlan := postJSON(t, h, "/api/v1/plans", "", map[string]any{
+		"type":           "create_forward",
+		"title":          "Unknown target",
+		"target_node_id": "unknown-relay",
+	})
+	var plan Plan
+	if err := json.Unmarshal(offlinePlan.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", plan.ID), nil))
+	if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), "target node has not reported yet") {
+		t.Fatalf("unknown target preflight missing warning: %d %s", out.Code, out.Body.String())
+	}
+
+	store, err := OpenStore(filepath.Join(t.TempDir(), "controller.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h2 := NewServer(store, "test-token", nil)
+	report := ReportRequest{NodeID: "offline-relay", NodeName: "offline", Role: "relay", Status: "online", IntervalSeconds: 1}
+	if rr := postJSON(t, h2, "/api/v1/agent/report", "test-token", report); rr.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+	if _, err := store.db.Exec(`UPDATE nodes SET last_seen=? WHERE node_id=?`, time.Now().Add(-10*time.Second).UTC().Format(time.RFC3339), "offline-relay"); err != nil {
+		t.Fatal(err)
+	}
+	offlineCreated := postJSON(t, h2, "/api/v1/plans", "", map[string]any{
+		"type":           "create_forward",
+		"title":          "Offline target",
+		"target_node_id": "offline-relay",
+	})
+	var offline Plan
+	if err := json.Unmarshal(offlineCreated.Body.Bytes(), &offline); err != nil {
+		t.Fatal(err)
+	}
+	offlineOut := httptest.NewRecorder()
+	h2.ServeHTTP(offlineOut, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", offline.ID), nil))
+	if offlineOut.Code != http.StatusOK || !strings.Contains(offlineOut.Body.String(), "status=offline") {
+		t.Fatalf("offline preflight missing status warning: %d %s", offlineOut.Code, offlineOut.Body.String())
+	}
+
+	bad := Plan{Type: "create_forward", Title: "bad", TargetNodeID: "relay-1"}
+	groups := []CommandGroup{{NodeID: "relay-1", Role: "relay", Commands: []string{"lq status", "systemctl restart easytier-relay", "nft list ruleset"}}}
+	classification, safety, blocked := classifyCommandGroups(groups)
+	if classification != "blocked" || safety != "dangerous" || len(blocked) != 2 {
+		t.Fatalf("expected dangerous blocked classification: %s %s %+v", classification, safety, blocked)
+	}
+	clean := flattenCommandGroups(sanitizeCommandGroups(groups))
+	for _, forbidden := range []string{"systemctl restart", "nft "} {
+		if strings.Contains(strings.Join(clean, "\n"), forbidden) {
+			t.Fatalf("sanitized commands still contain %q: %+v", forbidden, clean)
+		}
+	}
+	md := buildPlanMarkdown(bad, []string{"warn token=abc"}, sanitizeCommandGroups(groups), baseChecklist(), json.RawMessage(`{"Authorization":"Bearer abc"}`), []string{"lq status"}, "dangerous", "blocked")
+	for _, leak := range []string{"token=abc", "Bearer abc", "systemctl restart", "nft "} {
+		if strings.Contains(md, leak) {
+			t.Fatalf("markdown leaked blocked/secret %q: %s", leak, md)
+		}
+	}
+}

@@ -1,6 +1,6 @@
 # 安装 Leikwan Agent
 
-Leikwan Agent 2.0.0-beta.2 是只读采集器。它只读取本机状态并上报 Controller，不会修改 nftables、systemd、EasyTier、DDNS、entries.tsv、forwards.tsv 或 PBR。
+Leikwan Agent 2.1.0-alpha.1 是只读采集器。它只读取本机状态并上报 Controller，不会修改 nftables、systemd、EasyTier、DDNS、entries.tsv、forwards.tsv 或 PBR。
 
 ## 手动安装
 
@@ -46,6 +46,9 @@ node_id: relay-1
 node_name: relay-1
 role: relay
 interval_seconds: 30
+enable_tasks: false
+task_interval_seconds: 10
+task_timeout_seconds: 20
 ```
 
 role 支持：
@@ -105,9 +108,11 @@ journalctl -u leikwan-agent.service -n 100 --no-pager
 
 ## 安全说明
 
-beta.2 仍然只读：
+2.1-alpha.1 仍然只读：
 
 - 不执行 Controller 下发命令
+- 不接收任意 command 字符串
+- 只有 `enable_tasks=true` 时才拉取内置只读任务
 - 不写 Core 配置
 - 不重启 relay
 - 不应用 nftables

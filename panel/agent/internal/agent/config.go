@@ -27,7 +27,7 @@ func LoadConfig(path string) (Config, error) {
 			}
 		}
 	}
-	cfg := Config{Role: "unknown", IntervalSeconds: 60}
+	cfg := Config{Role: "unknown", IntervalSeconds: 60, TaskIntervalSeconds: 10, TaskTimeoutSeconds: 20}
 	if path == "" {
 		return cfg, nil
 	}
@@ -65,6 +65,18 @@ func LoadConfig(path string) (Config, error) {
 			if err == nil && n > 0 {
 				cfg.IntervalSeconds = n
 			}
+		case "enable_tasks":
+			cfg.EnableTasks = parseBool(value)
+		case "task_interval_seconds":
+			n, err := strconv.Atoi(value)
+			if err == nil && n > 0 {
+				cfg.TaskIntervalSeconds = n
+			}
+		case "task_timeout_seconds":
+			n, err := strconv.Atoi(value)
+			if err == nil && n > 0 {
+				cfg.TaskTimeoutSeconds = n
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -72,6 +84,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if cfg.ControllerURL == "" {
 		return cfg, fmt.Errorf("controller_url is required")
+	}
+	if cfg.TaskIntervalSeconds <= 0 {
+		cfg.TaskIntervalSeconds = 10
+	}
+	if cfg.TaskTimeoutSeconds <= 0 {
+		cfg.TaskTimeoutSeconds = 20
 	}
 	if cfg.NodeID == "" {
 		host, _ := os.Hostname()
@@ -104,14 +122,29 @@ func WriteConfig(path string, cfg Config) error {
 	if cfg.IntervalSeconds <= 0 {
 		cfg.IntervalSeconds = 30
 	}
+	if cfg.TaskIntervalSeconds <= 0 {
+		cfg.TaskIntervalSeconds = 10
+	}
+	if cfg.TaskTimeoutSeconds <= 0 {
+		cfg.TaskTimeoutSeconds = 20
+	}
 	if dir := filepath.Dir(path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	content := fmt.Sprintf("controller_url: %s\ntoken: %s\nnode_id: %s\nnode_name: %s\nrole: %s\ninterval_seconds: %d\n",
-		cfg.ControllerURL, cfg.Token, cfg.NodeID, cfg.NodeName, cfg.Role, cfg.IntervalSeconds)
+	content := fmt.Sprintf("controller_url: %s\ntoken: %s\nnode_id: %s\nnode_name: %s\nrole: %s\ninterval_seconds: %d\nenable_tasks: %t\ntask_interval_seconds: %d\ntask_timeout_seconds: %d\n",
+		cfg.ControllerURL, cfg.Token, cfg.NodeID, cfg.NodeName, cfg.Role, cfg.IntervalSeconds, cfg.EnableTasks, cfg.TaskIntervalSeconds, cfg.TaskTimeoutSeconds)
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+func parseBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on", "enabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeRole(role string) string {

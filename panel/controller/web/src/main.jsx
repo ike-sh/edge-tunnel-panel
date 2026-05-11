@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
-const tabs = ['Dashboard', 'Topology', 'Nodes', 'Entries', 'Forwards', 'Events', 'Plans', 'Bootstrap'];
-const PANEL_VERSION = '2.0.0-beta.2';
+const tabs = ['Dashboard', 'Topology', 'Nodes', 'Entries', 'Forwards', 'Events', 'Plans', 'Tasks', 'Capabilities', 'Bootstrap'];
+const PANEL_VERSION = '2.1.0-alpha.1';
 
 async function getJSON(path) {
   const res = await fetch(`${API_BASE}${path}`);
@@ -89,7 +89,7 @@ function App() {
           <span className="status-pill">{data.error ? 'API error' : data.loading ? 'Loading' : 'Live'}</span>
         </header>
         {data.error && <div className="banner">API request failed: {data.error}</div>}
-        <div className="notice">beta.2 still requires manual SSH execution. Agents will not execute changes.</div>
+        <div className="notice">2.1-alpha.1 only supports readonly allowlisted tasks. Agents still cannot execute writes or arbitrary commands.</div>
         {active === 'Dashboard' && <Dashboard data={data} counts={counts} onNavigate={navigate} />}
         {active === 'Topology' && <Topology />}
         {active === 'Nodes' && <Nodes nodes={data.nodes} onOpen={(id) => navigate(`/nodes/${encodeURIComponent(id)}`)} />}
@@ -98,6 +98,8 @@ function App() {
         {active === 'Forwards' && <Forwards forwards={data.forwards} />}
         {active === 'Events' && <Events events={data.events} />}
         {active === 'Plans' && <Plans nodes={data.nodes} />}
+        {active === 'Tasks' && <Tasks nodes={data.nodes} />}
+        {active === 'Capabilities' && <Capabilities nodes={data.nodes} />}
         {active === 'Bootstrap' && <Bootstrap />}
       </main>
     </div>
@@ -111,6 +113,8 @@ function pathToTab(path) {
   if (path === '/forwards') return 'Forwards';
   if (path === '/events') return 'Events';
   if (path === '/plans') return 'Plans';
+  if (path === '/tasks') return 'Tasks';
+  if (path === '/capabilities') return 'Capabilities';
   if (path === '/bootstrap') return 'Bootstrap';
   return 'Dashboard';
 }
@@ -315,7 +319,7 @@ function Plans({ nodes }) {
       {error && <div className="banner">Plans request failed: {error}</div>}
       <section className="panel">
         <h3>Create Plan</h3>
-        <p className="muted">beta.2 creates a manual execution guide only. You still SSH to the target node and run commands yourself.</p>
+        <p className="muted">Plans remain manual-only. Readonly Tasks can collect allowlisted diagnostics, but no Agent executes writes.</p>
         <form className="form-grid plan-form" onSubmit={createPlan}>
           <label>Type<select value={form.type} onChange={(e) => update('type', e.target.value)}>
             {['create_entry', 'create_forward', 'switch_entry', 'ddns_check'].map((type) => <option key={type} value={type}>{type}</option>)}
@@ -345,12 +349,14 @@ function Plans({ nodes }) {
 function PlansList({ plans, onSelect }) {
   if (!plans.length) return <Empty text="No plans yet" />;
   return (
-    <Table headers={['Title', 'Plan status', 'Execution', 'Type', 'Target node', 'Updated']}>
+    <Table headers={['Title', 'Plan status', 'Execution', 'Safety', 'Class', 'Type', 'Target node', 'Updated']}>
       {plans.map((plan) => (
         <tr key={plan.id}>
           <td><button className="link-button" onClick={() => onSelect(plan)}>{plan.title}</button></td>
           <td><span className={`tag ${plan.status}`}>{plan.status}</span></td>
           <td><span className={`tag ${plan.execution_status}`}>{plan.execution_status || 'not_run'}</span></td>
+          <td><span className={`tag ${plan.safety_level}`}>{plan.safety_level || 'safe'}</span></td>
+          <td><span className={`tag ${plan.command_classification}`}>{plan.command_classification || 'manual'}</span></td>
           <td>{plan.type}</td>
           <td>{plan.target_node_id || '-'}</td>
           <td>{plan.updated_at || plan.created_at}</td>
@@ -380,6 +386,11 @@ function PlanDetail({ plan, onUpdate }) {
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     onUpdate(await res.json());
   }
+  async function preflight() {
+    const res = await fetch(`${API_BASE}/api/v1/plans/${plan.id}/preflight`, { method: 'POST' });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    onUpdate(await res.json());
+  }
   async function archive() {
     const res = await fetch(`${API_BASE}/api/v1/plans/${plan.id}/archive`, { method: 'POST' });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -399,6 +410,9 @@ function PlanDetail({ plan, onUpdate }) {
     onUpdate(await res.json());
   }
   async function copyCommands() {
+    if (plan.safety_level === 'dangerous' && !window.confirm('This plan is marked dangerous. Copy commands anyway?')) {
+      return;
+    }
     const text = commandsFromGroups(plan).join('\n');
     try {
       await navigator.clipboard.writeText(text);
@@ -426,12 +440,19 @@ function PlanDetail({ plan, onUpdate }) {
         <dt>Type</dt><dd>{plan.type}</dd>
         <dt>Status</dt><dd>{plan.status}</dd>
         <dt>Execution</dt><dd><span className={`tag ${plan.execution_status}`}>{plan.execution_status || 'not_run'}</span></dd>
+        <dt>Safety</dt><dd><span className={`tag ${plan.safety_level}`}>{plan.safety_level || 'safe'}</span></dd>
+        <dt>Command class</dt><dd><span className={`tag ${plan.command_classification}`}>{plan.command_classification || 'manual'}</span></dd>
         <dt>Target</dt><dd>{plan.target_node_id || '-'}</dd>
       </dl>
+      {plan.safety_level === 'dangerous' && <div className="danger-banner">Dangerous plan: blocked command text was removed. Review preflight before copying anything.</div>}
       <h4>Payload</h4>
       <pre className="command-box">{JSON.stringify(plan.payload_json || {}, null, 2)}</pre>
       <h4>Warnings</h4>
       <List items={plan.warnings || []} empty="No warnings generated yet" />
+      <h4>Preflight</h4>
+      <Preflight data={plan.preflight} />
+      <h4>Capability Requirements</h4>
+      <List items={plan.capability_requirements || []} empty="No requirements generated yet" />
       <h4>Checklist</h4>
       <Checklist items={plan.checklist || []} checked={checked} onToggle={toggleCheck} />
       <h4>Command Groups</h4>
@@ -443,6 +464,7 @@ function PlanDetail({ plan, onUpdate }) {
       <div className="action-row">
         <button className="primary-action" onClick={generate}>Generate guide</button>
         <button className="primary-action" onClick={regenerate}>Regenerate</button>
+        <button className="primary-action" onClick={preflight}>Run preflight</button>
         <button className="primary-action" onClick={copyCommands} disabled={!commandsFromGroups(plan).length}>Copy commands</button>
         <button className="primary-action" onClick={copyMarkdown} disabled={!plan.markdown}>Copy markdown</button>
         <button className="link-button" onClick={() => mark('running_manually')}>Mark running</button>
@@ -495,6 +517,186 @@ function CommandGroups({ groups, fallback }) {
     );
   }
   return <pre className="command-box">{fallback.join('\n') || 'Generate the plan to create manual commands.'}</pre>;
+}
+
+function Preflight({ data }) {
+  const value = objectOrEmpty(data);
+  const checks = arrayOrEmpty(value.checks);
+  if (!checks.length) return <Empty text="Run preflight or generate the plan to create checks" />;
+  return (
+    <div className="preflight">
+      <p>Overall: <span className={`tag ${value.overall === 'ok' ? 'safe' : 'caution'}`}>{value.overall || 'unknown'}</span></p>
+      {checks.map((check, idx) => (
+        <div className={`preflight-row ${check.ok ? 'ok' : 'warn'}`} key={`${check.name}-${idx}`}>
+          <span>{check.ok ? 'OK' : 'WARN'}</span>
+          <strong>{check.name}</strong>
+          <em>{check.message || '-'}</em>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const readonlyActions = [
+  'probe_core_version',
+  'run_status',
+  'run_status_json',
+  'run_doctor',
+  'run_doctor_json',
+  'list_forwards',
+  'ddns_overview'
+];
+
+function Tasks({ nodes }) {
+  const [tasks, setTasks] = useState([]);
+  const [form, setForm] = useState({ node_id: nodes[0]?.node_id || '', action: 'run_status_json' });
+  const [error, setError] = useState('');
+  useEffect(() => {
+    loadTasks();
+  }, []);
+  useEffect(() => {
+    if (!form.node_id && nodes[0]?.node_id) {
+      setForm((prev) => ({ ...prev, node_id: nodes[0].node_id }));
+    }
+  }, [nodes]);
+  async function loadTasks() {
+    try {
+      setTasks(await getJSON('/api/v1/tasks'));
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+  async function createTask(e) {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form)
+      });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      await loadTasks();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+  return (
+    <div className="tasks-page">
+      {error && <div className="banner">Tasks request failed: {error}</div>}
+      <section className="panel">
+        <h3>Create Readonly Task</h3>
+        <p className="muted">2.1-alpha.1 queues only builtin readonly actions. The API never accepts command strings, and Agents map actions to fixed argv locally.</p>
+        <form className="form-grid" onSubmit={createTask}>
+          <label>Node<select value={form.node_id} onChange={(e) => setForm((prev) => ({ ...prev, node_id: e.target.value }))}>
+            <option value="">Select node</option>
+            {nodes.map((node) => <option key={node.node_id} value={node.node_id}>{node.node_name || node.node_id}</option>)}
+          </select></label>
+          <label>Action<select value={form.action} onChange={(e) => setForm((prev) => ({ ...prev, action: e.target.value }))}>
+            {readonlyActions.map((action) => <option key={action} value={action}>{action}</option>)}
+          </select></label>
+          <button className="primary-action" type="submit" disabled={!form.node_id}>Queue readonly task</button>
+          <button className="disabled inline" disabled>Non-readonly tasks Coming in future</button>
+        </form>
+      </section>
+      <section>
+        <h3>Tasks</h3>
+        <TasksList tasks={tasks} nodes={nodes} />
+      </section>
+    </div>
+  );
+}
+
+function TasksList({ tasks, nodes }) {
+  if (!tasks.length) return <Empty text="No readonly tasks queued yet" />;
+  const names = Object.fromEntries(nodes.map((node) => [node.node_id, node.node_name || node.node_id]));
+  return (
+    <Table headers={['ID', 'Node', 'Action', 'Status', 'Exit', 'Error', 'Created', 'Picked', 'Finished', 'Result']}>
+      {tasks.map((task) => (
+        <tr key={task.id}>
+          <td>{task.id}</td>
+          <td>{names[task.node_id] || task.node_id}</td>
+          <td>{task.action}</td>
+          <td><span className={`tag ${task.status}`}>{task.status}</span></td>
+          <td>{task.exit_code}</td>
+          <td>{task.error || '-'}</td>
+          <td>{task.created_at || '-'}</td>
+          <td>{task.picked_at || '-'}</td>
+          <td>{task.finished_at || '-'}</td>
+          <td>
+            {(task.result_stdout || task.result_stderr) ? (
+              <details className="task-result">
+                <summary>View redacted output</summary>
+                {task.result_stdout && <pre>{task.result_stdout}</pre>}
+                {task.result_stderr && <pre>{task.result_stderr}</pre>}
+              </details>
+            ) : '-'}
+          </td>
+        </tr>
+      ))}
+    </Table>
+  );
+}
+
+function Capabilities({ nodes }) {
+  const [caps, setCaps] = useState({ commands: [], blocked_patterns: [], future: [], safety_levels: [], allowed_task_actions: [], task_support: '', loading: true, error: '' });
+  useEffect(() => {
+    let alive = true;
+    getJSON('/api/v1/capabilities')
+      .then((data) => alive && setCaps({ ...data, loading: false, error: '' }))
+      .catch((err) => alive && setCaps((prev) => ({ ...prev, loading: false, error: err.message })));
+    return () => { alive = false; };
+  }, []);
+  if (caps.loading) return <Empty text="Loading capabilities" />;
+  if (caps.error) return <div className="banner">Capabilities failed: {caps.error}</div>;
+  return (
+    <div className="capabilities-page">
+      <section className="panel">
+        <h3>Controller CLI Capability Classes</h3>
+        <Table headers={['Command', 'Class', 'Note']}>
+          {(caps.commands || []).map((item) => (
+            <tr key={`${item.command}-${item.class}`}>
+              <td>{item.command}</td>
+              <td><span className={`tag ${item.class}`}>{item.class}</span></td>
+              <td>{item.note}</td>
+            </tr>
+          ))}
+        </Table>
+      </section>
+      <section className="panel">
+        <h3>Blocked Patterns</h3>
+        <List items={caps.blocked_patterns || []} empty="No blocked patterns reported" />
+      </section>
+      <section className="panel">
+        <h3>Readonly Task Support</h3>
+        <p className="muted">{caps.task_support || 'No task support advertised'}</p>
+        <List items={caps.allowed_task_actions || []} empty="No readonly task actions reported" />
+      </section>
+      <section className="panel">
+        <h3>Node-reported Capabilities</h3>
+        {nodes.length ? (
+          <Table headers={['Node', 'lq', 'Core', 'status json', 'doctor json', 'forward list', 'ddns overview', 'tasks enabled', 'task actions']}>
+            {nodes.map((node) => {
+              const c = node.capabilities || {};
+              return (
+                <tr key={node.node_id}>
+                  <td>{node.node_name || node.node_id}</td>
+                  <td>{String(Boolean(c.lq_available))}</td>
+                  <td>{c.core_version || node.core_version || '-'}</td>
+                  <td>{String(Boolean(c.supports_status_json))}</td>
+                  <td>{String(Boolean(c.supports_doctor_json))}</td>
+                  <td>{String(Boolean(c.supports_forward_list))}</td>
+                  <td>{String(Boolean(c.supports_ddns_overview))}</td>
+                  <td>{String(Boolean(c.enable_tasks))}</td>
+                  <td>{(c.allowed_task_actions || []).join(', ') || '-'}</td>
+                </tr>
+              );
+            })}
+          </Table>
+        ) : <Empty text="No nodes reported yet" />}
+      </section>
+    </div>
+  );
 }
 
 function Metric({ label, value }) {

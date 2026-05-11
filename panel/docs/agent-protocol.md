@@ -1,18 +1,20 @@
-# Leikwan Agent Protocol 2.0-alpha
+# Leikwan Agent Protocol
 
-本协议用于 Leikwan Agent 向 Controller 注册和上报状态。当前实现版本为 `2.0.0-beta.2`。Agent 仍然只有 Agent -> Controller 的状态上报，不包含 Controller -> Agent 的配置下发或命令执行。
+Current protocol version: `2.1.0-alpha.1`.
+
+Agent reports local read-only state to Controller. In `2.1.0-alpha.1`, Agent can optionally pull built-in readonly tasks, but it still cannot receive arbitrary command strings and cannot perform writes.
 
 ## Authorization
 
-注册和上报接口都需要：
+Agent APIs require:
 
 ```text
 Authorization: Bearer <token>
 ```
 
-token 来自 Controller 的 `--token` 或 `LEIKWAN_CONTROLLER_TOKEN`。日志中不得打印完整 token。
+Tokens must never appear in logs, events, raw JSON, frontend pages, task results or Plan output.
 
-## Role 枚举
+## Role Enum
 
 ```text
 entry
@@ -22,9 +24,7 @@ mixed
 unknown
 ```
 
-无法识别时必须使用 `unknown`，不要猜测。
-
-## Status 枚举
+## Status Enum
 
 ```text
 online
@@ -32,9 +32,9 @@ offline
 degraded
 ```
 
-Agent 本机采集部分失败但仍能上报时使用 `degraded`。例如 `lq` 缺失、`lq status --json` 失败、public IP 获取失败。
+Use `degraded` when collection partially fails but the Agent can still report.
 
-## Register 请求
+## Register
 
 ```http
 POST /api/v1/agent/register
@@ -51,16 +51,7 @@ Content-Type: application/json
 }
 ```
 
-响应：
-
-```json
-{
-  "status": "ok",
-  "node_id": "relay-1"
-}
-```
-
-## Report 请求
+## Report
 
 ```http
 POST /api/v1/agent/report
@@ -77,26 +68,34 @@ Content-Type: application/json
   "public_ip": "203.0.113.10",
   "primary_lan_ip": "10.0.0.10",
   "easytier_ip": "10.198.1.1",
-  "agent_version": "2.0.0-beta.2",
+  "agent_version": "2.1.0-alpha.1",
   "core_version": "1.4.0 LTS",
   "status": "online",
   "health_score": 96,
   "interval_seconds": 30,
-  "summary": {
-    "entries_count": 1,
-    "forwards_count": 4,
-    "health_score": 96
-  },
-  "doctor": {
-    "overall": "OK",
-    "warnings": [],
-    "suggestions": []
-  },
   "services": {
     "nftables": "active",
     "easytier": "active",
     "leikwan-agent": "active",
     "ddns_timer": "active"
+  },
+  "capabilities": {
+    "lq_available": true,
+    "core_version": "1.4.0 LTS",
+    "supports_status_json": true,
+    "supports_doctor_json": true,
+    "supports_forward_list": true,
+    "supports_ddns_overview": true,
+    "enable_tasks": false,
+    "allowed_task_actions": [
+      "ddns_overview",
+      "list_forwards",
+      "probe_core_version",
+      "run_doctor",
+      "run_doctor_json",
+      "run_status",
+      "run_status_json"
+    ]
   },
   "entries": [],
   "forwards": [],
@@ -105,44 +104,79 @@ Content-Type: application/json
 }
 ```
 
-响应：
+## Readonly Task Poll
+
+`enable_tasks` defaults to `false`. When explicitly enabled, Agent polls:
+
+```http
+GET /api/v1/agent/tasks?node_id=relay-1
+Authorization: Bearer <token>
+```
+
+Controller returns only queued tasks for that exact `node_id`.
+
+```json
+[
+  {
+    "id": 1,
+    "node_id": "relay-1",
+    "action": "run_status_json",
+    "status": "picked"
+  }
+]
+```
+
+## Readonly Task Result
+
+```http
+POST /api/v1/agent/tasks/1/result
+Authorization: Bearer <token>
+Content-Type: application/json
+```
 
 ```json
 {
-  "status": "ok",
-  "node_id": "relay-1"
+  "status": "succeeded",
+  "result_stdout": "{...redacted...}",
+  "result_stderr": "",
+  "exit_code": 0,
+  "error": ""
 }
 ```
 
-## Collector 规则
+Controller redacts and truncates stdout/stderr to 64KB before storing.
 
-Agent 只允许采集只读状态：
+## Allowed Task Actions
 
-- hostname
-- public IP，失败时为 `unknown`
-- primary LAN IP
+Actions are names, not commands:
+
+```text
+probe_core_version -> lq --version
+run_status         -> lq status
+run_status_json    -> lq status --json
+run_doctor         -> lq doctor
+run_doctor_json    -> lq doctor --json
+list_forwards      -> lq forward list
+ddns_overview      -> lq ddns overview
+```
+
+Agent maps action to fixed argv locally. Controller never sends command text.
+
+## Capabilities
+
+Capabilities are discovered only through read-only checks:
+
 - `lq --version`
 - `lq status --json`
 - `lq doctor --json`
-- `systemctl is-active nftables`
-- `systemctl is-active easytier...`
-- `systemctl is-active leikwan-ddns-refresh.timer`
+- `lq forward list`
+- `lq ddns overview`
 
-如果 `lq` 不存在：
+Probe failures are reported as `false` or `missing`; they do not crash the Agent.
 
-- `core_version = "missing"`
-- `status = "degraded"`
-- 继续上报，不退出
+## Redaction
 
-如果 `lq status --json` 或 `lq doctor --json` 输出坏 JSON：
-
-- Agent 不崩溃
-- `status = "degraded"`
-- `recent_errors` 记录解析错误摘要
-
-## Redaction 规则
-
-Controller 和 Agent 都必须在日志、events、raw_json 入库前脱敏以下字段：
+Controller and Agent redact:
 
 ```text
 token
@@ -156,29 +190,17 @@ custom_cmd
 Authorization
 ```
 
-字符串中的 URL query 也要脱敏：
+URL query fields such as `token=`, `key=`, `password=` and `secret=` are also redacted. Bearer tokens become `Bearer REDACTED`.
 
-```text
-token=...
-key=...
-password=...
-secret=...
-```
+## Forbidden
 
-Bearer token 输出必须变成：
+The protocol does not include:
 
-```text
-Bearer REDACTED
-```
-
-## 禁止项
-
-2.0-alpha 协议不包含：
-
-- 命令执行
-- 配置写入
-- 服务重启
-- nftables 应用
-- EasyTier 网络修改
-- DDNS 更新配置下发
-- entries / forwards / PBR 修改
+- arbitrary command execution
+- shell command strings
+- configuration writes
+- service restarts
+- nftables changes
+- EasyTier network modification
+- DDNS configuration updates
+- entries / forwards / PBR modification

@@ -2,7 +2,7 @@ package controller
 
 import "encoding/json"
 
-const Version = "2.0.0-beta.2"
+const Version = "2.1.0-alpha.1"
 
 type HealthResponse struct {
 	Name    string `json:"name"`
@@ -39,6 +39,18 @@ type ReportRequest struct {
 	Forwards        []ForwardPayload  `json:"forwards,omitempty"`
 	RecentErrors    []string          `json:"recent_errors,omitempty"`
 	Errors          []string          `json:"errors,omitempty"`
+	Capabilities    AgentCapabilities `json:"capabilities,omitempty"`
+}
+
+type AgentCapabilities struct {
+	LQAvailable          bool     `json:"lq_available"`
+	CoreVersion          string   `json:"core_version"`
+	SupportsStatusJSON   bool     `json:"supports_status_json"`
+	SupportsDoctorJSON   bool     `json:"supports_doctor_json"`
+	SupportsForwardList  bool     `json:"supports_forward_list"`
+	SupportsDDNSOverview bool     `json:"supports_ddns_overview"`
+	EnableTasks          bool     `json:"enable_tasks"`
+	AllowedTaskActions   []string `json:"allowed_task_actions,omitempty"`
 }
 
 type EntryPayload struct {
@@ -75,6 +87,7 @@ type Node struct {
 	IntervalSeconds int               `json:"interval_seconds"`
 	LastSeen        string            `json:"last_seen"`
 	Services        map[string]string `json:"services,omitempty"`
+	Capabilities    AgentCapabilities `json:"capabilities,omitempty"`
 	Summary         json.RawMessage   `json:"summary,omitempty"`
 	Doctor          json.RawMessage   `json:"doctor,omitempty"`
 	RecentErrors    []string          `json:"recent_errors,omitempty"`
@@ -88,6 +101,7 @@ type NodeReport struct {
 	HealthScore     int               `json:"health_score"`
 	IntervalSeconds int               `json:"interval_seconds"`
 	Services        map[string]string `json:"services,omitempty"`
+	Capabilities    AgentCapabilities `json:"capabilities,omitempty"`
 	Summary         json.RawMessage   `json:"summary,omitempty"`
 	Doctor          json.RawMessage   `json:"doctor,omitempty"`
 	RecentErrors    []string          `json:"recent_errors,omitempty"`
@@ -124,6 +138,33 @@ type Event struct {
 	Level     string `json:"level"`
 	Message   string `json:"message"`
 	CreatedAt string `json:"created_at"`
+}
+
+type CreateTaskRequest struct {
+	NodeID string `json:"node_id"`
+	Action string `json:"action"`
+}
+
+type TaskResultRequest struct {
+	Status       string `json:"status"`
+	ResultStdout string `json:"result_stdout"`
+	ResultStderr string `json:"result_stderr"`
+	ExitCode     int    `json:"exit_code"`
+	Error        string `json:"error"`
+}
+
+type Task struct {
+	ID           int64  `json:"id"`
+	NodeID       string `json:"node_id"`
+	Action       string `json:"action"`
+	Status       string `json:"status"`
+	ResultStdout string `json:"result_stdout,omitempty"`
+	ResultStderr string `json:"result_stderr,omitempty"`
+	ExitCode     int    `json:"exit_code"`
+	Error        string `json:"error,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	PickedAt     string `json:"picked_at,omitempty"`
+	FinishedAt   string `json:"finished_at,omitempty"`
 }
 
 type BootstrapAgentCommandResponse struct {
@@ -171,20 +212,40 @@ type CommandGroup struct {
 }
 
 type Plan struct {
-	ID                int64           `json:"id"`
-	Type              string          `json:"type"`
-	Title             string          `json:"title"`
-	Status            string          `json:"status"`
-	ExecutionStatus   string          `json:"execution_status"`
-	ExecutionNote     string          `json:"execution_note"`
-	ManualResult      string          `json:"manual_result"`
-	TargetNodeID      string          `json:"target_node_id"`
-	PayloadJSON       json.RawMessage `json:"payload_json,omitempty"`
-	GeneratedCommands []string        `json:"generated_commands"`
-	CommandGroups     []CommandGroup  `json:"command_groups"`
-	Checklist         []string        `json:"checklist"`
-	Markdown          string          `json:"markdown"`
-	Warnings          []string        `json:"warnings"`
-	CreatedAt         string          `json:"created_at"`
-	UpdatedAt         string          `json:"updated_at"`
+	ID                     int64           `json:"id"`
+	Type                   string          `json:"type"`
+	Title                  string          `json:"title"`
+	Status                 string          `json:"status"`
+	ExecutionStatus        string          `json:"execution_status"`
+	ExecutionNote          string          `json:"execution_note"`
+	ManualResult           string          `json:"manual_result"`
+	SafetyLevel            string          `json:"safety_level"`
+	CommandClassification  string          `json:"command_classification"`
+	TargetNodeID           string          `json:"target_node_id"`
+	PayloadJSON            json.RawMessage `json:"payload_json,omitempty"`
+	GeneratedCommands      []string        `json:"generated_commands"`
+	CommandGroups          []CommandGroup  `json:"command_groups"`
+	Checklist              []string        `json:"checklist"`
+	Preflight              json.RawMessage `json:"preflight,omitempty"`
+	CapabilityRequirements []string        `json:"capability_requirements"`
+	Markdown               string          `json:"markdown"`
+	Warnings               []string        `json:"warnings"`
+	CreatedAt              string          `json:"created_at"`
+	UpdatedAt              string          `json:"updated_at"`
+}
+
+type CapabilityItem struct {
+	Command string `json:"command"`
+	Class   string `json:"class"`
+	Note    string `json:"note"`
+}
+
+type CapabilitiesResponse struct {
+	Version            string           `json:"version"`
+	Commands           []CapabilityItem `json:"commands"`
+	Blocked            []string         `json:"blocked_patterns"`
+	Future             []string         `json:"future"`
+	SafetyLevels       []string         `json:"safety_levels"`
+	TaskSupport        string           `json:"task_support"`
+	AllowedTaskActions []string         `json:"allowed_task_actions"`
 }

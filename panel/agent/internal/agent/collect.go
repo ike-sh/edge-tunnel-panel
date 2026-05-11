@@ -13,10 +13,11 @@ import (
 )
 
 type Collector struct {
-	LQPath         string
-	PublicIPFunc   func(context.Context) (string, error)
-	CommandFunc    func(context.Context, string, ...string) (string, error)
-	CommandTimeout time.Duration
+	LQPath          string
+	PublicIPFunc    func(context.Context) (string, error)
+	CommandFunc     func(context.Context, string, ...string) (string, error)
+	TaskCommandFunc func(context.Context, string, ...string) (string, string, int, error)
+	CommandTimeout  time.Duration
 }
 
 func DefaultCollector() Collector {
@@ -34,7 +35,8 @@ func (c Collector) Collect(ctx context.Context, cfg Config) ReportRequest {
 	report := ReportRequest{
 		NodeID: cfg.NodeID, NodeName: cfg.NodeName, Role: normalizeRole(cfg.Role), Hostname: hostname,
 		AgentVersion: Version, CoreVersion: "missing", Status: "online", HealthScore: 100, IntervalSeconds: cfg.IntervalSeconds,
-		Services: map[string]string{},
+		Services:     map[string]string{},
+		Capabilities: Capabilities{CoreVersion: "missing", EnableTasks: cfg.EnableTasks, AllowedTaskActions: AllowedTaskActions()},
 	}
 	if report.IntervalSeconds <= 0 {
 		report.IntervalSeconds = 60
@@ -54,9 +56,12 @@ func (c Collector) Collect(ctx context.Context, cfg Config) ReportRequest {
 		report.Status = "degraded"
 		report.HealthScore = 50
 		report.Errors = append(report.Errors, "lq missing")
+		report.Capabilities.LQAvailable = false
 	} else {
+		report.Capabilities.LQAvailable = true
 		if out, err := c.runCommand(ctx, lqPath, "--version"); err == nil {
 			report.CoreVersion = parseCoreVersion(out)
+			report.Capabilities.CoreVersion = report.CoreVersion
 		} else {
 			report.Status = "degraded"
 			report.Errors = append(report.Errors, "lq --version: "+err.Error())
@@ -66,6 +71,8 @@ func (c Collector) Collect(ctx context.Context, cfg Config) ReportRequest {
 			if err := applyStatusJSON(&report, []byte(out)); err != nil {
 				report.Status = "degraded"
 				report.RecentErrors = append(report.RecentErrors, "lq status json: "+err.Error())
+			} else {
+				report.Capabilities.SupportsStatusJSON = true
 			}
 		} else {
 			report.Status = "degraded"
@@ -76,11 +83,15 @@ func (c Collector) Collect(ctx context.Context, cfg Config) ReportRequest {
 			if err := applyDoctorJSON(&report, []byte(out)); err != nil {
 				report.Status = "degraded"
 				report.RecentErrors = append(report.RecentErrors, "lq doctor json: "+err.Error())
+			} else {
+				report.Capabilities.SupportsDoctorJSON = true
 			}
 		} else {
 			report.Status = "degraded"
 			report.Errors = append(report.Errors, "lq doctor --json: "+err.Error())
 		}
+		report.Capabilities.SupportsForwardList = c.readonlyCommandWorks(ctx, lqPath, "forward", "list")
+		report.Capabilities.SupportsDDNSOverview = c.readonlyCommandWorks(ctx, lqPath, "ddns", "overview")
 	}
 
 	report.Services["nftables"] = c.systemctlActive(ctx, "nftables")
@@ -94,6 +105,11 @@ func (c Collector) Collect(ctx context.Context, cfg Config) ReportRequest {
 		report.HealthScore = 80
 	}
 	return report
+}
+
+func (c Collector) readonlyCommandWorks(ctx context.Context, lqPath string, args ...string) bool {
+	_, err := c.runCommand(ctx, lqPath, args...)
+	return err == nil
 }
 
 func (c Collector) findLQ() (string, error) {

@@ -1,5 +1,7 @@
 dist/
 node_modules/
+.cache/
+.gocache/
 *.tar.gz
 *.tar.gz.sha256
 *.log
