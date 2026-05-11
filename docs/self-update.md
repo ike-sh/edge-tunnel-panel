@@ -1,6 +1,6 @@
 # 自更新与安全回滚
 
-Leikwan Toolkit 1.3.1 保持自更新能力。自更新只使用 GitHub Release 包，不会直接拉取 raw main 分支脚本。
+Leikwan Toolkit 1.3.2 保持自更新能力。自更新只使用 GitHub Release 包，不会直接拉取 raw main 分支脚本。
 
 ## 检查版本
 
@@ -14,7 +14,7 @@ lq --update-check
 输出当前版本和 GitHub latest release 版本。当前已经最新时会显示：
 
 ```text
-[OK] 当前已是最新版本：1.3.1
+[OK] 当前已是最新版本：1.3.2
 ```
 
 ## 执行更新
@@ -68,10 +68,10 @@ lq update status
 ```text
 LAST_UPDATE_TIME=2026-05-10 05:30:00
 LAST_UPDATE_FROM=1.1.1
-LAST_UPDATE_TO=1.3.1
+LAST_UPDATE_TO=1.3.2
 LAST_UPDATE_RESULT=ok
 LAST_UPDATE_BACKUP=/var/backups/leikwan-toolkit/root__leikwan-toolkit.sh.20260510-053000.bak
-LAST_UPDATE_SOURCE=https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.3.1/leikwan-toolkit-1.3.1.tar.gz
+LAST_UPDATE_SOURCE=https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.3.2/leikwan-toolkit-1.3.2.tar.gz
 ```
 
 ## 回滚

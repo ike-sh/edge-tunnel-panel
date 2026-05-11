@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.3.1 正式版验收。
+本页用于 Leikwan Toolkit 1.3.2 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.3.1"
-leikwan-toolkit 1.3.1
+TOOL_VERSION="1.3.2"
+leikwan-toolkit 1.3.2
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.3.1.tar.gz
-dist/leikwan-toolkit-1.3.1.tar.gz.sha256
+dist/leikwan-toolkit-1.3.2.tar.gz
+dist/leikwan-toolkit-1.3.2.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -44,6 +44,11 @@ release 包不得包含旧入口文件：
 bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
+bash tests/role-detection-regression.sh
+bash tests/doctor-reset-regression.sh
+bash tests/compact-output-regression.sh
+bash tests/ddns-summary-regression.sh
+bash tests/health-score-regression.sh
 bash tests/package-regression.sh
 bash tests/uninstall-regression.sh
 bash tests/lock-regression.sh
@@ -77,10 +82,14 @@ lq plan
 ## 状态 JSON / 日志 / 卸载 / 锁
 
 ```bash
+lq --brief
+lq status --brief
 lq status --json
 lq --status-json
 lq doctor --json
 lq --doctor-json
+lq doctor --auto-fix
+lq --doctor-auto-fix
 lq logs
 lq logs ddns
 lq logs apply
@@ -88,7 +97,12 @@ lq logs apply
 
 期望：
 
+- relay 节点不会因为存在 entries.tsv 被误报 relay + entry；真实混合部署才 WARN。
+- 简洁模式输出 `Leikwan Status`、`Health: N/100 (level)` 和 `Overall`。
+- doctor 每次重新聚合当前状态，不继承历史 last-doctor FAIL / WARN。
+- doctor 自动修复只处理 nft/MSS、DDNS timer、快捷命令、权限和 stale lock，不删除业务配置。
 - JSON 合法，不清屏、不等待回车、不包含 secret。
+- JSON 包含 `health_score` 和 `health_level`。
 - 无日志时友好提示。
 - doctor 文本输出末尾包含“诊断结果摘要”。
 

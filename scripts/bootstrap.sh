@@ -121,9 +121,36 @@ download_with_fallback() {
   return 1
 }
 
+try_install_jq() {
+  if command -v jq >/dev/null 2>&1; then
+    ok "jq 已存在。"
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    info "检测到缺少 jq，正在尝试使用 apt-get 安装。"
+    if apt-get update && apt-get install -y jq; then
+      ok "jq 安装完成。"
+      return 0
+    fi
+    warn "jq 自动安装失败，请稍后手动安装：apt-get install -y jq"
+    return 0
+  fi
+  if command -v apt >/dev/null 2>&1; then
+    info "检测到缺少 jq，正在尝试使用 apt 安装。"
+    if apt update && apt install -y jq; then
+      ok "jq 安装完成。"
+      return 0
+    fi
+    warn "jq 自动安装失败，请稍后手动安装：apt install -y jq"
+    return 0
+  fi
+  warn "未找到 apt/apt-get，跳过 jq 自动安装。"
+}
+
 install_tool() {
   command -v curl >/dev/null 2>&1 || { fail "缺少 curl，请先安装 curl。"; exit 1; }
   local tmp
+  try_install_jq
   tmp="$(mktemp)"
   download_with_fallback "$RAW_SCRIPT_URL" "$tmp"
   install -m 755 "$tmp" "$INSTALL_PATH"

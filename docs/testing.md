@@ -1,6 +1,6 @@
 # 测试与 release 验证
 
-Leikwan Toolkit 1.3.1 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
+Leikwan Toolkit 1.3.2 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
 
 ## 一键验证
 
@@ -18,6 +18,11 @@ bash scripts/check-redaction.sh
 bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
+bash tests/role-detection-regression.sh
+bash tests/doctor-reset-regression.sh
+bash tests/compact-output-regression.sh
+bash tests/ddns-summary-regression.sh
+bash tests/health-score-regression.sh
 bash tests/package-regression.sh
 bash tests/uninstall-regression.sh
 bash tests/lock-regression.sh
@@ -37,6 +42,11 @@ bash scripts/package-release.sh
 bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
+bash tests/role-detection-regression.sh
+bash tests/doctor-reset-regression.sh
+bash tests/compact-output-regression.sh
+bash tests/ddns-summary-regression.sh
+bash tests/health-score-regression.sh
 bash tests/package-regression.sh
 bash tests/uninstall-regression.sh
 bash tests/lock-regression.sh
@@ -46,6 +56,11 @@ bash tests/redaction-regression.sh
 - `smoke.sh`：基础语法、版本、帮助和关键 CLI 参数识别。
 - `cli-regression.sh`：只读 CLI 在空状态目录下不触发全局 trap。
 - `render-regression.sh`：模拟 TSV，检查表格、紧凑渲染、初始化向导菜单和运维命令中心菜单。
+- `role-detection-regression.sh`：检查 relay 不因 entries.tsv 被误判为 entry，真实混合部署才 WARN。
+- `doctor-reset-regression.sh`：检查 doctor 每次运行都重置 WARN / FAIL 聚合，不继承历史 last-doctor。
+- `compact-output-regression.sh`：检查 `--brief` / `LEIKWAN_BRIEF=1` 输出专业简洁，JSON 不受影响。
+- `ddns-summary-regression.sh`：检查 DDNS 摘要为分区人类可读格式，不再输出机器化 `summary scope=`。
+- `health-score-regression.sh`：检查健康度评分和 JSON 字段。
 - `package-regression.sh`：检查 release 包内容边界。
 - `uninstall-regression.sh`：检查普通 / 深度卸载菜单、dry-run 和卸载后状态友好输出。
 - `lock-regression.sh`：检查 stale lock 清理和锁占用时的友好拒绝。

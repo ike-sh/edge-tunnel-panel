@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.3.1"
+TOOL_VERSION="1.3.2"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -19,6 +19,20 @@ REPORT_FAIL_COUNT=0
 PORT_CHECK_RESULT="ok"
 STATUS_OVERVIEW_RESULT="ok"
 LEIKWAN_GLOBAL_LOCK_TOKEN=""
+DOCTOR_SUMMARY_OVERALL=""
+DOCTOR_SUMMARY_WARNINGS=0
+DOCTOR_SUMMARY_FAILURES=0
+DDNS_FORWARD_CHECKED=0
+DDNS_FORWARD_DOMAIN_COUNT=0
+DDNS_FORWARD_CHANGED_COUNT=0
+DDNS_FORWARD_FAILED_COUNT=0
+DDNS_ENTRY_CHECKED=0
+DDNS_ENTRY_DOMAIN_COUNT=0
+DDNS_ENTRY_CHANGED_COUNT=0
+DDNS_ENTRY_FAILED_COUNT=0
+DDNS_PBR_DOMAIN_COUNT=0
+DDNS_PBR_CHANGED_COUNT=0
+DDNS_PBR_FAILED_COUNT=0
 
 LOG_FILE="${LEIKWAN_LOG_FILE:-/var/log/leikwan-toolkit.log}"
 STATE_DIR="${LEIKWAN_STATE_DIR:-/etc/leikwan-toolkit}"
@@ -258,13 +272,17 @@ pad_display_width() {
 
 should_render_table() {
   local min_cols="$1" cols
-  [[ "${LEIKWAN_COMPACT:-0}" == "1" ]] && return 1
+  [[ "${LEIKWAN_COMPACT:-0}" == "1" || "${LEIKWAN_BRIEF:-0}" == "1" ]] && return 1
   cols="$(terminal_cols)"
   if [[ "${LEIKWAN_TABLE:-0}" == "1" ]]; then
     (( cols >= min_cols )) && return 0
     return 1
   fi
   (( cols >= min_cols ))
+}
+
+is_brief_mode() {
+  [[ "${LEIKWAN_BRIEF:-0}" == "1" ]]
 }
 
 render_tsv_compact() {
@@ -678,12 +696,17 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh quickstart
   sudo bash leikwan-toolkit.sh plan
   sudo bash leikwan-toolkit.sh status
+  sudo bash leikwan-toolkit.sh status --brief
+  sudo bash leikwan-toolkit.sh --brief
   sudo bash leikwan-toolkit.sh status --json
   sudo bash leikwan-toolkit.sh --status
   sudo bash leikwan-toolkit.sh --status-json
   sudo bash leikwan-toolkit.sh --doctor
+  sudo bash leikwan-toolkit.sh --doctor --auto-fix
   sudo bash leikwan-toolkit.sh --doctor --verbose
+  sudo bash leikwan-toolkit.sh doctor --auto-fix
   sudo bash leikwan-toolkit.sh doctor --json
+  sudo bash leikwan-toolkit.sh --doctor-auto-fix
   sudo bash leikwan-toolkit.sh --doctor-json
   sudo bash leikwan-toolkit.sh port check
   sudo bash leikwan-toolkit.sh --port-check
@@ -4545,6 +4568,12 @@ bool_enabled_disabled() {
   esac
 }
 
+csv_count() {
+  local value="$1"
+  [[ -n "$value" ]] || { printf '0'; return 0; }
+  awk -v s="$value" 'BEGIN{n=split(s,a,","); c=0; for(i=1;i<=n;i++) if(a[i]!="") c++; print c+0}'
+}
+
 ddns_write_config() {
   local interval="${1:-$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")}"
   local refresh_forwards="${2:-$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")}"
@@ -4596,6 +4625,70 @@ ddns_emit() {
     mkdir -p "$(dirname "$DDNS_LOG_FILE")" 2>/dev/null || true
     printf '[%s] %s\n' "$(status_now)" "$line" >>"$DDNS_LOG_FILE" 2>/dev/null || true
   fi
+}
+
+ddns_output_line() {
+  local line="$1"
+  echo "$line"
+  if (( DRY_RUN == 0 )) && [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    mkdir -p "$(dirname "$DDNS_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] %s\n' "$(status_now)" "$line" >>"$DDNS_LOG_FILE" 2>/dev/null || true
+  fi
+}
+
+ddns_action_text() {
+  local value="$1" done_text="$2" pending_text="$3" idle_text="$4"
+  case "${value,,}" in
+    true|yes|1|on) printf '%s' "$done_text" ;;
+    needed|need|pending) printf '%s' "$pending_text" ;;
+    *) printf '%s' "$idle_text" ;;
+  esac
+}
+
+ddns_print_summary() {
+  local result="$1"
+  ddns_output_line ""
+  ddns_output_line "DDNS 摘要"
+  ddns_output_line "----------------------------------------"
+  ddns_output_line "后端转发："
+  ddns_output_line "- 检查 ${DDNS_FORWARD_CHECKED}"
+  ddns_output_line "- 域名 ${DDNS_FORWARD_DOMAIN_COUNT}"
+  ddns_output_line "- 变化 ${DDNS_FORWARD_CHANGED_COUNT}"
+  ddns_output_line "- 失败 ${DDNS_FORWARD_FAILED_COUNT}"
+  ddns_output_line ""
+  ddns_output_line "公网入口："
+  if (( DDNS_ENTRY_DOMAIN_COUNT == 0 )); then
+    ddns_output_line "- 域名入口 0"
+    ddns_output_line "- 无需刷新"
+  else
+    ddns_output_line "- 检查 ${DDNS_ENTRY_CHECKED}"
+    ddns_output_line "- 域名入口 ${DDNS_ENTRY_DOMAIN_COUNT}"
+    ddns_output_line "- 变化 ${DDNS_ENTRY_CHANGED_COUNT}"
+    ddns_output_line "- 失败 ${DDNS_ENTRY_FAILED_COUNT}"
+  fi
+  ddns_output_line ""
+  ddns_output_line "域名 PBR："
+  if (( DDNS_PBR_DOMAIN_COUNT == 0 )); then
+    ddns_output_line "- 未配置"
+  else
+    ddns_output_line "- 检查 ${DDNS_PBR_DOMAIN_COUNT}"
+    ddns_output_line "- 变化 ${DDNS_PBR_CHANGED_COUNT}"
+    ddns_output_line "- 失败 ${DDNS_PBR_FAILED_COUNT}"
+  fi
+  ddns_output_line ""
+  ddns_output_line "系统动作："
+  ddns_output_line "- nftables：$(ddns_action_text "$DDNS_NFT_APPLIED" "已重应用" "待重应用" "无需重应用")"
+  ddns_output_line "- PBR：$(ddns_action_text "$DDNS_PBR_APPLIED" "已应用" "待应用" "无需应用")"
+  if [[ "$DDNS_RELAY_RESTARTED" == "true" ]]; then
+    ddns_output_line "- relay：已重启"
+  elif [[ "$DDNS_RELAY_RESTART_NEEDED" == "true" ]]; then
+    ddns_output_line "- relay：需要维护窗口重启"
+  else
+    ddns_output_line "- relay：无需重启"
+  fi
+  ddns_output_line ""
+  ddns_output_line "结果："
+  ddns_output_line "- DDNS 状态：$(status_result_display "$result")"
 }
 
 ddns_write_last_status() {
@@ -4738,7 +4831,10 @@ ddns_refresh_forwards_scope() {
     content="${content}"$'\n'"${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_ip}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${resolved_at}"$'\t'"${comment}"
   done < <(forwards_rows_usv)
   write_file "$RESOLVED_TSV" "$content" 600
-  ddns_emit INFO "forwards checked=${forward_count}，domains=${domain_count}，changed=${changed_count}，failed=${failed_count}"
+  DDNS_FORWARD_CHECKED="$forward_count"
+  DDNS_FORWARD_DOMAIN_COUNT="$domain_count"
+  DDNS_FORWARD_CHANGED_COUNT="$changed_count"
+  DDNS_FORWARD_FAILED_COUNT="$failed_count"
   return 0
 }
 
@@ -4788,7 +4884,10 @@ ddns_refresh_entries_scope() {
     fi
   done < <(entries_rows)
   write_file "$RESOLVED_ENTRIES_TSV" "$content" 600
-  ddns_emit INFO "entries checked=${entry_count}，domains=${domain_count}，changed=${changed_count}，failed=${failed_count}"
+  DDNS_ENTRY_CHECKED="$entry_count"
+  DDNS_ENTRY_DOMAIN_COUNT="$domain_count"
+  DDNS_ENTRY_CHANGED_COUNT="$changed_count"
+  DDNS_ENTRY_FAILED_COUNT="$failed_count"
 }
 
 ddns_maybe_restart_relay() {
@@ -4844,6 +4943,9 @@ ddns_refresh_once() {
   DDNS_PBR_CHANGED=""; DDNS_PBR_FAILED=""; DDNS_RELAY_RESTART_NEEDED=false
   DDNS_NFT_APPLIED=false; DDNS_PBR_APPLIED=false; DDNS_RELAY_RESTARTED=false
   DDNS_FORWARD_NEED_APPLY=0; DDNS_FORWARD_PBR_NEED_SYNC=0
+  DDNS_FORWARD_CHECKED=0; DDNS_FORWARD_DOMAIN_COUNT=0; DDNS_FORWARD_CHANGED_COUNT=0; DDNS_FORWARD_FAILED_COUNT=0
+  DDNS_ENTRY_CHECKED=0; DDNS_ENTRY_DOMAIN_COUNT=0; DDNS_ENTRY_CHANGED_COUNT=0; DDNS_ENTRY_FAILED_COUNT=0
+  DDNS_PBR_DOMAIN_COUNT=0; DDNS_PBR_CHANGED_COUNT=0; DDNS_PBR_FAILED_COUNT=0
   if ! lock_acquire "$DDNS_LOCK_PATH" "DDNS 刷新" ddns_lock; then
     ddns_write_last_status "skipped" "$scope" "" "" "" "" "" "" false false false false
     return 0
@@ -4872,11 +4974,13 @@ ddns_refresh_once() {
   fi
   if ddns_scope_requested "$scope" pbr; then
     if ddns_scope_enabled DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT"; then
+      DDNS_PBR_DOMAIN_COUNT="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
       if ddns_config_bool DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT"; then
         pbr_domain_sync --from-ddns || result="warn"
         [[ -n "$PBR_DOMAIN_SYNC_CHANGED_NAMES" ]] && DDNS_PBR_CHANGED="$PBR_DOMAIN_SYNC_CHANGED_NAMES"
         [[ -n "$PBR_DOMAIN_SYNC_FAILED_NAMES" ]] && DDNS_PBR_FAILED="$PBR_DOMAIN_SYNC_FAILED_NAMES"
-        ddns_emit INFO "pbr domains checked=$(ddns_domain_pbr_count 2>/dev/null || printf '0')，changed=${DDNS_PBR_CHANGED:-none}，failed=${DDNS_PBR_FAILED:-none}"
+        DDNS_PBR_CHANGED_COUNT="$(csv_count "$DDNS_PBR_CHANGED")"
+        DDNS_PBR_FAILED_COUNT="$(csv_count "$DDNS_PBR_FAILED")"
       else
         ddns_emit INFO "DDNS_AUTO_SYNC_DOMAIN_PBR=false，跳过域名 PBR 自动同步。"
       fi
@@ -4929,7 +5033,14 @@ ddns_refresh_once() {
   if [[ -n "$DDNS_FORWARD_FAILED$DDNS_ENTRY_FAILED$DDNS_PBR_FAILED" && "$result" == "ok" ]]; then
     result="warn"
   fi
-  ddns_emit INFO "summary scope=${scope} forwards changed=${DDNS_FORWARD_CHANGED:-none} failed=${DDNS_FORWARD_FAILED:-none}; entries changed=${DDNS_ENTRY_CHANGED:-none} failed=${DDNS_ENTRY_FAILED:-none}; pbr changed=${DDNS_PBR_CHANGED:-none} failed=${DDNS_PBR_FAILED:-none}; nft_applied=${DDNS_NFT_APPLIED}; pbr_applied=${DDNS_PBR_APPLIED}; relay_restart_needed=${DDNS_RELAY_RESTART_NEEDED}; relay_restarted=${DDNS_RELAY_RESTARTED}"
+  if (( DDNS_FORWARD_CHANGED_COUNT == 0 )); then DDNS_FORWARD_CHANGED_COUNT="$(csv_count "$DDNS_FORWARD_CHANGED")"; fi
+  if (( DDNS_FORWARD_FAILED_COUNT == 0 )); then DDNS_FORWARD_FAILED_COUNT="$(csv_count "$DDNS_FORWARD_FAILED")"; fi
+  if (( DDNS_ENTRY_CHANGED_COUNT == 0 )); then DDNS_ENTRY_CHANGED_COUNT="$(csv_count "$DDNS_ENTRY_CHANGED")"; fi
+  if (( DDNS_ENTRY_FAILED_COUNT == 0 )); then DDNS_ENTRY_FAILED_COUNT="$(csv_count "$DDNS_ENTRY_FAILED")"; fi
+  if (( DDNS_PBR_DOMAIN_COUNT == 0 )) && ddns_scope_requested "$scope" pbr; then
+    DDNS_PBR_DOMAIN_COUNT="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
+  fi
+  ddns_print_summary "$result"
   ddns_write_last_status "$result" "$scope" "$DDNS_FORWARD_CHANGED" "$DDNS_FORWARD_FAILED" "$DDNS_ENTRY_CHANGED" "$DDNS_ENTRY_FAILED" "$DDNS_PBR_CHANGED" "$DDNS_PBR_FAILED" "$DDNS_RELAY_RESTART_NEEDED" "$DDNS_NFT_APPLIED" "$DDNS_PBR_APPLIED" "$DDNS_RELAY_RESTARTED"
   ddns_emit INFO "DDNS 刷新结束：$(status_result_display "$result")。"
   global_lock_release
@@ -5006,7 +5117,7 @@ ddns_disable_timer() {
 ddns_status() {
   local timer_state interval refresh_forwards refresh_entries refresh_pbr auto_apply auto_sync_forward_pbr auto_sync_domain_pbr entry_auto_restart
   local last_time last_result last_scope forward_changed forward_failed entry_changed entry_failed pbr_changed pbr_failed
-  local relay_restart_needed nft_applied pbr_applied relay_restarted forward_count entry_count pbr_count
+  local relay_restart_needed nft_applied pbr_applied relay_restarted forward_count entry_count pbr_count forward_checked entry_checked
   timer_state="$(ddns_timer_state)"
   interval="$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")"
   refresh_forwards="$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")"
@@ -5032,6 +5143,8 @@ ddns_status() {
   forward_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
   entry_count="$(ddns_domain_entry_count 2>/dev/null || printf '0')"
   pbr_count="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
+  forward_checked="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  entry_checked="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
   echo "DDNS 自动刷新状态"
   echo "----------------------------------------"
   echo "timer: ${timer_state}"
@@ -5056,6 +5169,48 @@ ddns_status() {
   echo "nft applied: $(bool_yes_no "${nft_applied:-false}")"
   echo "pbr applied: $(bool_yes_no "${pbr_applied:-false}")"
   echo "relay restarted: $(bool_yes_no "${relay_restarted:-false}")"
+  echo
+  echo "DDNS 摘要"
+  echo "----------------------------------------"
+  echo "后端转发："
+  echo "- 检查 ${forward_checked}"
+  echo "- 域名 ${forward_count}"
+  echo "- 变化 $(csv_count "$forward_changed")"
+  echo "- 失败 $(csv_count "$forward_failed")"
+  echo
+  echo "公网入口："
+  if (( entry_count == 0 )); then
+    echo "- 域名入口 0"
+    echo "- 无需刷新"
+  else
+    echo "- 检查 ${entry_checked}"
+    echo "- 域名入口 ${entry_count}"
+    echo "- 变化 $(csv_count "$entry_changed")"
+    echo "- 失败 $(csv_count "$entry_failed")"
+  fi
+  echo
+  echo "域名 PBR："
+  if (( pbr_count == 0 )); then
+    echo "- 未配置"
+  else
+    echo "- 检查 ${pbr_count}"
+    echo "- 变化 $(csv_count "$pbr_changed")"
+    echo "- 失败 $(csv_count "$pbr_failed")"
+  fi
+  echo
+  echo "系统动作："
+  echo "- nftables：$(ddns_action_text "${nft_applied:-false}" "已重应用" "待重应用" "无需重应用")"
+  echo "- PBR：$(ddns_action_text "${pbr_applied:-false}" "已应用" "待应用" "无需应用")"
+  if [[ "${relay_restarted:-false}" == "true" ]]; then
+    echo "- relay：已重启"
+  elif [[ "${relay_restart_needed:-false}" == "true" ]]; then
+    echo "- relay：需要维护窗口重启"
+  else
+    echo "- relay：无需重启"
+  fi
+  echo
+  echo "结果："
+  echo "- DDNS 状态：$(status_result_display "${last_result:-unknown}")"
 }
 
 ddns_logs() {
@@ -5364,22 +5519,16 @@ role_has_service() {
 }
 
 detect_leikwan_role() {
-  local env_role relay_score=0 entry_score=0
+  local env_role relay=0 entry=0
   env_role="$(env_file_get "$NETWORK_ENV" ROLE)"
-  [[ "$env_role" == "leikwan-relay" ]] && relay_score=$((relay_score + 3))
-  [[ "$env_role" == "cloud-entry" ]] && entry_score=$((entry_score + 3))
-  role_has_service "${EASYTIER_RELAY_SERVICE_NAME}.service" && relay_score=$((relay_score + 2))
-  role_has_service 'easytier-entry-*.service' && entry_score=$((entry_score + 2))
-  et_ip_present "$RELAY_ET_IP" && relay_score=$((relay_score + 1))
-  [[ -f "$ENTRY_PAIRING_FILE" || -f "$ENTRY_EXPOSE_ENV" ]] && entry_score=$((entry_score + 1))
-  if entries_rows | awk 'NR==1 {found=1} END{exit !found}'; then relay_score=$((relay_score + 1)); fi
-  if forwards_rows | awk 'NR==1 {found=1} END{exit !found}'; then relay_score=$((relay_score + 1)); fi
-  if pbr_rules_count >/dev/null 2>&1 && (( $(pbr_rules_count 2>/dev/null || printf '0') > 0 )); then relay_score=$((relay_score + 1)); fi
-  if (( relay_score > 0 && entry_score > 0 )); then
-    if (( relay_score >= entry_score )); then printf 'leikwan-relay'; else printf 'cloud-entry'; fi
-  elif (( relay_score > 0 )); then
+  [[ "$env_role" == "leikwan-relay" ]] && relay=1
+  [[ "$env_role" == "cloud-entry" ]] && entry=1
+  role_has_service "${EASYTIER_RELAY_SERVICE_NAME}.service" && relay=1
+  role_has_service 'easytier-entry-*.service' && entry=1
+  [[ -f "$ENTRY_PAIRING_FILE" || -f "$ENTRY_EXPOSE_ENV" ]] && entry=1
+  if (( relay == 1 )); then
     printf 'leikwan-relay'
-  elif (( entry_score > 0 )); then
+  elif (( entry == 1 )); then
     printf 'cloud-entry'
   else
     printf 'unknown'
@@ -5387,17 +5536,22 @@ detect_leikwan_role() {
 }
 
 role_summary() {
-  local env_role sources=() relay=0 entry=0 role
+  local env_role sources=() aux_sources=() relay=0 entry=0 role pbr_count=0
   env_role="$(env_file_get "$NETWORK_ENV" ROLE)"
   if [[ "$env_role" == "leikwan-relay" ]]; then sources+=("network.env"); relay=1; fi
   if [[ "$env_role" == "cloud-entry" ]]; then sources+=("network.env"); entry=1; fi
   if role_has_service "${EASYTIER_RELAY_SERVICE_NAME}.service"; then sources+=("easytier-relay.service"); relay=1; fi
   if role_has_service 'easytier-entry-*.service'; then sources+=("entry service"); entry=1; fi
   if [[ -f "$ENTRY_PAIRING_FILE" || -f "$ENTRY_EXPOSE_ENV" ]]; then sources+=("entry env"); entry=1; fi
-  if entries_rows | awk 'NR==1 {found=1} END{exit !found}'; then sources+=("entries.tsv"); relay=1; fi
-  if forwards_rows | awk 'NR==1 {found=1} END{exit !found}'; then sources+=("forwards.tsv"); relay=1; fi
+  if (( relay == 1 )) && entries_rows | awk 'NR==1 {found=1} END{exit !found}'; then aux_sources+=("entries.tsv"); fi
+  if (( relay == 1 )) && forwards_rows | awk 'NR==1 {found=1} END{exit !found}'; then aux_sources+=("forwards.tsv"); fi
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  if (( relay == 1 && pbr_count > 0 )); then aux_sources+=("pbr"); fi
   role="$(detect_leikwan_role)"
   local joined="无" mixed="false" src
+  if (( ${#aux_sources[@]} > 0 )); then
+    sources+=("${aux_sources[@]}")
+  fi
   if (( ${#sources[@]} > 0 )); then
     joined=""
     for src in "${sources[@]}"; do
@@ -5425,7 +5579,7 @@ ensure_role_or_warn() {
   esac
   warn "当前机器检测为 ${actual_text}，你正在进入 ${expected_text} 操作。"
   warn "角色来源：${source}"
-  [[ "$mixed" == "true" ]] && warn "检测到角色混合：relay + entry。"
+  [[ "$mixed" == "true" ]] && warn "检测到高级混合部署：relay + entry。"
   if is_interactive; then
     prompt_yes_no "是否仍然继续？" "N"
   else
@@ -7231,6 +7385,12 @@ report() {
     WARN) REPORT_WARN_COUNT=$((REPORT_WARN_COUNT + 1)) ;;
     FAIL) REPORT_FAIL_COUNT=$((REPORT_FAIL_COUNT + 1)) ;;
   esac
+  if is_brief_mode; then
+    case "$status" in
+      WARN|FAIL) ;;
+      *) return 0 ;;
+    esac
+  fi
   case "$status" in
     OK) echo "${GREEN}[OK]${RESET} ${msg}" ;;
     WARN) echo "${YELLOW}[WARN]${RESET} ${msg}" ;;
@@ -7745,6 +7905,16 @@ doctor_component_summary() {
   esac
 }
 
+doctor_reset_state() {
+  REPORT_WARN_COUNT=0
+  REPORT_FAIL_COUNT=0
+  DOCTOR_SUMMARY_OVERALL=""
+  DOCTOR_SUMMARY_WARNINGS=0
+  DOCTOR_SUMMARY_FAILURES=0
+  APPLY_NFT_LAST_STATUS=""
+  STATUS_OVERVIEW_RESULT="ok"
+}
+
 doctor_print_summary() {
   local role="$1" easytier entries forwards pbr nft mss ddns overall suggestions=()
   role="${role:-$(detect_role)}"
@@ -7776,6 +7946,9 @@ doctor_print_summary() {
   echo "MSS clamp: ${mss}"
   echo "DDNS: ${ddns}"
   echo "整体状态: ${overall}"
+  DOCTOR_SUMMARY_OVERALL="$overall"
+  DOCTOR_SUMMARY_WARNINGS="$REPORT_WARN_COUNT"
+  DOCTOR_SUMMARY_FAILURES="$REPORT_FAIL_COUNT"
   if (( ${#suggestions[@]} > 0 )); then
     echo "建议:"
     printf -- '- %s\n' "${suggestions[@]}"
@@ -7784,7 +7957,7 @@ doctor_print_summary() {
 
 doctor_json() {
   local role_info role role_source role_mixed entries_total entries_enabled forwards_total forwards_enabled pbr_count
-  local nft_status mss_status ddns_result overall warnings=() failures=()
+  local nft_status mss_status ddns_result overall health warnings=() failures=()
   STATUS_OVERVIEW_RESULT="ok"
   role_info="$(role_summary)"
   IFS=$'\t' read -r role role_source role_mixed <<<"$role_info"
@@ -7811,12 +7984,15 @@ doctor_json() {
   esac
   overall="$STATUS_OVERVIEW_RESULT"
   (( ${#failures[@]} > 0 )) && overall="fail"
+  health="$(health_score_value "$role" "$nft_status" "$mss_status" "$ddns_result")"
   cat <<EOF
 {
   "version": "$(json_escape "$TOOL_VERSION")",
   "role": "$(json_escape "$role")",
   "role_source": "$(json_escape "${role_source:-无}")",
   "overall": "$(json_escape "$overall")",
+  "health_score": ${health},
+  "health_level": "$(json_escape "$(health_level "$health")")",
   "entries_total": ${entries_total},
   "entries_enabled": ${entries_enabled},
   "forwards_total": ${forwards_total},
@@ -7833,8 +8009,7 @@ EOF
 
 doctor() {
   local role bbr_cc bbr_qdisc
-  REPORT_WARN_COUNT=0
-  REPORT_FAIL_COUNT=0
+  doctor_reset_state
   role="$(detect_role)"
   bbr_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
   bbr_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
@@ -7855,6 +8030,93 @@ doctor() {
   fi
   doctor_print_summary "$role"
   write_status_cache doctor "$(status_result_from_counts)"
+}
+
+doctor_auto_fix() {
+  need_root_unless_dry_run
+  local before_warn before_fail after_warn after_fail before_overall after_overall role release_global_lock=0 old_brief old_compact
+  old_brief="${LEIKWAN_BRIEF:-}"
+  old_compact="${LEIKWAN_COMPACT:-}"
+  echo "doctor 自动修复"
+  echo "----------------------------------------"
+  echo "修复前检查："
+  LEIKWAN_BRIEF=1 doctor
+  before_warn="${DOCTOR_SUMMARY_WARNINGS:-$REPORT_WARN_COUNT}"
+  before_fail="${DOCTOR_SUMMARY_FAILURES:-$REPORT_FAIL_COUNT}"
+  before_overall="${DOCTOR_SUMMARY_OVERALL:-unknown}"
+  echo
+  echo "修复前："
+  echo "- FAIL: ${before_fail}"
+  echo "- WARN: ${before_warn}"
+  echo "- 整体状态: ${before_overall}"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] 将检查并修复 nft/MSS/route_table/relay service/DDNS timer/lq symlink/权限/stale locks"
+    LEIKWAN_BRIEF="$old_brief"
+    LEIKWAN_COMPACT="$old_compact"
+    return 0
+  fi
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || {
+      LEIKWAN_BRIEF="$old_brief"
+      LEIKWAN_COMPACT="$old_compact"
+      return 1
+    }
+    release_global_lock=1
+  fi
+  echo
+  echo "执行修复："
+  lock_cleanup_stale_if_possible "$LEIKWAN_LOCK_PATH"
+  lock_cleanup_stale_if_possible "$DDNS_LOCK_PATH"
+  lock_cleanup_stale_if_possible "$UPDATE_LOCK_PATH"
+  lock_cleanup_stale_if_possible "$CONFIG_LOCK_PATH"
+  install_shortcuts && echo "- lq/LQ symlink 已确认"
+  if [[ -d "$STATE_DIR" ]]; then
+    chmod 700 "$STATE_DIR" "$ENTRY_DIR" "$ENTRIES_DIR" "$FORWARDS_DIR" "$OUTPUT_DIR" "$NFT_DIR" "$PBR_DIR" "$EASYTIER_DIR" "$STATUS_DIR" "$SNAPSHOT_DIR" "$AUTO_SNAPSHOT_DIR" 2>/dev/null || true
+    find "$STATE_DIR" -type f \( -name '*.env' -o -name '*.tsv' -o -name '*.conf' \) -exec chmod 600 {} + 2>/dev/null || true
+    echo "- 配置目录权限已检查"
+  fi
+  role="$(detect_role)"
+  case "$role" in
+    leikwan-relay)
+      if ! role_has_service "${EASYTIER_RELAY_SERVICE_NAME}.service" && relay_network_env_ready; then
+        apply_easytier_relay_service confirmed && echo "- relay service 已重建"
+      fi
+      pbr_sync_from_forwards --no-apply >/dev/null 2>&1 || true
+      if ! nft_project_table_exists || { mss_clamp_enabled && ! nft_has_mss_clamp; }; then
+        apply_nft_rules "leikwan-relay" 1 && echo "- nftables / MSS clamp 已重应用"
+      fi
+      ;;
+    cloud-entry)
+      apply_easytier_entry_services >/dev/null 2>&1 || true
+      if ! nft_project_table_exists || { mss_clamp_enabled && ! nft_has_mss_clamp; }; then
+        apply_nft_rules "cloud-entry" && echo "- entry nftables / MSS clamp 已重应用"
+      fi
+      ;;
+  esac
+  if [[ "$(ddns_timer_state)" != "active" ]] && (( $(ddns_domain_forward_count 2>/dev/null || printf '0') + $(ddns_domain_entry_count 2>/dev/null || printf '0') + $(ddns_domain_pbr_count 2>/dev/null || printf '0') > 0 )); then
+    ddns_enable_timer && echo "- DDNS timer 已启用"
+  fi
+  (( release_global_lock == 1 )) && global_lock_release
+  echo
+  echo "修复后复查："
+  LEIKWAN_BRIEF=1 doctor
+  after_warn="${DOCTOR_SUMMARY_WARNINGS:-$REPORT_WARN_COUNT}"
+  after_fail="${DOCTOR_SUMMARY_FAILURES:-$REPORT_FAIL_COUNT}"
+  after_overall="${DOCTOR_SUMMARY_OVERALL:-unknown}"
+  echo
+  echo "自动修复结果"
+  echo "----------------------------------------"
+  echo "修复前：FAIL=${before_fail} WARN=${before_warn}"
+  echo "修复后：FAIL=${after_fail} WARN=${after_warn}"
+  echo "整体状态：${before_overall} -> ${after_overall}"
+  if (( after_fail == 0 && after_warn < before_warn )); then
+    echo "已恢复项: $((before_warn - after_warn))"
+  else
+    echo "已恢复项: 0"
+  fi
+  echo "剩余问题: FAIL=${after_fail} WARN=${after_warn}"
+  LEIKWAN_BRIEF="$old_brief"
+  LEIKWAN_COMPACT="$old_compact"
 }
 
 status_mark_result() {
@@ -7917,12 +8179,7 @@ recent_status_error_line() {
 
 status_recent_errors() {
   local errors
-  errors="$(
-    recent_status_error_line "DDNS" "$DDNS_STATUS_FILE" LAST_DDNS
-    recent_status_error_line "Update" "$UPDATE_STATUS_FILE" LAST_UPDATE
-    recent_status_error_line "Doctor" "${STATUS_DIR}/last-doctor.env" LAST_DOCTOR
-    recent_status_error_line "Config import" "${STATUS_DIR}/last-config-import.env" LAST_CONFIG_IMPORT
-  )"
+  errors="$(status_recent_errors_text)"
   if [[ -n "$errors" ]]; then
     echo "最近错误:"
     printf '%s\n' "$errors"
@@ -8295,6 +8552,65 @@ status_next_steps() {
   esac
 }
 
+status_health_line() {
+  local role="$1" forwards_enabled nft_status mss_status ddns_result health
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  case "$role" in
+    leikwan-relay) nft_status="$(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")" ;;
+    cloud-entry) nft_status="$(status_nft_summary cloud-entry "$(entry_expose_relay_ip)" "$(entry_expose_start)" "$(entry_expose_end)" 0)" ;;
+    *) nft_status="$(status_nft_summary unknown)" ;;
+  esac
+  mss_status="$(status_mss_summary)"
+  ddns_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  [[ -n "$ddns_result" ]] || ddns_result="unknown"
+  health="$(health_score_value "$role" "$nft_status" "$mss_status" "$ddns_result")"
+  echo "系统健康度: ${health}/100 ($(health_level "$health"))"
+}
+
+status_brief() {
+  local role_info role role_text entries_enabled forwards_enabled pbr_count service_state nft_status mss_status ddns_result overall health
+  STATUS_OVERVIEW_RESULT="ok"
+  role_info="$(role_summary)"
+  IFS=$'\t' read -r role _role_source _role_mixed <<<"$role_info"
+  entries_enabled="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  case "$role" in
+    leikwan-relay)
+      role_text="relay"
+      service_state="$(systemd_active_state "${EASYTIER_RELAY_SERVICE_NAME}.service" || true)"
+      nft_status="$(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")"
+      ;;
+    cloud-entry)
+      role_text="entry"
+      service_state="$(systemd_active_state "$(entry_service_name "$(env_file_get "$NETWORK_ENV" ENTRY_NAME)").service" || true)"
+      nft_status="$(status_nft_summary cloud-entry "$(entry_expose_relay_ip)" "$(entry_expose_start)" "$(entry_expose_end)" 0)"
+      ;;
+    *)
+      role_text="unknown"
+      service_state="unknown"
+      nft_status="$(status_nft_summary unknown)"
+      status_mark_result warn
+      ;;
+  esac
+  mss_status="$(status_mss_summary)"
+  ddns_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  [[ -n "$ddns_result" ]] || ddns_result="unknown"
+  health="$(health_score_value "$role" "$nft_status" "$mss_status" "$ddns_result")"
+  overall="$STATUS_OVERVIEW_RESULT"
+  echo "Leikwan Status"
+  echo "----------------------------------------"
+  echo "Role: ${role_text}"
+  echo "EasyTier: $([[ "$service_state" == "active" ]] && printf 'OK' || printf 'WARN')"
+  echo "Entries: ${entries_enabled} enabled"
+  echo "Forwards: ${forwards_enabled} enabled"
+  echo "PBR: ${pbr_count}"
+  echo "DDNS: $(status_result_display "$ddns_result")"
+  echo "nftables: $([[ "$nft_status" == OK* ]] && printf 'OK' || printf 'WARN')"
+  echo "Health: ${health}/100 ($(health_level "$health"))"
+  echo "Overall: $(status_result_display "$overall")"
+}
+
 status_overview() {
   local role role_info role_source role_mixed
   STATUS_OVERVIEW_RESULT="ok"
@@ -8310,7 +8626,7 @@ status_overview() {
   fi
   echo "角色来源: ${role_source:-无}"
   if [[ "$role_mixed" == "true" ]]; then
-    echo "[WARN] 检测到角色混合：relay + entry"
+    echo "[WARN] 检测到高级混合部署：relay + entry"
     echo "[INFO] 请确认这是否为高级部署，否则建议执行 lq --doctor。"
     status_mark_result warn
   fi
@@ -8330,6 +8646,7 @@ status_overview() {
   echo "最近配置导出: $(named_status_summary "${STATUS_DIR}/last-config-export.env" LAST_CONFIG_EXPORT)"
   echo "最近配置导入: $(named_status_summary "${STATUS_DIR}/last-config-import.env" LAST_CONFIG_IMPORT)"
   echo "最近端点输出: $(named_status_summary "${STATUS_DIR}/last-output.env" LAST_OUTPUT)"
+  status_health_line "$role"
   status_next_steps "$role"
   echo "整体状态: $(status_result_display "$STATUS_OVERVIEW_RESULT")"
   write_status_cache status "$STATUS_OVERVIEW_RESULT"
@@ -8351,9 +8668,71 @@ json_array() {
   printf ']'
 }
 
+health_level() {
+  local score="$1"
+  if (( score >= 90 )); then
+    printf 'excellent'
+  elif (( score >= 75 )); then
+    printf 'good'
+  elif (( score >= 50 )); then
+    printf 'warning'
+  else
+    printf 'critical'
+  fi
+}
+
+health_score_value() {
+  local role="$1" nft_status="$2" mss_status="$3" ddns_result="$4"
+  local score=100 entries_enabled forwards_enabled pbr_count service_state
+  entries_enabled="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  case "$role" in
+    leikwan-relay)
+      service_state="$(systemd_active_state "${EASYTIER_RELAY_SERVICE_NAME}.service" || true)"
+      [[ "$service_state" == "active" ]] || score=$((score - 20))
+      et_ip_present "$RELAY_ET_IP" || score=$((score - 15))
+      (( entries_enabled > 0 )) || score=$((score - 15))
+      (( forwards_enabled > 0 )) || score=$((score - 15))
+      ;;
+    cloud-entry)
+      service_state="$(systemd_active_state "$(entry_service_name "$(env_file_get "$NETWORK_ENV" ENTRY_NAME)").service" || true)"
+      [[ "$service_state" == "active" ]] || score=$((score - 20))
+      et_ip_present "$(current_entry_et_ip)" || score=$((score - 15))
+      ;;
+    *)
+      score=$((score - 35))
+      ;;
+  esac
+  if [[ "$role" == "leikwan-relay" ]]; then
+    (( pbr_count > 0 )) || score=$((score - 10))
+  fi
+  [[ "$nft_status" == OK* ]] || score=$((score - 10))
+  [[ "$mss_status" == OK* || "$mss_status" == "disabled" ]] || score=$((score - 5))
+  case "${ddns_result,,}" in
+    fail|failed) score=$((score - 5)) ;;
+    warn|warning) score=$((score - 3)) ;;
+  esac
+  if [[ "$(status_recent_errors_text)" != "" ]]; then
+    score=$((score - 5))
+  fi
+  (( score < 0 )) && score=0
+  (( score > 100 )) && score=100
+  printf '%s' "$score"
+}
+
+status_recent_errors_text() {
+  {
+    recent_status_error_line "DDNS" "$DDNS_STATUS_FILE" LAST_DDNS
+    recent_status_error_line "Update" "$UPDATE_STATUS_FILE" LAST_UPDATE
+    recent_status_error_line "Doctor" "${STATUS_DIR}/last-doctor.env" LAST_DOCTOR
+    recent_status_error_line "Config import" "${STATUS_DIR}/last-config-import.env" LAST_CONFIG_IMPORT
+  } | sed '/^[[:space:]]*$/d'
+}
+
 status_json() {
   local role_info role role_source role_mixed entries_total entries_enabled forwards_total forwards_enabled pbr_count
-  local nft_status mss_status ddns_result overall warnings=() failures=()
+  local nft_status mss_status ddns_result overall health warnings=() failures=()
   STATUS_OVERVIEW_RESULT="ok"
   role_info="$(role_summary)"
   IFS=$'\t' read -r role role_source role_mixed <<<"$role_info"
@@ -8380,12 +8759,15 @@ status_json() {
   esac
   overall="$STATUS_OVERVIEW_RESULT"
   (( ${#failures[@]} > 0 )) && overall="fail"
+  health="$(health_score_value "$role" "$nft_status" "$mss_status" "$ddns_result")"
   cat <<EOF
 {
   "version": "$(json_escape "$TOOL_VERSION")",
   "role": "$(json_escape "$role")",
   "role_source": "$(json_escape "${role_source:-无}")",
   "overall": "$(json_escape "$overall")",
+  "health_score": ${health},
+  "health_level": "$(json_escape "$(health_level "$health")")",
   "entries_total": ${entries_total},
   "entries_enabled": ${entries_enabled},
   "forwards_total": ${forwards_total},
@@ -8425,7 +8807,7 @@ check_easytier_ports() {
     any=1
     count="$(entries_rows | awk -F'\t' -v p="$port" '$5==p{c++} END{print c+0}')"
     if [[ "$enabled" != "true" ]]; then
-      port_check_line WARN "${port} ${name} 已 disabled，但端口仍在历史配置中"
+      port_check_line INFO "${port} ${name} 已 disabled，保留历史配置。"
     elif (( count > 1 )); then
       port_check_line WARN "${port} ${name} 与其它公网入口重复"
     elif ! is_fast_port "$port"; then
@@ -8462,7 +8844,7 @@ check_forward_ports() {
     if (( count > 1 )); then
       port_check_line WARN "${entry_port} ${name} 与其它转发目标重复"
     elif [[ "$enabled" != "true" ]]; then
-      port_check_line WARN "${entry_port} ${name} 已 disabled，但端口仍在历史配置中"
+      port_check_line INFO "${entry_port} ${name} 已 disabled，保留历史配置。"
     elif ! port_in_range "$entry_port" "$start" "$end"; then
       port_check_line WARN "${entry_port} ${name} 不在入口端口池 ${start}-${end}"
     else
@@ -8474,14 +8856,15 @@ check_forward_ports() {
 }
 
 check_listening_conflicts() {
-  local name entry_port _target_host _target_port _out_iface _route_table _enabled _comment conflict=0
+  local name entry_port _target_host _target_port _out_iface _route_table enabled _comment conflict=0
   echo "本机监听:"
   if ! command -v ss >/dev/null 2>&1; then
     port_check_line INFO "未找到 ss，跳过本机监听检查。"
     echo
     return 0
   fi
-  while IFS=$'\t' read -r name entry_port _target_host _target_port _out_iface _route_table _enabled _comment; do
+  while IFS=$'\t' read -r name entry_port _target_host _target_port _out_iface _route_table enabled _comment; do
+    [[ "$enabled" == "true" ]] || continue
     if port_listening_any "$entry_port"; then
       conflict=1
       port_check_line WARN "${entry_port} ${name} 已被本机监听进程占用"
@@ -9822,7 +10205,7 @@ operations_center_menu() {
     case "$choice" in
       1) run_menu_action_pause status_overview ;;
       2) run_menu_action run_doctor_interactive ;;
-      3) run_menu_action_pause fix_dns_ipv4_first ;;
+      3) run_menu_action_pause doctor_auto_fix ;;
       4) apply_relay_rules_menu ;;
       5) run_menu_action_pause port_check ;;
       6) run_menu_action_pause generate_forward_outputs ;;
@@ -9973,7 +10356,16 @@ main_menu() {
 }
 
 main() {
-  while [[ "${1:-}" == "--dry-run" ]]; do DRY_RUN=1; shift; done
+  while true; do
+    case "${1:-}" in
+      --dry-run) DRY_RUN=1; shift ;;
+      --compact|--brief) LEIKWAN_BRIEF=1; LEIKWAN_COMPACT=1; shift ;;
+      *) break ;;
+    esac
+  done
+  if [[ -z "${1:-}" && "${LEIKWAN_BRIEF:-0}" == "1" ]]; then
+    run_cli_action status_brief
+  fi
   case "${1:-}" in
     init|wizard|quickstart)
       shift
@@ -9985,6 +10377,9 @@ main() {
     status)
       if [[ "${2:-}" == "--json" ]]; then
         run_cli_action status_json
+      elif [[ "${2:-}" == "--brief" || "${2:-}" == "--compact" || "${LEIKWAN_BRIEF:-0}" == "1" ]]; then
+        LEIKWAN_BRIEF=1
+        run_cli_action status_brief
       else
         run_cli_action status_overview
       fi
@@ -9992,6 +10387,8 @@ main() {
     doctor)
       case "${2:-}" in
         --json) run_cli_action doctor_json ;;
+        --auto-fix) doctor_auto_fix ;;
+        --brief|--compact) LEIKWAN_BRIEF=1; doctor ;;
         --verbose) VERBOSE_DOCTOR=1; doctor ;;
         "") doctor ;;
         *) fail "未知 doctor 参数：${2:-}"; print_help; exit 1 ;;
@@ -10106,10 +10503,26 @@ main() {
       ;;
     --help|-h) print_help ;;
     --version|-v) echo "${PROJECT_NAME} ${TOOL_VERSION}" ;;
-    --status) run_cli_action status_overview ;;
+    --status)
+      if [[ "${LEIKWAN_BRIEF:-0}" == "1" ]]; then
+        run_cli_action status_brief
+      else
+        run_cli_action status_overview
+      fi
+      ;;
     --status-json) run_cli_action status_json ;;
+    --compact|--brief) LEIKWAN_BRIEF=1; LEIKWAN_COMPACT=1; run_cli_action status_brief ;;
     --port-check) run_cli_action port_check ;;
-    --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
+    --doctor|--validate)
+      case "${2:-}" in
+        --auto-fix) doctor_auto_fix ;;
+        --brief|--compact) LEIKWAN_BRIEF=1; doctor ;;
+        --verbose) VERBOSE_DOCTOR=1; doctor ;;
+        "") doctor ;;
+        *) fail "未知 doctor 参数：${2:-}"; print_help; exit 1 ;;
+      esac
+      ;;
+    --doctor-auto-fix) doctor_auto_fix ;;
     --doctor-json) run_cli_action doctor_json ;;
     --self-update) update_run 1 || exit $? ;;
     --update-check) update_check || exit $? ;;

@@ -1,6 +1,6 @@
 ﻿# DDNS 后端 / PBR / 公网入口自动刷新
 
-Leikwan Toolkit 1.3.1 的 DDNS 刷新覆盖三类对象：
+Leikwan Toolkit 1.3.2 的 DDNS 刷新覆盖三类对象：
 
 - 转发目标：`forwards.tsv` 的 `target_host`
 - 公网入口：`entries.tsv` 的 `public_host`
@@ -201,6 +201,34 @@ LAST_DDNS_RELAY_RESTARTED=
 
 日志会记录 scope、三类对象 checked / changed / failed、是否应用 nftables、是否应用 PBR、是否需要或已经重启 relay。日志不会写入 EasyTier network secret。
 
+1.3.2 起，`lq ddns run`、菜单刷新和日志中的末尾摘要改为面向运维人员阅读的分区格式：
+
+```text
+DDNS 摘要
+----------------------------------------
+后端转发：
+- 检查 4
+- 域名 1
+- 变化 0
+- 失败 0
+
+公网入口：
+- 域名入口 0
+- 无需刷新
+
+域名 PBR：
+- 未配置
+
+系统动作：
+- nftables：无需重应用
+- relay：无需重启
+
+结果：
+- DDNS 状态：OK
+```
+
+`lq ddns status` 也会显示同样的摘要口径，避免只看到机器化 changed / failed 字段。
+
 配置导出包会包含 DDNS 配置、缓存和日志尾部。给别人排错时请使用 `lq config export --redacted`，不要发送完整配置包。
 
 ## 并发保护
@@ -214,4 +242,4 @@ DDNS 全流程使用：
 
 如果已有 Leikwan 任务运行，timer 会跳过本次刷新，不视为失败。
 
-1.3.1 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。
+1.3.2 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。

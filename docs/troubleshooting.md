@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.3.1 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.3.2 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -17,6 +17,8 @@ lq status
 
 `lq init --dry-run` 只输出初始化计划，不写文件。`lq status` 会显示角色、角色来源、角色混合 WARN 和下一步建议。
 
+1.3.2 起，B relay 不会因为存在 `entries.tsv` 被误判为 entry。只有 relay service / `ROLE=leikwan-relay` 和 entry service / `ROLE=cloud-entry` / entry env 同时存在时，才会提示高级混合部署。
+
 ## 一键诊断
 
 日常查看先用轻量状态总览：
@@ -25,6 +27,7 @@ lq status
 lq status
 lq status --json
 lq --status
+lq --brief
 ```
 
 状态总览只读取配置、systemd 和 nftables，不做 ping、nc、apt update，也不会修改系统。它会显示最近一次 apply / doctor / status 缓存，缓存文件位于：
@@ -43,6 +46,20 @@ lq doctor --json
 ```
 
 `doctor` 文本输出末尾会增加“诊断结果摘要”，便于快速看到 EasyTier、公网入口、转发目标、PBR、nftables、MSS clamp、DDNS 和整体状态。
+
+需要只看问题时：
+
+```bash
+LEIKWAN_BRIEF=1 lq --doctor
+```
+
+可自动修复常见安全问题时：
+
+```bash
+lq doctor --auto-fix
+```
+
+自动修复只处理 nftables / MSS clamp、route table metadata、relay service、DDNS timer、快捷命令、权限和 stale lock，不会删除业务配置或重置 EasyTier secret。
 
 doctor 会检查：
 
@@ -65,7 +82,7 @@ relay 重启后 easytier-cli 的 peer 列表可能短时间未刷新。脚本会
 
 如果 apt 源返回 `403 Forbidden` 或 `mirror sync in progress`，请换源、稍后重试或手动安装对应 deb 包。
 
-`jq` 只用于读取 GitHub release metadata。如果 EasyTier 已安装，缺少 `jq` 不影响当前组网运行。
+`jq` 只用于读取 GitHub release metadata。bootstrap 会尝试通过 apt / apt-get 自动安装 jq；安装失败只 WARN，不中断工具安装。如果 EasyTier 已安装，缺少 `jq` 不影响当前组网运行。
 
 ## EasyTier 下载
 
@@ -91,7 +108,7 @@ lq --port-check
 
 ## 终端显示
 
-窄终端会自动切换为紧凑列表，避免中英文混排导致表格错位。可用 `LEIKWAN_COMPACT=1 lq` 强制紧凑显示；调试输出时可用 `LEIKWAN_NO_CLEAR=1 lq` 禁用清屏。
+窄终端会自动切换为紧凑列表，避免中英文混排导致表格错位。可用 `LEIKWAN_COMPACT=1 lq` 强制紧凑显示；可用 `LEIKWAN_BRIEF=1 lq status` 或 `lq --brief` 输出更短的状态摘要。调试输出时可用 `LEIKWAN_NO_CLEAR=1 lq` 禁用清屏。
 
 ## 日志
 

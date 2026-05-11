@@ -1,6 +1,6 @@
 # 安全边界
 
-本页汇总 Leikwan Toolkit 1.3.1 的敏感信息和高危操作边界。
+本页汇总 Leikwan Toolkit 1.3.2 的敏感信息和高危操作边界。
 
 ## 敏感内容
 
@@ -103,10 +103,14 @@ lq status --json
 lq doctor --json
 ```
 
-JSON 只输出状态摘要、计数和 WARN / FAIL 概要，不包含 EasyTier network secret、配对码 base64、token 或 password。
+JSON 只输出状态摘要、计数、健康度评分和 WARN / FAIL 概要，不包含 EasyTier network secret、配对码 base64、token 或 password。
 
 ## 角色保护
 
-1.3.1 起，脚本会根据 `network.env`、relay / entry systemd service、entries / forwards / PBR 配置和 entry env 做角色检测。B 菜单在 A 机器执行高危操作、A 菜单在 B 机器执行高危操作时会先提示角色不匹配，交互模式默认不继续。
+1.3.2 起，脚本会根据真正的角色信号做检测：relay service 或 `ROLE=leikwan-relay` 表示 B 角色；entry service、`ROLE=cloud-entry` 或 entry env 表示 A 角色。`entries.tsv` 不再作为 entry 判据，`forwards.tsv` 也不能单独决定角色。B 菜单在 A 机器执行高危操作、A 菜单在 B 机器执行高危操作时会先提示角色不匹配，交互模式默认不继续。
 
-如果同时检测到 relay 和 entry 痕迹，`lq status` 会提示角色混合。高级部署可以继续操作，但普通部署建议先执行 `lq --doctor` 确认。
+如果同时检测到真实 relay 和 entry 信号，`lq status` 会提示“高级混合部署：relay + entry”。高级部署可以继续操作，但普通部署建议先执行 `lq --doctor` 确认。
+
+## doctor 自动修复边界
+
+`lq doctor --auto-fix` 只自动处理 nftables / MSS clamp、route table metadata、relay service、DDNS timer、快捷命令、权限和 stale lock。它不会删除 entries / forwards / PBR，也不会重置 EasyTier network secret。

@@ -56,11 +56,15 @@ run_cli init --dry-run
 run_cli init --plan
 run_cli plan
 run_cli status
+run_cli --brief
+run_cli --compact
 validate_json_cli status --json
 run_cli --status
 validate_json_cli --status-json
 validate_json_cli doctor --json
 validate_json_cli --doctor-json
+run_cli --dry-run doctor --auto-fix
+run_cli --dry-run --doctor --auto-fix
 run_cli port check
 run_cli --port-check
 run_cli ddns status
@@ -73,5 +77,26 @@ run_cli logs apply
 run_cli logs update
 run_cli logs doctor
 run_cli pbr domain list
+
+mkdir -p "${LEIKWAN_STATE_DIR}/entries" "${LEIKWAN_STATE_DIR}/forwards"
+cat >"${LEIKWAN_STATE_DIR}/entries/entries.tsv" <<'EOF'
+# entry_name	public_host	et_ip	easytier_protocol	easytier_port	weight	enabled
+public3	home.example.test	10.198.1.4	tcp,udp	8303	100	false
+EOF
+cat >"${LEIKWAN_STATE_DIR}/forwards/forwards.tsv" <<'EOF'
+# name	entry_port	target_host	target_port	out_iface	route_table	enabled	comment
+tw	10004	tw.example.test	52936	eth1	T_CN2	false	tw-target
+EOF
+port_out="$(bash leikwan-toolkit.sh port check 2>&1)"
+grep -q '\[INFO\].*已 disabled' <<<"$port_out" || {
+  echo "FAIL: disabled port entries should be INFO" >&2
+  echo "$port_out" >&2
+  exit 1
+}
+if grep -q '\[WARN\].*disabled' <<<"$port_out"; then
+  echo "FAIL: disabled port entries produced WARN" >&2
+  echo "$port_out" >&2
+  exit 1
+fi
 
 echo "[OK] cli regression passed"

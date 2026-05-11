@@ -1,6 +1,6 @@
 ﻿# 工作流
 
-本文说明 Leikwan Toolkit 1.3.1 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.3.2 的推荐操作顺序。
 
 ## 角色
 
@@ -58,7 +58,7 @@ A 的 ENTRY 返回码接回 B 后，会按 `ENTRY_ET_IP + EASYTIER_PORT` 清理�
 
 ## 终端显示
 
-窄 SSH 终端会自动切换为紧凑列表，避免中英文混排表格错位。可用 `LEIKWAN_COMPACT=1 lq` 强制紧凑列表，用 `LEIKWAN_NO_CLEAR=1 lq` 禁用清屏；调试宽表时可尝试 `LEIKWAN_TABLE=1 lq`。
+窄 SSH 终端会自动切换为紧凑列表，避免中英文混排表格错位。可用 `LEIKWAN_COMPACT=1 lq` 强制紧凑列表，用 `LEIKWAN_NO_CLEAR=1 lq` 禁用清屏；调试宽表时可尝试 `LEIKWAN_TABLE=1 lq`。只想看最短巡检结果时使用 `lq --brief` 或 `LEIKWAN_BRIEF=1 lq status`。
 
 ## 公网入口管理
 
@@ -111,7 +111,9 @@ lq --status
 
 `status` 输出角色、版本、入口数量、转发数量、nftables、MSS clamp、最近应用和最近诊断，适合快速确认状态。它只做轻量检查，不执行 ping、nc 或 apt update，也不会自动修改系统。
 
-`doctor` 适合排障，会做更完整的链路、DNAT、MSS、依赖和 DNS 检查；交互菜单中可按提示执行修复。
+`status` 会显示系统健康度 `0-100`。角色识别不会把 B relay 的 `entries.tsv` 误判为 entry；只有真实 relay + entry 信号同时存在才会 WARN。
+
+`doctor` 适合排障，会做更完整的链路、DNAT、MSS、依赖和 DNS 检查；交互菜单中可按提示执行修复。`lq doctor --auto-fix` 可自动修复常见安全问题，修复后会重新运行 doctor。
 
 常用维护操作也可以从“运维命令中心”进入，它集中状态、诊断、自动修复、转发应用、端口预检、端点输出、配置导入导出、DDNS 和自更新。
 

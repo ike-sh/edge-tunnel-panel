@@ -1,0 +1,71 @@
+# doctor 诊断
+
+Leikwan Toolkit 1.3.2 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
+
+## 常用命令
+
+```bash
+lq --doctor
+lq doctor --json
+lq --doctor-json
+lq doctor --auto-fix
+lq --doctor-auto-fix
+LEIKWAN_BRIEF=1 lq --doctor
+```
+
+## 状态聚合
+
+每次 doctor 开始都会重置本次诊断状态：
+
+- 清空 WARN / FAIL 计数。
+- 清空临时状态变量。
+- 清空 summary cache。
+- 不继承 `/etc/leikwan-toolkit/status/last-doctor.env` 的历史结果。
+
+因此某次故障修复后再次运行 doctor，整体状态会按当前机器实时重新聚合为 OK / WARN / FAIL，不会被旧状态污染。
+
+## 简洁模式
+
+`LEIKWAN_BRIEF=1 lq --doctor` 或 `lq doctor --brief` 只显示 WARN / FAIL 和最后的摘要，适合巡检脚本或窄终端。普通 `lq --doctor` 仍保留详细输出。
+
+## 自动修复
+
+自动修复入口：
+
+```bash
+lq doctor --auto-fix
+lq --doctor-auto-fix
+```
+
+允许自动修复：
+
+- nftables 表或 MSS clamp 缺失。
+- route table metadata 不一致。
+- relay service 丢失但已有有效 relay network.env。
+- DDNS timer 未启用。
+- `lq` / `LQ` 快捷命令错误。
+- 配置文件权限错误。
+- stale locks。
+
+禁止自动修复：
+
+- 删除 entries。
+- 删除 forwards。
+- 删除 PBR。
+- 重置 EasyTier network secret。
+
+自动修复会先运行一次简洁 doctor，记录修复前 FAIL / WARN 数量；修复后再运行 doctor，并输出已恢复项与剩余问题。
+
+## JSON 摘要
+
+`doctor --json` 和 `--doctor-json` 输出轻量 summary JSON，包含：
+
+- version
+- role / role_source
+- overall
+- health_score / health_level
+- entries / forwards / PBR 数量
+- nftables / MSS clamp / DDNS 状态
+- warnings / failures
+
+JSON 输出不包含 EasyTier secret、配对码 base64、token 或 password。

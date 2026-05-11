@@ -30,6 +30,21 @@ bash tests/cli-regression.sh
 section "render regression"
 bash tests/render-regression.sh
 
+section "role detection regression"
+bash tests/role-detection-regression.sh
+
+section "doctor reset regression"
+bash tests/doctor-reset-regression.sh
+
+section "compact output regression"
+bash tests/compact-output-regression.sh
+
+section "ddns summary regression"
+bash tests/ddns-summary-regression.sh
+
+section "health score regression"
+bash tests/health-score-regression.sh
+
 section "package regression"
 bash tests/package-regression.sh
 

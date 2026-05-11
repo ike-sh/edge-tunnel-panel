@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-当前版本：`1.3.1`
+当前版本：`1.3.2`
 
 ## 项目简介
 
@@ -22,7 +22,8 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 - IPv4 PBR、forward 来源 PBR、域名 PBR
 - DDNS 刷新：后端目标、公网入口域名、PBR 域名
 - 状态总览、doctor 诊断、状态缓存和脱敏 debug report
-- 状态 / doctor JSON 摘要、运行锁状态和最近错误提示
+- 状态 / doctor JSON 摘要、简洁模式、健康度评分、运行锁状态和最近错误提示
+- doctor 自动修复常见问题：nftables、MSS clamp、DDNS timer、快捷命令、权限和 stale lock
 - 配置快照 / 回滚，高危操作前自动快照
 - 普通卸载 / 深度卸载，深度卸载前 final snapshot
 - 日志查看 / 清理命令中心
@@ -93,10 +94,13 @@ lq init
 lq init --dry-run
 lq plan
 lq status
+lq --brief
+lq status --brief
 lq status --json
 lq --status
 lq --status-json
 lq --doctor
+lq doctor --auto-fix
 lq doctor --json
 lq port check
 lq --port-check
@@ -144,9 +148,13 @@ bash scripts/verify-release.sh
 
 `init` 是首次初始化向导，`wizard` 和 `quickstart` 是别名。`lq init --dry-run` / `lq plan` 只输出计划，不写文件、不启动服务、不应用 nftables / PBR。主菜单和运维命令中心会把状态、诊断、端口预检、端点输出、配置导入导出、DDNS 和自更新聚合到更短路径。
 
-`status` 是轻量日常总览：读取配置、状态缓存、systemd 状态和 nftables 表，不做大规模探测，也不自动修改系统。`doctor` 是详细诊断，适合部署后或故障时运行。
+`status` 是轻量日常总览：读取配置、状态缓存、systemd 状态和 nftables 表，不做大规模探测，也不自动修改系统。状态总览会显示系统健康度 `0-100`，并把 90+ 标为 excellent、75+ 标为 good、50+ 标为 warning，低于 50 标为 critical。
 
-`status --json` / `--status-json` 和 `doctor --json` / `--doctor-json` 输出轻量 JSON 摘要，适合脚本读取，不包含 EasyTier secret。
+`lq --brief`、`lq --compact`、`lq status --brief` 或 `LEIKWAN_BRIEF=1 lq status` 会输出更短的英文状态块。`doctor` 是详细诊断，适合部署后或故障时运行；`LEIKWAN_BRIEF=1 lq --doctor` 只显示 WARN / FAIL 和摘要。JSON 输出不受简洁模式影响。
+
+`lq doctor --auto-fix` / `lq --doctor-auto-fix` 可自动修复常见、安全边界明确的问题，包括 nftables / MSS clamp 缺失、route table 元数据不一致、relay service 丢失、DDNS timer 未启用、`lq` / `LQ` 快捷命令错误、权限错误和 stale lock。它不会删除 entries / forwards / PBR，也不会重置 EasyTier secret。
+
+`status --json` / `--status-json` 和 `doctor --json` / `--doctor-json` 输出轻量 JSON 摘要，适合脚本读取，不包含 EasyTier secret，并包含 `health_score` 与 `health_level`。
 
 配置快照位于 `/etc/leikwan-toolkit/snapshots/`，自动快照位于 `/etc/leikwan-toolkit/snapshots/auto/`。删除入口、删除转发目标、重新应用转发规则、恢复快照、配置导入等高危操作前会自动快照。
 
@@ -196,6 +204,8 @@ tail -f /root/lq-apply-relay.log
 - [卸载](docs/uninstall.md)
 - [日志](docs/logs.md)
 - [自更新](docs/self-update.md)
+- [状态输出](docs/status.md)
+- [doctor 诊断](docs/doctor.md)
 - [状态 / 快照 / 端口预检](docs/status-snapshot-port-check.md)
 - [安全边界](docs/security.md)
 - [测试与验收](docs/testing.md)
@@ -207,6 +217,6 @@ tail -f /root/lq-apply-relay.log
 Release 包名：
 
 ```text
-leikwan-toolkit-1.3.1.tar.gz
-leikwan-toolkit-1.3.1.tar.gz.sha256
+leikwan-toolkit-1.3.2.tar.gz
+leikwan-toolkit-1.3.2.tar.gz.sha256
 ```
