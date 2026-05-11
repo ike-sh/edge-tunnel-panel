@@ -1,6 +1,6 @@
 # Leikwan Panel systemd 示例
 
-本页提供 Leikwan Panel 2.0.0-alpha.3 的 systemd 草案。alpha.3 仍然只读，不会修改 Leikwan Core 的 nftables、systemd、EasyTier、DDNS 或 TSV 配置。
+本页提供 Leikwan Panel 2.0.0-beta.2 的 systemd 草案。beta.2 不会自动执行配置变更，不会修改 Leikwan Core 的 nftables、systemd、EasyTier、DDNS 或 TSV 配置。
 
 ## Controller 配置路径
 

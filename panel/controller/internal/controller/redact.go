@@ -58,6 +58,30 @@ func RedactValue(v any) any {
 	}
 }
 
+func StripSensitiveValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			if sensitiveKey(k) {
+				continue
+			}
+			out[k] = StripSensitiveValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(x))
+		for _, val := range x {
+			out = append(out, StripSensitiveValue(val))
+		}
+		return out
+	case string:
+		return RedactString(x)
+	default:
+		return v
+	}
+}
+
 func RedactJSONBytes(raw []byte) []byte {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {

@@ -2,7 +2,7 @@ package controller
 
 import "encoding/json"
 
-const Version = "2.0.0-alpha.3"
+const Version = "2.0.0-beta.2"
 
 type HealthResponse struct {
 	Name    string `json:"name"`
@@ -148,4 +148,43 @@ type TopologyResponse struct {
 	Entries  []Entry        `json:"entries"`
 	Forwards []Forward      `json:"forwards"`
 	Links    []TopologyLink `json:"links"`
+}
+
+type CreatePlanRequest struct {
+	Type         string          `json:"type"`
+	Title        string          `json:"title"`
+	TargetNodeID string          `json:"target_node_id"`
+	Payload      json.RawMessage `json:"payload_json,omitempty"`
+}
+
+type MarkPlanRequest struct {
+	ExecutionStatus string `json:"execution_status"`
+	ExecutionNote   string `json:"execution_note"`
+	ManualResult    string `json:"manual_result"`
+}
+
+type CommandGroup struct {
+	NodeID   string   `json:"node_id"`
+	NodeName string   `json:"node_name"`
+	Role     string   `json:"role"`
+	Commands []string `json:"commands"`
+}
+
+type Plan struct {
+	ID                int64           `json:"id"`
+	Type              string          `json:"type"`
+	Title             string          `json:"title"`
+	Status            string          `json:"status"`
+	ExecutionStatus   string          `json:"execution_status"`
+	ExecutionNote     string          `json:"execution_note"`
+	ManualResult      string          `json:"manual_result"`
+	TargetNodeID      string          `json:"target_node_id"`
+	PayloadJSON       json.RawMessage `json:"payload_json,omitempty"`
+	GeneratedCommands []string        `json:"generated_commands"`
+	CommandGroups     []CommandGroup  `json:"command_groups"`
+	Checklist         []string        `json:"checklist"`
+	Markdown          string          `json:"markdown"`
+	Warnings          []string        `json:"warnings"`
+	CreatedAt         string          `json:"created_at"`
+	UpdatedAt         string          `json:"updated_at"`
 }

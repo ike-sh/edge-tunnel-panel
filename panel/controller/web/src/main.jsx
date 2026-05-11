@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
-const tabs = ['Dashboard', 'Topology', 'Nodes', 'Entries', 'Forwards', 'Events', 'Bootstrap'];
-const PANEL_VERSION = '2.0.0-alpha.3';
+const tabs = ['Dashboard', 'Topology', 'Nodes', 'Entries', 'Forwards', 'Events', 'Plans', 'Bootstrap'];
+const PANEL_VERSION = '2.0.0-beta.2';
 
 async function getJSON(path) {
   const res = await fetch(`${API_BASE}${path}`);
@@ -89,6 +89,7 @@ function App() {
           <span className="status-pill">{data.error ? 'API error' : data.loading ? 'Loading' : 'Live'}</span>
         </header>
         {data.error && <div className="banner">API request failed: {data.error}</div>}
+        <div className="notice">beta.2 still requires manual SSH execution. Agents will not execute changes.</div>
         {active === 'Dashboard' && <Dashboard data={data} counts={counts} onNavigate={navigate} />}
         {active === 'Topology' && <Topology />}
         {active === 'Nodes' && <Nodes nodes={data.nodes} onOpen={(id) => navigate(`/nodes/${encodeURIComponent(id)}`)} />}
@@ -96,6 +97,7 @@ function App() {
         {active === 'Entries' && <Entries entries={data.entries} />}
         {active === 'Forwards' && <Forwards forwards={data.forwards} />}
         {active === 'Events' && <Events events={data.events} />}
+        {active === 'Plans' && <Plans nodes={data.nodes} />}
         {active === 'Bootstrap' && <Bootstrap />}
       </main>
     </div>
@@ -108,6 +110,7 @@ function pathToTab(path) {
   if (path === '/entries') return 'Entries';
   if (path === '/forwards') return 'Forwards';
   if (path === '/events') return 'Events';
+  if (path === '/plans') return 'Plans';
   if (path === '/bootstrap') return 'Bootstrap';
   return 'Dashboard';
 }
@@ -243,6 +246,255 @@ function Bootstrap() {
       </section>
     </div>
   );
+}
+
+function Plans({ nodes }) {
+  const [plans, setPlans] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [form, setForm] = useState({
+    type: 'create_forward',
+    title: 'Create forward plan',
+    target_node_id: nodes[0]?.node_id || '',
+    entry: '',
+    relay: '',
+    target_host: '',
+    target_port: '',
+    protocol: 'tcp,udp'
+  });
+  const [error, setError] = useState('');
+  useEffect(() => {
+    loadPlans();
+  }, []);
+  useEffect(() => {
+    if (!form.target_node_id && nodes[0]?.node_id) {
+      setForm((prev) => ({ ...prev, target_node_id: nodes[0].node_id }));
+    }
+  }, [nodes]);
+  async function loadPlans() {
+    try {
+      const data = await getJSON('/api/v1/plans');
+      setPlans(data);
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+  function update(key, value) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+  async function createPlan(e) {
+    e.preventDefault();
+    const payload = {
+      entry: form.entry,
+      relay: form.relay,
+      target_host: form.target_host,
+      target_port: form.target_port,
+      protocol: form.protocol
+    };
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/plans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: form.type,
+          title: form.title,
+          target_node_id: form.target_node_id,
+          payload_json: payload
+        })
+      });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const plan = await res.json();
+      setSelected(plan);
+      await loadPlans();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+  return (
+    <div className="plans-page">
+      {error && <div className="banner">Plans request failed: {error}</div>}
+      <section className="panel">
+        <h3>Create Plan</h3>
+        <p className="muted">beta.2 creates a manual execution guide only. You still SSH to the target node and run commands yourself.</p>
+        <form className="form-grid plan-form" onSubmit={createPlan}>
+          <label>Type<select value={form.type} onChange={(e) => update('type', e.target.value)}>
+            {['create_entry', 'create_forward', 'switch_entry', 'ddns_check'].map((type) => <option key={type} value={type}>{type}</option>)}
+          </select></label>
+          <label>Title<input value={form.title} onChange={(e) => update('title', e.target.value)} /></label>
+          <label>Target node<select value={form.target_node_id} onChange={(e) => update('target_node_id', e.target.value)}>
+            <option value="">Select node</option>
+            {nodes.map((node) => <option key={node.node_id} value={node.node_id}>{node.node_name || node.node_id}</option>)}
+          </select></label>
+          <label>Entry<input value={form.entry} onChange={(e) => update('entry', e.target.value)} /></label>
+          <label>Relay<input value={form.relay} onChange={(e) => update('relay', e.target.value)} /></label>
+          <label>Target host<input value={form.target_host} onChange={(e) => update('target_host', e.target.value)} /></label>
+          <label>Target port<input value={form.target_port} onChange={(e) => update('target_port', e.target.value)} /></label>
+          <label>Protocol<input value={form.protocol} onChange={(e) => update('protocol', e.target.value)} /></label>
+          <button className="primary-action" type="submit">Create draft</button>
+        </form>
+      </section>
+      <section>
+        <h3>Plans</h3>
+        <PlansList plans={plans} onSelect={setSelected} />
+      </section>
+      {selected && <PlanDetail plan={selected} onUpdate={(plan) => { setSelected(plan); loadPlans(); }} />}
+    </div>
+  );
+}
+
+function PlansList({ plans, onSelect }) {
+  if (!plans.length) return <Empty text="No plans yet" />;
+  return (
+    <Table headers={['Title', 'Plan status', 'Execution', 'Type', 'Target node', 'Updated']}>
+      {plans.map((plan) => (
+        <tr key={plan.id}>
+          <td><button className="link-button" onClick={() => onSelect(plan)}>{plan.title}</button></td>
+          <td><span className={`tag ${plan.status}`}>{plan.status}</span></td>
+          <td><span className={`tag ${plan.execution_status}`}>{plan.execution_status || 'not_run'}</span></td>
+          <td>{plan.type}</td>
+          <td>{plan.target_node_id || '-'}</td>
+          <td>{plan.updated_at || plan.created_at}</td>
+        </tr>
+      ))}
+    </Table>
+  );
+}
+
+function PlanDetail({ plan, onUpdate }) {
+  const [copyText, setCopyText] = useState('');
+  const [manualNote, setManualNote] = useState(plan.execution_note || '');
+  const [checked, setChecked] = useState({});
+  const markdownText = plan.markdown || 'Generate the plan to create the manual execution guide.';
+  useEffect(() => {
+    setManualNote(plan.execution_note || '');
+    setChecked({});
+    setCopyText('');
+  }, [plan.id]);
+  async function generate() {
+    const res = await fetch(`${API_BASE}/api/v1/plans/${plan.id}/generate`, { method: 'POST' });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    onUpdate(await res.json());
+  }
+  async function regenerate() {
+    const res = await fetch(`${API_BASE}/api/v1/plans/${plan.id}/regenerate`, { method: 'POST' });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    onUpdate(await res.json());
+  }
+  async function archive() {
+    const res = await fetch(`${API_BASE}/api/v1/plans/${plan.id}/archive`, { method: 'POST' });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    onUpdate(await res.json());
+  }
+  async function mark(status) {
+    const res = await fetch(`${API_BASE}/api/v1/plans/${plan.id}/mark`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        execution_status: status,
+        execution_note: manualNote,
+        manual_result: JSON.stringify({ checked })
+      })
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    onUpdate(await res.json());
+  }
+  async function copyCommands() {
+    const text = commandsFromGroups(plan).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyText('Copied');
+    } catch {
+      setCopyText('Copy failed');
+    }
+  }
+  async function copyMarkdown() {
+    try {
+      await navigator.clipboard.writeText(markdownText);
+      setCopyText('Markdown copied');
+    } catch {
+      setCopyText('Copy failed');
+    }
+  }
+  function toggleCheck(idx) {
+    setChecked((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  }
+  return (
+    <section className="panel">
+      <h3>Plan Detail</h3>
+      <dl className="kv">
+        <dt>Title</dt><dd>{plan.title}</dd>
+        <dt>Type</dt><dd>{plan.type}</dd>
+        <dt>Status</dt><dd>{plan.status}</dd>
+        <dt>Execution</dt><dd><span className={`tag ${plan.execution_status}`}>{plan.execution_status || 'not_run'}</span></dd>
+        <dt>Target</dt><dd>{plan.target_node_id || '-'}</dd>
+      </dl>
+      <h4>Payload</h4>
+      <pre className="command-box">{JSON.stringify(plan.payload_json || {}, null, 2)}</pre>
+      <h4>Warnings</h4>
+      <List items={plan.warnings || []} empty="No warnings generated yet" />
+      <h4>Checklist</h4>
+      <Checklist items={plan.checklist || []} checked={checked} onToggle={toggleCheck} />
+      <h4>Command Groups</h4>
+      <CommandGroups groups={plan.command_groups || []} fallback={plan.generated_commands || []} />
+      <h4>Markdown Preview</h4>
+      <pre className="command-box markdown-preview">{markdownText}</pre>
+      <h4>Manual Result</h4>
+      <textarea className="note-box" value={manualNote} onChange={(e) => setManualNote(e.target.value)} placeholder="Optional note after manual SSH execution" />
+      <div className="action-row">
+        <button className="primary-action" onClick={generate}>Generate guide</button>
+        <button className="primary-action" onClick={regenerate}>Regenerate</button>
+        <button className="primary-action" onClick={copyCommands} disabled={!commandsFromGroups(plan).length}>Copy commands</button>
+        <button className="primary-action" onClick={copyMarkdown} disabled={!plan.markdown}>Copy markdown</button>
+        <button className="link-button" onClick={() => mark('running_manually')}>Mark running</button>
+        <button className="link-button" onClick={() => mark('succeeded')}>Mark succeeded</button>
+        <button className="link-button" onClick={() => mark('failed')}>Mark failed</button>
+        <button className="link-button" onClick={() => mark('rolled_back')}>Mark rolled back</button>
+        <button className="disabled inline" disabled>Coming in 2.1</button>
+        <button className="link-button" onClick={archive}>Archive</button>
+        {copyText && <span className="muted">{copyText}</span>}
+      </div>
+    </section>
+  );
+}
+
+function commandsFromGroups(plan) {
+  if (plan.command_groups?.length) {
+    return plan.command_groups.flatMap((group) => [
+      `# On ${group.role || 'unknown'} node: ${group.node_name || group.node_id || '-'}`,
+      ...(group.commands || [])
+    ]);
+  }
+  return plan.generated_commands || [];
+}
+
+function Checklist({ items, checked, onToggle }) {
+  if (!items.length) return <Empty text="Generate the plan to create a checklist" />;
+  return (
+    <div className="checklist">
+      {items.map((item, idx) => (
+        <label key={`${item}-${idx}`}>
+          <input type="checkbox" checked={Boolean(checked[idx])} onChange={() => onToggle(idx)} />
+          <span>{item}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function CommandGroups({ groups, fallback }) {
+  if (groups.length) {
+    return (
+      <div className="command-groups">
+        {groups.map((group, idx) => (
+          <div key={`${group.node_id}-${idx}`} className="command-group">
+            <h5>{group.node_name || group.node_id || 'target node'} <span className={`tag ${group.role}`}>{group.role || 'unknown'}</span></h5>
+            <pre className="command-box">{(group.commands || []).join('\n')}</pre>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return <pre className="command-box">{fallback.join('\n') || 'Generate the plan to create manual commands.'}</pre>;
 }
 
 function Metric({ label, value }) {

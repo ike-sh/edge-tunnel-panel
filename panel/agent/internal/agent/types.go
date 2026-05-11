@@ -2,7 +2,7 @@ package agent
 
 import "encoding/json"
 
-const Version = "2.0.0-alpha.3"
+const Version = "2.0.0-beta.2"
 
 type Config struct {
 	ControllerURL   string

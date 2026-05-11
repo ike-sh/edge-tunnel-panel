@@ -1,6 +1,6 @@
 # 安装 Leikwan Controller
 
-Leikwan Controller 2.0.0-alpha.3 是只读面板服务端。它保存 Agent 上报的节点、历史、入口、转发和事件，不会修改任何节点系统。
+Leikwan Controller 2.0.0-beta.2 是面板服务端。它保存 Agent 上报的节点、历史、入口、转发、事件和 Plans，不会修改任何节点系统。
 
 ## 手动构建
 

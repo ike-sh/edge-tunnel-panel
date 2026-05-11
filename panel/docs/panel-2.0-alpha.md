@@ -1,17 +1,17 @@
 # Leikwan Panel 2.0-alpha
 
-Leikwan Panel 2.0-alpha 是 Leikwan Toolkit 的只读 Web 面板预览版。当前实现版本为 `2.0.0-alpha.3`。
+Leikwan Panel 2.0-alpha/beta 是 Leikwan Toolkit 的 Web 面板预览版。当前实现版本为 `2.0.0-beta.2`。
 
 1.4.x Shell 版继续作为 Leikwan Core / LTS，负责真实转发、nftables、EasyTier、DDNS、PBR 和本机维护。2.0-alpha 只做状态采集、汇总和展示，不做配置下发。
 
 ## 安全边界
 
-2.0-alpha 明确不做：
+2.0.0-beta.2 仍然不自动执行配置，明确不做：
 
 - 不远程执行任意命令
 - 不下发 nftables / systemd / EasyTier / DDNS 配置
 - 不修改 `entries.tsv`、`forwards.tsv`、PBR 或任何转发规则
-- 不做入口切换、转发新增、转发删除、relay restart
+- 不自动做入口切换、转发新增、转发删除、relay restart
 - 不把 token、secret、private key、custom-url、custom-cmd 展示到前端、日志或 events 表
 
 Agent 只允许采集本机只读状态并上报。需要调用 `lq` 时，只调用只读命令，例如：
@@ -24,7 +24,7 @@ lq forward list
 lq ddns overview
 ```
 
-配置下发最早在 2.1 之后再评估，且需要独立的权限、审计和确认设计。
+beta.2 扩展 Plans 为人工执行手册：生成 command groups、checklist、Markdown 和人工结果标记，但仍不下发给 Agent 执行。配置下发最早在 2.1 之后再评估，且需要独立的权限、审计和确认设计。
 
 ## 架构
 
@@ -32,9 +32,9 @@ lq ddns overview
 Agent(entry/relay/backend) -> HTTPS/HTTP POST -> Controller(SQLite) -> Web UI
 ```
 
-- Controller：Go HTTP API + SQLite，保存节点、历史上报、入口、转发和事件。
+- Controller：Go HTTP API + SQLite，保存节点、历史上报、入口、转发、事件和 Plans。
 - Agent：Go 采集器，周期性采集本机状态并上报。
-- Web：React + Vite，只读展示 Dashboard、Topology、Bootstrap、Nodes、Node Detail、Entries、Forwards、Events。
+- Web：React + Vite，展示 Dashboard、Topology、Bootstrap、Plans、Nodes、Node Detail、Entries、Forwards、Events。
 
 ## 启动 Controller
 
@@ -78,7 +78,7 @@ curl http://127.0.0.1:18080/api/v1/health
 ```json
 {
   "name": "leikwan-controller",
-  "version": "2.0.0-alpha.3",
+  "version": "2.0.0-beta.2",
   "status": "ok"
 }
 ```
@@ -155,6 +155,11 @@ GET  /api/v1/nodes/:id/raw
 GET  /api/v1/entries
 GET  /api/v1/forwards
 GET  /api/v1/events
+POST /api/v1/plans
+GET  /api/v1/plans
+GET  /api/v1/plans/:id
+POST /api/v1/plans/:id/generate
+POST /api/v1/plans/:id/archive
 ```
 
 Agent 上报接口必须带：
@@ -184,6 +189,8 @@ SQLite 默认开发路径：
 `GET /api/v1/nodes` 会动态计算 offline：`last_seen` 超过 `3 * interval_seconds`，或未上报 interval 时超过 120 秒，视为 offline。
 
 `GET /api/v1/bootstrap/agent-command` 返回的安装命令永远只包含 `REDACTED` token。Web API 不返回 Controller 的真实 token。
+
+Plans API 只生成命令文本，不执行命令，也不会改变节点系统。
 
 ## Alpha 验收
 

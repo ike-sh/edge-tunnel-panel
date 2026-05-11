@@ -1,6 +1,6 @@
 # 安装 Leikwan Agent
 
-Leikwan Agent 2.0.0-alpha.3 是只读采集器。它只读取本机状态并上报 Controller，不会修改 nftables、systemd、EasyTier、DDNS、entries.tsv、forwards.tsv 或 PBR。
+Leikwan Agent 2.0.0-beta.2 是只读采集器。它只读取本机状态并上报 Controller，不会修改 nftables、systemd、EasyTier、DDNS、entries.tsv、forwards.tsv 或 PBR。
 
 ## 手动安装
 
@@ -105,7 +105,7 @@ journalctl -u leikwan-agent.service -n 100 --no-pager
 
 ## 安全说明
 
-alpha.3 仍然只读：
+beta.2 仍然只读：
 
 - 不执行 Controller 下发命令
 - 不写 Core 配置

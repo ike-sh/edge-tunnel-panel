@@ -1,6 +1,6 @@
 # Topology 只读拓扑
 
-Leikwan Panel 2.0.0-alpha.3 新增只读拓扑视图。
+Leikwan Panel 2.0.0-beta.2 保留只读拓扑视图。Plans 虽然可以生成命令和人工执行手册，但 Topology 本身不执行任何变更。
 
 ## API
 

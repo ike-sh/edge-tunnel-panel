@@ -1,6 +1,6 @@
 # Leikwan Agent Protocol 2.0-alpha
 
-本协议用于 Leikwan Agent 向 Controller 注册和上报状态。当前实现版本为 `2.0.0-alpha.3`。2.0-alpha 只有 Agent -> Controller 的状态上报，不包含 Controller -> Agent 的配置下发或命令执行。
+本协议用于 Leikwan Agent 向 Controller 注册和上报状态。当前实现版本为 `2.0.0-beta.2`。Agent 仍然只有 Agent -> Controller 的状态上报，不包含 Controller -> Agent 的配置下发或命令执行。
 
 ## Authorization
 
@@ -77,7 +77,7 @@ Content-Type: application/json
   "public_ip": "203.0.113.10",
   "primary_lan_ip": "10.0.0.10",
   "easytier_ip": "10.198.1.1",
-  "agent_version": "2.0.0-alpha.3",
+  "agent_version": "2.0.0-beta.2",
   "core_version": "1.4.0 LTS",
   "status": "online",
   "health_score": 96,

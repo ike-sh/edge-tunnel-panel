@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -193,6 +194,143 @@ func TestReportRawJSONRedacted(t *testing.T) {
 	for _, leak := range []string{"Bearer abc", "token=abc", "cmd --token abc", "privateKey\":\"key"} {
 		if strings.Contains(rawOut.Body.String(), leak) {
 			t.Fatalf("raw endpoint leaked %q in %s", leak, rawOut.Body.String())
+		}
+	}
+}
+
+func TestPlansLifecycleAndRedaction(t *testing.T) {
+	h := testServer(t)
+	report := ReportRequest{
+		NodeID: "relay-1", NodeName: "liqun-relay", Role: "relay", Status: "online", IntervalSeconds: 30,
+		Entries:  []EntryPayload{{Name: "public1", ListenPort: 8301, Protocol: "tcp,udp", PublicHost: "home.example.com", Status: "ok"}},
+		Forwards: []ForwardPayload{{Name: "hk", EntryName: "public1", TargetHost: "10.0.0.8", TargetPort: 443, Protocol: "tcp,udp", Status: "ok"}},
+	}
+	if rr := postJSON(t, h, "/api/v1/agent/report", "test-token", report); rr.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+	createBody := map[string]any{
+		"type":           "create_forward",
+		"title":          "Add hk forward",
+		"target_node_id": "relay-1",
+		"payload_json": map[string]any{
+			"target_host": "10.0.0.8",
+			"target_port": 443,
+			"protocol":    "tcp,udp",
+			"token":       "abc",
+			"custom_cmd":  "cmd --token abc",
+			"privateKey":  "key",
+		},
+	}
+	created := postJSON(t, h, "/api/v1/plans", "", createBody)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create plan failed: %d %s", created.Code, created.Body.String())
+	}
+	if strings.Contains(created.Body.String(), "abc") || strings.Contains(created.Body.String(), "privateKey\":\"key") {
+		t.Fatalf("plan create leaked secret: %s", created.Body.String())
+	}
+	var plan Plan
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/plans", nil)
+	listOut := httptest.NewRecorder()
+	h.ServeHTTP(listOut, listReq)
+	if listOut.Code != http.StatusOK || !strings.Contains(listOut.Body.String(), "Add hk forward") {
+		t.Fatalf("list plans failed: %d %s", listOut.Code, listOut.Body.String())
+	}
+	nodesBefore := httptest.NewRecorder()
+	h.ServeHTTP(nodesBefore, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
+	entriesBefore := httptest.NewRecorder()
+	h.ServeHTTP(entriesBefore, httptest.NewRequest(http.MethodGet, "/api/v1/entries", nil))
+	forwardsBefore := httptest.NewRecorder()
+	h.ServeHTTP(forwardsBefore, httptest.NewRequest(http.MethodGet, "/api/v1/forwards", nil))
+	generateReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/generate", plan.ID), nil)
+	generateOut := httptest.NewRecorder()
+	h.ServeHTTP(generateOut, generateReq)
+	if generateOut.Code != http.StatusOK {
+		t.Fatalf("generate plan failed: %d %s", generateOut.Code, generateOut.Body.String())
+	}
+	for _, want := range []string{"command_groups", "checklist", "markdown", "This plan is manual-only", "lq --version"} {
+		if !strings.Contains(generateOut.Body.String(), want) {
+			t.Fatalf("generated plan missing %q: %s", want, generateOut.Body.String())
+		}
+	}
+	for _, leak := range []string{"abc", "privateKey", "custom_cmd", "systemctl restart", "nft ", "iptables", "curl | bash", "bash -c", "eval "} {
+		if strings.Contains(generateOut.Body.String(), leak) {
+			t.Fatalf("generated plan leaked or used forbidden command %q: %s", leak, generateOut.Body.String())
+		}
+	}
+	markReq := postJSON(t, h, fmt.Sprintf("/api/v1/plans/%d/mark", plan.ID), "", MarkPlanRequest{
+		ExecutionStatus: "succeeded",
+		ExecutionNote:   "manual result token=abc",
+		ManualResult:    `{"checked":true,"privateKey":"key"}`,
+	})
+	if markReq.Code != http.StatusOK || !strings.Contains(markReq.Body.String(), `"execution_status":"succeeded"`) {
+		t.Fatalf("mark failed: %d %s", markReq.Code, markReq.Body.String())
+	}
+	if strings.Contains(markReq.Body.String(), "token=abc") || strings.Contains(markReq.Body.String(), "privateKey") {
+		t.Fatalf("mark leaked secret: %s", markReq.Body.String())
+	}
+	markdownReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/plans/%d/markdown", plan.ID), nil)
+	markdownOut := httptest.NewRecorder()
+	h.ServeHTTP(markdownOut, markdownReq)
+	if markdownOut.Code != http.StatusOK || !strings.Contains(markdownOut.Body.String(), "This plan is manual-only") {
+		t.Fatalf("markdown failed: %d %s", markdownOut.Code, markdownOut.Body.String())
+	}
+	for _, leak := range []string{"abc", "privateKey", "custom_cmd", "Authorization"} {
+		if strings.Contains(markdownOut.Body.String(), leak) {
+			t.Fatalf("markdown leaked %q: %s", leak, markdownOut.Body.String())
+		}
+	}
+	regenerateReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/regenerate", plan.ID), nil)
+	regenerateOut := httptest.NewRecorder()
+	h.ServeHTTP(regenerateOut, regenerateReq)
+	if regenerateOut.Code != http.StatusOK || !strings.Contains(regenerateOut.Body.String(), "command_groups") {
+		t.Fatalf("regenerate failed: %d %s", regenerateOut.Code, regenerateOut.Body.String())
+	}
+	nodesAfter := httptest.NewRecorder()
+	h.ServeHTTP(nodesAfter, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
+	if nodesBefore.Body.String() != nodesAfter.Body.String() {
+		t.Fatalf("plan generation changed nodes: before=%s after=%s", nodesBefore.Body.String(), nodesAfter.Body.String())
+	}
+	entriesAfter := httptest.NewRecorder()
+	h.ServeHTTP(entriesAfter, httptest.NewRequest(http.MethodGet, "/api/v1/entries", nil))
+	if entriesBefore.Body.String() != entriesAfter.Body.String() {
+		t.Fatalf("plan mark/regenerate changed entries: before=%s after=%s", entriesBefore.Body.String(), entriesAfter.Body.String())
+	}
+	forwardsAfter := httptest.NewRecorder()
+	h.ServeHTTP(forwardsAfter, httptest.NewRequest(http.MethodGet, "/api/v1/forwards", nil))
+	if forwardsBefore.Body.String() != forwardsAfter.Body.String() {
+		t.Fatalf("plan mark/regenerate changed forwards: before=%s after=%s", forwardsBefore.Body.String(), forwardsAfter.Body.String())
+	}
+	archiveReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/archive", plan.ID), nil)
+	archiveOut := httptest.NewRecorder()
+	h.ServeHTTP(archiveOut, archiveReq)
+	if archiveOut.Code != http.StatusOK || !strings.Contains(archiveOut.Body.String(), `"status":"archived"`) {
+		t.Fatalf("archive failed: %d %s", archiveOut.Code, archiveOut.Body.String())
+	}
+}
+
+func TestSwitchEntryPlanWarnings(t *testing.T) {
+	h := testServer(t)
+	created := postJSON(t, h, "/api/v1/plans", "", map[string]any{
+		"type":           "switch_entry",
+		"title":          "Switch primary",
+		"target_node_id": "relay-1",
+		"payload_json":   map[string]any{"entry": "public2"},
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create switch plan failed: %d %s", created.Code, created.Body.String())
+	}
+	var plan Plan
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/generate", plan.ID), nil))
+	for _, want := range []string{"Confirm snapshots", "Do not stop or remove the old entry first", "low-traffic maintenance window"} {
+		if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), want) {
+			t.Fatalf("switch checklist/warnings missing %q: %d %s", want, out.Code, out.Body.String())
 		}
 	}
 }

@@ -24,6 +24,8 @@ func NewServer(store *Store, token string, logger *log.Logger) http.Handler {
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/bootstrap/agent-command", s.handleBootstrapAgentCommand)
 	mux.HandleFunc("/api/v1/topology", s.handleTopology)
+	mux.HandleFunc("/api/v1/plans", s.handlePlans)
+	mux.HandleFunc("/api/v1/plans/", s.handlePlanByID)
 	mux.HandleFunc("/api/v1/agent/register", s.handleRegister)
 	mux.HandleFunc("/api/v1/agent/report", s.handleReport)
 	mux.HandleFunc("/api/v1/nodes", s.handleNodes)
@@ -398,4 +400,112 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		plans, err := s.store.ListPlans(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, plans)
+	case http.MethodPost:
+		var req CreatePlanRequest
+		_, ok := s.decodeBody(w, r, &req)
+		if !ok {
+			return
+		}
+		plan, err := s.store.CreatePlan(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, plan)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handlePlanByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/plans/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, "plan not found")
+		return
+	}
+	if len(parts) > 1 {
+		switch parts[1] {
+		case "generate":
+			if !s.requirePOST(w, r) {
+				return
+			}
+			plan, err := s.store.GeneratePlan(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		case "regenerate":
+			if !s.requirePOST(w, r) {
+				return
+			}
+			plan, err := s.store.RegeneratePlan(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		case "mark":
+			if !s.requirePOST(w, r) {
+				return
+			}
+			var req MarkPlanRequest
+			if _, ok := s.decodeBody(w, r, &req); !ok {
+				return
+			}
+			plan, err := s.store.MarkPlan(r.Context(), id, req)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		case "markdown":
+			if !s.requireGET(w, r) {
+				return
+			}
+			markdown, err := s.store.PlanMarkdown(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(markdown))
+		case "archive":
+			if !s.requirePOST(w, r) {
+				return
+			}
+			plan, err := s.store.ArchivePlan(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		default:
+			writeError(w, http.StatusNotFound, "not found")
+		}
+		return
+	}
+	if !s.requireGET(w, r) {
+		return
+	}
+	plan, err := s.store.GetPlan(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "plan not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
 }

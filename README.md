@@ -168,20 +168,21 @@ lq update status
 
 普通卸载保留配置、快照和备份；深度卸载会删除配置和状态，执行前会生成 final snapshot 并二次确认。
 
-## Leikwan Panel 2.0.0-alpha.3
+## Leikwan Panel 2.0.0-beta.2
 
 `1.4.x` 是 Shell LTS / Leikwan Core，后续只做 bugfix、兼容性、安全和文档维护。
 
-`2.0.0-alpha.3` 是只读 Web Panel 的部署和拓扑体验增强版：
+`2.0.0-beta.2` 是人工执行手册版：Plans 会生成 command groups、checklist、Markdown 手册和人工执行结果记录。
 
 - Controller / Agent 架构
 - Agent 只采集本机状态并上报
-- Controller 只保存和展示节点、入口、转发、事件
-- 新增节点详情、历史上报、Topology、Bootstrap/Add Agent 和 systemd 示例
+- Controller 保存节点、入口、转发、事件和 Plans
+- Plans 只生成可复制的人工命令文本和 Markdown 手册
+- mark succeeded / failed / rolled_back 只记录人工结果，不触发节点操作
 - 不会修改现有转发配置
 - 不会远程执行任意命令
 
-详细说明见 [Panel 2.0-alpha 文档](panel/docs/panel-2.0-alpha.md)。
+详细说明见 [Panel 2.0-alpha/beta 文档](panel/docs/panel-2.0-alpha.md)、[Plans Beta](panel/docs/plans-beta.md) 和 [Manual Execution](panel/docs/manual-execution.md)。
 
 ## 文档索引
 
