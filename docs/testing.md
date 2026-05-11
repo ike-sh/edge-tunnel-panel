@@ -1,6 +1,6 @@
 # 测试与 release 验证
 
-Leikwan Toolkit 1.3.2 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
+Leikwan Toolkit 1.3.3 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
 
 ## 一键验证
 
@@ -23,6 +23,7 @@ bash tests/doctor-reset-regression.sh
 bash tests/compact-output-regression.sh
 bash tests/ddns-summary-regression.sh
 bash tests/health-score-regression.sh
+bash tests/update-regression.sh
 bash tests/package-regression.sh
 bash tests/uninstall-regression.sh
 bash tests/lock-regression.sh
@@ -47,6 +48,7 @@ bash tests/doctor-reset-regression.sh
 bash tests/compact-output-regression.sh
 bash tests/ddns-summary-regression.sh
 bash tests/health-score-regression.sh
+bash tests/update-regression.sh
 bash tests/package-regression.sh
 bash tests/uninstall-regression.sh
 bash tests/lock-regression.sh
@@ -61,6 +63,7 @@ bash tests/redaction-regression.sh
 - `compact-output-regression.sh`：检查 `--brief` / `LEIKWAN_BRIEF=1` 输出专业简洁，JSON 不受影响。
 - `ddns-summary-regression.sh`：检查 DDNS 摘要为分区人类可读格式，不再输出机器化 `summary scope=`。
 - `health-score-regression.sh`：检查健康度评分和 JSON 字段。
+- `update-regression.sh`：模拟运行进程版本与安装脚本版本不一致，检查 update check/status 和菜单 reload 提示。
 - `package-regression.sh`：检查 release 包内容边界。
 - `uninstall-regression.sh`：检查普通 / 深度卸载菜单、dry-run 和卸载后状态友好输出。
 - `lock-regression.sh`：检查 stale lock 清理和锁占用时的友好拒绝。

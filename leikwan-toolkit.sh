@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.3.2"
+TOOL_VERSION="1.3.3"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -19,6 +19,7 @@ REPORT_FAIL_COUNT=0
 PORT_CHECK_RESULT="ok"
 STATUS_OVERVIEW_RESULT="ok"
 LEIKWAN_GLOBAL_LOCK_TOKEN=""
+UPDATE_RELOAD_AFTER_ACTION=0
 DOCTOR_SUMMARY_OVERALL=""
 DOCTOR_SUMMARY_WARNINGS=0
 DOCTOR_SUMMARY_FAILURES=0
@@ -65,7 +66,7 @@ DDNS_LOCK_PATH="${DDNS_LOCK_PATH:-${LEIKWAN_RUN_DIR}/leikwan-ddns-refresh.lock}"
 UPDATE_LOCK_PATH="${UPDATE_LOCK_PATH:-${LEIKWAN_RUN_DIR}/leikwan-update.lock}"
 CONFIG_LOCK_PATH="${CONFIG_LOCK_PATH:-${LEIKWAN_RUN_DIR}/leikwan-config.lock}"
 UPDATE_STATUS_FILE="${STATUS_DIR}/last-update.env"
-UPDATE_TARGET_SCRIPT="/root/leikwan-toolkit.sh"
+UPDATE_TARGET_SCRIPT="${LEIKWAN_UPDATE_TARGET_SCRIPT:-/root/leikwan-toolkit.sh}"
 UPDATE_REPO="ike-sh/leikwan-toolkit"
 
 ENTRIES_TSV="${ENTRIES_DIR}/entries.tsv"
@@ -1571,46 +1572,196 @@ update_status_line() {
   fi
 }
 
+script_version_from_file() {
+  local script="$1" version
+  [[ -f "$script" ]] || return 1
+  version="$(bash "$script" --version 2>/dev/null | awk '{print $2; exit}' || true)"
+  [[ -n "$version" ]] || return 1
+  printf '%s' "$version"
+}
+
+update_installed_version() {
+  local version
+  version="$(script_version_from_file "$UPDATE_TARGET_SCRIPT" 2>/dev/null || true)"
+  if [[ -n "$version" ]]; then
+    printf '%s' "$version"
+  else
+    printf '%s' "$TOOL_VERSION"
+  fi
+}
+
+update_shortcut_line() {
+  local target raw wrapper_target
+  if [[ -e "$SHORTCUT_LQ" || -L "$SHORTCUT_LQ" ]]; then
+    raw="$(readlink "$SHORTCUT_LQ" 2>/dev/null || true)"
+    target="$(readlink -f "$SHORTCUT_LQ" 2>/dev/null || true)"
+    [[ -n "$target" && "$target" != "$SHORTCUT_LQ" ]] || target="$raw"
+    if [[ -z "$target" && -f "$SHORTCUT_LQ" ]]; then
+      wrapper_target="$(sed -n 's/^exec bash[[:space:]]\+\(.*\)[[:space:]]"\$@".*/\1/p' "$SHORTCUT_LQ" 2>/dev/null | head -n 1)"
+      wrapper_target="${wrapper_target#\'}"
+      wrapper_target="${wrapper_target%\'}"
+      wrapper_target="${wrapper_target#\"}"
+      wrapper_target="${wrapper_target%\"}"
+      [[ -n "$wrapper_target" ]] && target="$wrapper_target"
+    fi
+    if [[ -n "$target" ]]; then
+      printf '%s -> %s' "$SHORTCUT_LQ" "$target"
+    else
+      printf '%s -> unknown' "$SHORTCUT_LQ"
+    fi
+  else
+    printf '%s -> missing' "$SHORTCUT_LQ"
+  fi
+}
+
+update_versions_differ() {
+  local installed="$1" running="$2"
+  ! version_eq "$installed" "$running" 2>/dev/null
+}
+
+update_install_shortcuts() {
+  need_root_unless_dry_run
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] ln -sfn ${UPDATE_TARGET_SCRIPT} ${SHORTCUT_LQ}"
+    echo "[DRY-RUN] ln -sfn ${UPDATE_TARGET_SCRIPT} ${SHORTCUT_LQ_UPPER}"
+    return 0
+  fi
+  ln -sfn "$UPDATE_TARGET_SCRIPT" "$SHORTCUT_LQ"
+  ln -sfn "$UPDATE_TARGET_SCRIPT" "$SHORTCUT_LQ_UPPER"
+}
+
+update_validate_installed_for_reload() {
+  local expected_version="$1" installed_version shortcut_target shortcut_raw target_resolved wrapper_target
+  if [[ ! -f "$UPDATE_TARGET_SCRIPT" ]]; then
+    warn "自动重新载入失败：新脚本不存在：${UPDATE_TARGET_SCRIPT}"
+    return 1
+  fi
+  if [[ ! -x "$UPDATE_TARGET_SCRIPT" ]]; then
+    warn "自动重新载入失败：新脚本不可执行：${UPDATE_TARGET_SCRIPT}"
+    return 1
+  fi
+  if ! bash -n "$UPDATE_TARGET_SCRIPT"; then
+    warn "自动重新载入失败：新脚本 bash -n 校验未通过。"
+    return 1
+  fi
+  installed_version="$(script_version_from_file "$UPDATE_TARGET_SCRIPT" 2>/dev/null || true)"
+  if [[ -z "$installed_version" ]] || ! version_eq "$installed_version" "$expected_version"; then
+    warn "自动重新载入失败：安装脚本版本 ${installed_version:-unknown}，期望 ${expected_version}。"
+    return 1
+  fi
+  shortcut_raw="$(readlink "$SHORTCUT_LQ" 2>/dev/null || true)"
+  shortcut_target="$(readlink -f "$SHORTCUT_LQ" 2>/dev/null || true)"
+  target_resolved="$(readlink -f "$UPDATE_TARGET_SCRIPT" 2>/dev/null || printf '%s' "$UPDATE_TARGET_SCRIPT")"
+  if [[ -f "$SHORTCUT_LQ" ]]; then
+    wrapper_target="$(sed -n 's/^exec bash[[:space:]]\+\(.*\)[[:space:]]"\$@".*/\1/p' "$SHORTCUT_LQ" 2>/dev/null | head -n 1)"
+    wrapper_target="${wrapper_target#\'}"
+    wrapper_target="${wrapper_target%\'}"
+    wrapper_target="${wrapper_target#\"}"
+    wrapper_target="${wrapper_target%\"}"
+  fi
+  if [[ "$shortcut_target" != "$target_resolved" && "$shortcut_raw" != "$UPDATE_TARGET_SCRIPT" && "$shortcut_raw" != "$target_resolved" ]]; then
+    if [[ "$wrapper_target" != "$UPDATE_TARGET_SCRIPT" && "$wrapper_target" != "$target_resolved" ]]; then
+      warn "自动重新载入失败：${SHORTCUT_LQ} 未指向 ${UPDATE_TARGET_SCRIPT}。"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+update_maybe_reload_after_change() {
+  local installed_version="$1" action="${2:-update}" reload_text prompt_text
+  [[ -n "$installed_version" ]] || installed_version="$(update_installed_version)"
+  if ! update_versions_differ "$installed_version" "$TOOL_VERSION"; then
+    return 0
+  fi
+  if (( UPDATE_RELOAD_AFTER_ACTION == 1 )); then
+    if [[ "$action" == "rollback" ]]; then
+      reload_text="当前菜单进程仍是回滚前版本，正在重新载入..."
+    else
+      reload_text="当前菜单进程仍是旧版本，正在重新载入新版本..."
+    fi
+    info "$reload_text"
+    if update_validate_installed_for_reload "$installed_version"; then
+      if [[ "${LEIKWAN_DISABLE_UPDATE_EXEC:-0}" == "1" ]]; then
+        info "已跳过自动 exec（测试模式），请重新执行 lq 使用当前安装版本。"
+        return 0
+      fi
+      exec bash "$UPDATE_TARGET_SCRIPT"
+    fi
+    warn "自动重新载入失败，请手动执行：lq"
+    return 0
+  fi
+  if [[ "$action" == "rollback" ]]; then
+    prompt_text="请重新执行 lq 使用回滚后的版本。"
+  else
+    prompt_text="请重新执行 lq 使用新版本。"
+  fi
+  info "$prompt_text"
+}
+
 update_check() {
-  local latest tag latest_version current_norm
+  local latest tag latest_version installed_version installed_norm running_norm
   latest="$(update_latest_release)" || return 1
   IFS=$'\t' read -r tag latest_version <<<"$latest"
-  current_norm="$(normalize_version "$TOOL_VERSION" 2>/dev/null || true)"
-  if [[ -z "$current_norm" ]]; then
-    warn "本地版本无法解析：${TOOL_VERSION}"
+  installed_version="$(update_installed_version)"
+  installed_norm="$(normalize_version "$installed_version" 2>/dev/null || true)"
+  running_norm="$(normalize_version "$TOOL_VERSION" 2>/dev/null || true)"
+  if [[ -z "$installed_norm" ]]; then
+    warn "当前安装版本无法解析：${installed_version}"
     info "最新版本：${latest_version} (${tag})"
     return 0
   fi
-  if version_gt "$latest_version" "$TOOL_VERSION"; then
-    info "当前版本：${TOOL_VERSION}"
-    info "最新版本：${latest_version}"
+  info "当前安装版本：${installed_version}"
+  info "当前运行进程：${TOOL_VERSION}"
+  info "最新版本：${latest_version}"
+  if [[ -n "$running_norm" ]] && update_versions_differ "$installed_version" "$TOOL_VERSION"; then
+    warn "当前运行进程版本与已安装脚本版本不一致。"
+    info "建议重新进入菜单：lq"
+  fi
+  if version_gt "$latest_version" "$installed_version"; then
     info "可执行：lq update run"
   else
-    ok "当前已是最新版本：${TOOL_VERSION}"
+    ok "当前已是最新版本：${installed_version}"
+    if [[ -n "$running_norm" ]] && update_versions_differ "$installed_version" "$TOOL_VERSION"; then
+      info "当前菜单仍在旧进程中运行，退出后重新执行 lq 即可使用新版本。"
+    fi
   fi
 }
 
 update_status() {
-  local time from to result backup source
+  local time from to result backup source installed_version shortcut_line
   time="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_TIME)"
   from="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_FROM)"
   to="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_TO)"
   result="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_RESULT)"
   backup="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_BACKUP)"
   source="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_SOURCE)"
+  installed_version="$(update_installed_version)"
+  shortcut_line="$(update_shortcut_line)"
   echo "脚本更新状态"
   echo "----------------------------------------"
-  echo "current: ${TOOL_VERSION}"
+  echo "当前运行版本: ${TOOL_VERSION}"
+  echo "当前安装版本: ${installed_version}"
+  echo "快捷命令: ${shortcut_line}"
   if [[ -z "$time" ]]; then
-    echo "last update: 无记录"
+    echo "最近更新: 无记录"
+    if update_versions_differ "$installed_version" "$TOOL_VERSION"; then
+      warn "当前运行进程版本与已安装脚本版本不一致。"
+      info "建议重新进入菜单：lq"
+    fi
     return 0
   fi
-  echo "last update: ${time}"
+  echo "最近更新: ${from:-?} -> ${to:-?} / $(status_result_display "$result")"
+  echo "更新时间: ${time}"
   echo "from: ${from:-"-"}"
   echo "to: ${to:-"-"}"
   echo "result: ${result:-"-"}"
   echo "backup: ${backup:-"-"}"
   echo "source: ${source%%\?*}"
+  if update_versions_differ "$installed_version" "$TOOL_VERSION"; then
+    warn "当前运行进程版本与已安装脚本版本不一致。"
+    info "建议重新进入菜单：lq"
+  fi
 }
 
 update_prepare_script_from_archive() {
@@ -1644,12 +1795,12 @@ update_restore_backup() {
   [[ -f "$backup" ]] || { fail "备份脚本不存在：${backup}"; return 1; }
   bash -n "$backup" || { fail "备份脚本 bash -n 校验失败，拒绝回滚。"; return 1; }
   install -m 755 "$backup" "$UPDATE_TARGET_SCRIPT"
-  install_shortcuts || true
+  update_install_shortcuts
 }
 
 update_run() {
   local force="${1:-0}" update_lock="" tmp="" latest tag latest_version package_url sha_url archive sha_file new_script
-  local new_version backup="" old_version="$TOOL_VERSION" installed_version lq_version rc
+  local new_version backup="" old_version installed_version lq_version rc
   local release_global_lock=0
   need_root_unless_dry_run
   command -v curl >/dev/null 2>&1 || { fail "缺少 curl，无法执行自更新。"; return 1; }
@@ -1665,18 +1816,19 @@ update_run() {
     fi
     release_global_lock=1
   fi
+  old_version="$(update_installed_version)"
   tmp="$(mktemp -d /tmp/leikwan-update.XXXXXX)"
   set +e
   (
     latest="$(update_latest_release)" || exit 1
     IFS=$'\t' read -r tag latest_version <<<"$latest"
-    if normalize_version "$TOOL_VERSION" >/dev/null 2>&1; then
-      if ! version_gt "$latest_version" "$TOOL_VERSION"; then
-        ok "当前已是最新版本：${TOOL_VERSION}"
+    if normalize_version "$old_version" >/dev/null 2>&1; then
+      if ! version_gt "$latest_version" "$old_version"; then
+        ok "当前已是最新版本：${old_version}"
         exit 0
       fi
     else
-      warn "本地版本无法解析：${TOOL_VERSION}"
+      warn "当前安装版本无法解析：${old_version}"
       if is_interactive && [[ "$force" != "1" ]]; then
         prompt_yes_no "是否继续更新到 ${latest_version}？" "N" || exit 0
       fi
@@ -1703,7 +1855,7 @@ update_run() {
     fi
     backup="$(update_backup_current_script)" || exit 1
     install -m 755 "$new_script" "$UPDATE_TARGET_SCRIPT" || exit 1
-    install_shortcuts || true
+    update_install_shortcuts || exit 1
     installed_version="$(bash "$UPDATE_TARGET_SCRIPT" --version 2>/dev/null | awk '{print $2; exit}')"
     if ! version_eq "$installed_version" "$latest_version"; then
       warn "替换后版本不符合预期，正在自动恢复备份。"
@@ -1729,6 +1881,9 @@ update_run() {
   rm -rf "$tmp"
   (( release_global_lock == 1 )) && global_lock_release
   lock_release "$update_lock"
+  if (( rc == 0 )); then
+    update_maybe_reload_after_change "$(update_installed_version)" "update"
+  fi
   return "$rc"
 }
 
@@ -1755,10 +1910,29 @@ update_rollback() {
   update_restore_backup "$backup" || { global_lock_release; lock_release "$update_lock"; return 1; }
   current_version="$(bash "$UPDATE_TARGET_SCRIPT" --version 2>/dev/null | awk '{print $2; exit}')"
   update_write_status "rollback" "${to:-$TOOL_VERSION}" "${current_version:-$from}" "$backup" "rollback"
-  ok "已回滚脚本版本：${current_version:-unknown}"
+  ok "已回滚到版本：${current_version:-unknown}"
   command -v lq >/dev/null 2>&1 && lq --version || true
   (( release_global_lock == 1 )) && global_lock_release
   lock_release "$update_lock"
+  update_maybe_reload_after_change "${current_version:-$(update_installed_version)}" "rollback"
+}
+
+update_menu_run() {
+  local rc
+  UPDATE_RELOAD_AFTER_ACTION=1
+  update_run
+  rc=$?
+  UPDATE_RELOAD_AFTER_ACTION=0
+  return "$rc"
+}
+
+update_menu_rollback() {
+  local rc
+  UPDATE_RELOAD_AFTER_ACTION=1
+  update_rollback
+  rc=$?
+  UPDATE_RELOAD_AFTER_ACTION=0
+  return "$rc"
 }
 
 update_menu() {
@@ -1773,9 +1947,9 @@ update_menu() {
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action_pause update_check ;;
-      2) run_menu_action_pause update_run ;;
+      2) run_menu_action_pause update_menu_run ;;
       3) run_menu_action_pause update_status ;;
-      4) run_menu_action_pause update_rollback ;;
+      4) run_menu_action_pause update_menu_rollback ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;

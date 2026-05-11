@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-当前版本：`1.3.2`
+当前版本：`1.3.3`
 
 ## 项目简介
 
@@ -30,6 +30,7 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 - 配置导入 / 导出 / 迁移包，含 full / redacted 两种模式
 - 转发端点分享输出：TXT / TSV / JSON / HTML / 可选 QR
 - GitHub Release 自更新、sha256 校验和安全回滚
+- 自更新后菜单自动重新载入，`update status` 可区分运行版本和安装版本
 - 本地回归测试和 release 验证入口
 
 ## 快速安装
@@ -114,6 +115,7 @@ lq ddns status
 lq ddns run --scope all
 lq update check
 lq update run
+lq update status
 lq logs
 lq logs ddns
 ```
@@ -163,6 +165,8 @@ bash scripts/verify-release.sh
 端点输出位于 `/etc/leikwan-toolkit/outputs/`，用于分享 TCP/UDP 入口，不是代理链接，不包含 EasyTier secret 或配对码。
 
 卸载分普通卸载和深度卸载。普通卸载只移除服务、规则和快捷命令，保留 `/etc/leikwan-toolkit`、快照、配置包和备份；深度卸载会删除配置、状态和运行日志，并先生成 final snapshot。
+
+自更新在菜单中执行成功后会自动重新载入新版本菜单。若旧菜单进程仍在运行，`lq update check/status` 会同时显示“当前运行版本”和“当前安装版本”，并提示重新进入菜单。
 
 ## 安全说明
 
@@ -217,6 +221,6 @@ tail -f /root/lq-apply-relay.log
 Release 包名：
 
 ```text
-leikwan-toolkit-1.3.2.tar.gz
-leikwan-toolkit-1.3.2.tar.gz.sha256
+leikwan-toolkit-1.3.3.tar.gz
+leikwan-toolkit-1.3.3.tar.gz.sha256
 ```

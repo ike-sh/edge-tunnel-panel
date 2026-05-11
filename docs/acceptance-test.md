@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.3.2 正式版验收。
+本页用于 Leikwan Toolkit 1.3.3 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.3.2"
-leikwan-toolkit 1.3.2
+TOOL_VERSION="1.3.3"
+leikwan-toolkit 1.3.3
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.3.2.tar.gz
-dist/leikwan-toolkit-1.3.2.tar.gz.sha256
+dist/leikwan-toolkit-1.3.3.tar.gz
+dist/leikwan-toolkit-1.3.3.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -49,6 +49,7 @@ bash tests/doctor-reset-regression.sh
 bash tests/compact-output-regression.sh
 bash tests/ddns-summary-regression.sh
 bash tests/health-score-regression.sh
+bash tests/update-regression.sh
 bash tests/package-regression.sh
 bash tests/uninstall-regression.sh
 bash tests/lock-regression.sh
@@ -115,6 +116,20 @@ lq logs apply
 ```
 
 模拟 lock 占用时，高危任务应提示已有任务运行；stale lock 应可清理。
+
+## 自更新热修验收
+
+```bash
+lq update check
+lq update status
+```
+
+期望：
+
+- `update check` 优先显示当前安装版本，而不是只使用旧菜单进程里的 `TOOL_VERSION`。
+- 当运行版本和安装版本不一致时，输出 WARN 并建议重新进入菜单。
+- `update status` 显示当前运行版本、当前安装版本、快捷命令指向和最近更新状态。
+- 菜单中执行更新或回滚成功后自动重新载入新脚本；如果 reload 失败，明确提示手动执行 `lq`。
 
 ## 快速组网
 

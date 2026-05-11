@@ -45,6 +45,9 @@ bash tests/ddns-summary-regression.sh
 section "health score regression"
 bash tests/health-score-regression.sh
 
+section "update regression"
+bash tests/update-regression.sh
+
 section "package regression"
 bash tests/package-regression.sh
 
