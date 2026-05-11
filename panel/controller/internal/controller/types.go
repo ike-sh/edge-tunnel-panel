@@ -2,7 +2,7 @@ package controller
 
 import "encoding/json"
 
-const Version = "2.0.0-alpha.1"
+const Version = "2.0.0-alpha.3"
 
 type HealthResponse struct {
 	Name    string `json:"name"`
@@ -18,23 +18,27 @@ type RegisterRequest struct {
 }
 
 type ReportRequest struct {
-	NodeID       string            `json:"node_id"`
-	NodeName     string            `json:"node_name"`
-	Role         string            `json:"role"`
-	Hostname     string            `json:"hostname"`
-	PublicIP     string            `json:"public_ip"`
-	PrimaryLANIP string            `json:"primary_lan_ip"`
-	EasyTierIP   string            `json:"easytier_ip"`
-	AgentVersion string            `json:"agent_version"`
-	CoreVersion  string            `json:"core_version"`
-	Status       string            `json:"status"`
-	HealthScore  int               `json:"health_score"`
-	LQStatus     json.RawMessage   `json:"lq_status,omitempty"`
-	LQDoctor     json.RawMessage   `json:"lq_doctor,omitempty"`
-	Services     map[string]string `json:"services,omitempty"`
-	Entries      []EntryPayload    `json:"entries,omitempty"`
-	Forwards     []ForwardPayload  `json:"forwards,omitempty"`
-	Errors       []string          `json:"errors,omitempty"`
+	NodeID          string            `json:"node_id"`
+	NodeName        string            `json:"node_name"`
+	Role            string            `json:"role"`
+	Hostname        string            `json:"hostname"`
+	PublicIP        string            `json:"public_ip"`
+	PrimaryLANIP    string            `json:"primary_lan_ip"`
+	EasyTierIP      string            `json:"easytier_ip"`
+	AgentVersion    string            `json:"agent_version"`
+	CoreVersion     string            `json:"core_version"`
+	Status          string            `json:"status"`
+	HealthScore     int               `json:"health_score"`
+	IntervalSeconds int               `json:"interval_seconds"`
+	Summary         json.RawMessage   `json:"summary,omitempty"`
+	Doctor          json.RawMessage   `json:"doctor,omitempty"`
+	LQStatus        json.RawMessage   `json:"lq_status,omitempty"`
+	LQDoctor        json.RawMessage   `json:"lq_doctor,omitempty"`
+	Services        map[string]string `json:"services,omitempty"`
+	Entries         []EntryPayload    `json:"entries,omitempty"`
+	Forwards        []ForwardPayload  `json:"forwards,omitempty"`
+	RecentErrors    []string          `json:"recent_errors,omitempty"`
+	Errors          []string          `json:"errors,omitempty"`
 }
 
 type EntryPayload struct {
@@ -57,19 +61,38 @@ type ForwardPayload struct {
 }
 
 type Node struct {
-	ID           int64  `json:"id"`
-	NodeID       string `json:"node_id"`
-	NodeName     string `json:"node_name"`
-	Role         string `json:"role"`
-	PublicIP     string `json:"public_ip"`
-	LANIP        string `json:"lan_ip"`
-	EasyTierIP   string `json:"easytier_ip"`
-	AgentVersion string `json:"agent_version"`
-	CoreVersion  string `json:"core_version"`
-	Status       string `json:"status"`
-	HealthScore  int    `json:"health_score"`
-	LastSeen     string `json:"last_seen"`
-	RawJSON      string `json:"raw_json,omitempty"`
+	ID              int64             `json:"id"`
+	NodeID          string            `json:"node_id"`
+	NodeName        string            `json:"node_name"`
+	Role            string            `json:"role"`
+	PublicIP        string            `json:"public_ip"`
+	LANIP           string            `json:"lan_ip"`
+	EasyTierIP      string            `json:"easytier_ip"`
+	AgentVersion    string            `json:"agent_version"`
+	CoreVersion     string            `json:"core_version"`
+	Status          string            `json:"status"`
+	HealthScore     int               `json:"health_score"`
+	IntervalSeconds int               `json:"interval_seconds"`
+	LastSeen        string            `json:"last_seen"`
+	Services        map[string]string `json:"services,omitempty"`
+	Summary         json.RawMessage   `json:"summary,omitempty"`
+	Doctor          json.RawMessage   `json:"doctor,omitempty"`
+	RecentErrors    []string          `json:"recent_errors,omitempty"`
+	RawJSON         string            `json:"raw_json,omitempty"`
+}
+
+type NodeReport struct {
+	ID              int64             `json:"id"`
+	NodeID          string            `json:"node_id"`
+	Status          string            `json:"status"`
+	HealthScore     int               `json:"health_score"`
+	IntervalSeconds int               `json:"interval_seconds"`
+	Services        map[string]string `json:"services,omitempty"`
+	Summary         json.RawMessage   `json:"summary,omitempty"`
+	Doctor          json.RawMessage   `json:"doctor,omitempty"`
+	RecentErrors    []string          `json:"recent_errors,omitempty"`
+	RawJSON         string            `json:"raw_json,omitempty"`
+	CreatedAt       string            `json:"created_at"`
 }
 
 type Entry struct {
@@ -101,4 +124,28 @@ type Event struct {
 	Level     string `json:"level"`
 	Message   string `json:"message"`
 	CreatedAt string `json:"created_at"`
+}
+
+type BootstrapAgentCommandResponse struct {
+	Command       string `json:"command"`
+	ControllerURL string `json:"controller_url"`
+	Role          string `json:"role"`
+	NodeName      string `json:"node_name"`
+	Token         string `json:"token"`
+	Note          string `json:"note"`
+}
+
+type TopologyLink struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Type   string `json:"type"`
+	Label  string `json:"label"`
+	Status string `json:"status"`
+}
+
+type TopologyResponse struct {
+	Nodes    []Node         `json:"nodes"`
+	Entries  []Entry        `json:"entries"`
+	Forwards []Forward      `json:"forwards"`
+	Links    []TopologyLink `json:"links"`
 }

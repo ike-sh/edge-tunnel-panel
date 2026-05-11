@@ -1,6 +1,6 @@
 # Leikwan Panel 2.0-alpha
 
-Leikwan Panel 2.0-alpha 是 Leikwan Toolkit 的只读 Web 面板预览版。
+Leikwan Panel 2.0-alpha 是 Leikwan Toolkit 的只读 Web 面板预览版。当前实现版本为 `2.0.0-alpha.3`。
 
 1.4.x Shell 版继续作为 Leikwan Core / LTS，负责真实转发、nftables、EasyTier、DDNS、PBR 和本机维护。2.0-alpha 只做状态采集、汇总和展示，不做配置下发。
 
@@ -32,9 +32,9 @@ lq ddns overview
 Agent(entry/relay/backend) -> HTTPS/HTTP POST -> Controller(SQLite) -> Web UI
 ```
 
-- Controller：Go HTTP API + SQLite，保存节点、入口、转发和事件。
+- Controller：Go HTTP API + SQLite，保存节点、历史上报、入口、转发和事件。
 - Agent：Go 采集器，周期性采集本机状态并上报。
-- Web：React + Vite，只读展示 Dashboard、Nodes、Entries、Forwards、Events。
+- Web：React + Vite，只读展示 Dashboard、Topology、Bootstrap、Nodes、Node Detail、Entries、Forwards、Events。
 
 ## 启动 Controller
 
@@ -78,7 +78,7 @@ curl http://127.0.0.1:18080/api/v1/health
 ```json
 {
   "name": "leikwan-controller",
-  "version": "2.0.0-alpha.1",
+  "version": "2.0.0-alpha.3",
   "status": "ok"
 }
 ```
@@ -143,10 +143,15 @@ VITE_API_BASE=http://127.0.0.1:18080 npm --prefix web run dev
 
 ```text
 GET  /api/v1/health
+GET  /api/v1/bootstrap/agent-command
+GET  /api/v1/topology
 POST /api/v1/agent/register
 POST /api/v1/agent/report
 GET  /api/v1/nodes
 GET  /api/v1/nodes/:id
+GET  /api/v1/nodes/:id/reports
+GET  /api/v1/nodes/:id/events
+GET  /api/v1/nodes/:id/raw
 GET  /api/v1/entries
 GET  /api/v1/forwards
 GET  /api/v1/events
@@ -169,11 +174,16 @@ SQLite 默认开发路径：
 主要表：
 
 - `nodes`
+- `node_reports`
 - `entries`
 - `forwards`
 - `events`
 
 `raw_json` 入库前会统一脱敏。
+
+`GET /api/v1/nodes` 会动态计算 offline：`last_seen` 超过 `3 * interval_seconds`，或未上报 interval 时超过 120 秒，视为 offline。
+
+`GET /api/v1/bootstrap/agent-command` 返回的安装命令永远只包含 `REDACTED` token。Web API 不返回 Controller 的真实 token。
 
 ## Alpha 验收
 

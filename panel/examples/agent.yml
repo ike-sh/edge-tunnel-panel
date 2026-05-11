@@ -1,0 +1,6 @@
+controller_url: http://127.0.0.1:18080
+token: change-me
+node_id: relay-1
+node_name: relay-1
+role: relay
+interval_seconds: 30

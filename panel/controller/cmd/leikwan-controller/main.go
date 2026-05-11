@@ -26,7 +26,7 @@ func main() {
 		token = tokenFromConfig(*configPath)
 	}
 	if token == "" {
-		log.Print("[WARN] LEIKWAN_CONTROLLER_TOKEN is empty; agent register/report will return 401")
+		log.Print("[WARN] LEIKWAN_CONTROLLER_TOKEN is empty; set LEIKWAN_CONTROLLER_TOKEN manually or configure /etc/leikwan-panel/controller.yml before accepting agents")
 	}
 
 	store, err := controller.OpenStore(*dbPath)

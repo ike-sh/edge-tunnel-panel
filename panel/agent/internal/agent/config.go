@@ -4,11 +4,19 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 const defaultConfigPath = "/etc/leikwan-agent/config.yml"
+
+func ConfigPathOrDefault(path string) string {
+	if path == "" {
+		return defaultConfigPath
+	}
+	return path
+}
 
 func LoadConfig(path string) (Config, error) {
 	if path == "" {
@@ -75,6 +83,35 @@ func LoadConfig(path string) (Config, error) {
 		cfg.NodeName = cfg.NodeID
 	}
 	return cfg, nil
+}
+
+func WriteConfig(path string, cfg Config) error {
+	path = ConfigPathOrDefault(path)
+	if cfg.ControllerURL == "" {
+		return fmt.Errorf("controller_url is required")
+	}
+	if cfg.Token == "" {
+		return fmt.Errorf("token is required")
+	}
+	cfg.Role = normalizeRole(cfg.Role)
+	if cfg.NodeName == "" {
+		host, _ := os.Hostname()
+		cfg.NodeName = host
+	}
+	if cfg.NodeID == "" {
+		cfg.NodeID = cfg.NodeName
+	}
+	if cfg.IntervalSeconds <= 0 {
+		cfg.IntervalSeconds = 30
+	}
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	content := fmt.Sprintf("controller_url: %s\ntoken: %s\nnode_id: %s\nnode_name: %s\nrole: %s\ninterval_seconds: %d\n",
+		cfg.ControllerURL, cfg.Token, cfg.NodeID, cfg.NodeName, cfg.Role, cfg.IntervalSeconds)
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 func normalizeRole(role string) string {

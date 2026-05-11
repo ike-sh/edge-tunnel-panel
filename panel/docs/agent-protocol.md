@@ -1,6 +1,6 @@
 # Leikwan Agent Protocol 2.0-alpha
 
-本协议用于 Leikwan Agent 向 Controller 注册和上报状态。2.0-alpha 只有 Agent -> Controller 的状态上报，不包含 Controller -> Agent 的配置下发或命令执行。
+本协议用于 Leikwan Agent 向 Controller 注册和上报状态。当前实现版本为 `2.0.0-alpha.3`。2.0-alpha 只有 Agent -> Controller 的状态上报，不包含 Controller -> Agent 的配置下发或命令执行。
 
 ## Authorization
 
@@ -77,16 +77,30 @@ Content-Type: application/json
   "public_ip": "203.0.113.10",
   "primary_lan_ip": "10.0.0.10",
   "easytier_ip": "10.198.1.1",
-  "agent_version": "2.0.0-alpha.1",
+  "agent_version": "2.0.0-alpha.3",
   "core_version": "1.4.0 LTS",
   "status": "online",
   "health_score": 96,
+  "interval_seconds": 30,
+  "summary": {
+    "entries_count": 1,
+    "forwards_count": 4,
+    "health_score": 96
+  },
+  "doctor": {
+    "overall": "OK",
+    "warnings": [],
+    "suggestions": []
+  },
   "services": {
     "nftables": "active",
-    "easytier": "active"
+    "easytier": "active",
+    "leikwan-agent": "active",
+    "ddns_timer": "active"
   },
   "entries": [],
   "forwards": [],
+  "recent_errors": [],
   "errors": []
 }
 ```
@@ -112,12 +126,19 @@ Agent 只允许采集只读状态：
 - `lq doctor --json`
 - `systemctl is-active nftables`
 - `systemctl is-active easytier...`
+- `systemctl is-active leikwan-ddns-refresh.timer`
 
 如果 `lq` 不存在：
 
 - `core_version = "missing"`
 - `status = "degraded"`
 - 继续上报，不退出
+
+如果 `lq status --json` 或 `lq doctor --json` 输出坏 JSON：
+
+- Agent 不崩溃
+- `status = "degraded"`
+- `recent_errors` 记录解析错误摘要
 
 ## Redaction 规则
 

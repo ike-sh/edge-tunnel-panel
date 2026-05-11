@@ -52,8 +52,26 @@ func (s *Store) migrate(ctx context.Context) error {
 			core_version TEXT,
 			status TEXT,
 			health_score INTEGER DEFAULT 0,
+			interval_seconds INTEGER DEFAULT 0,
 			last_seen TEXT,
+			services_json TEXT,
+			summary_json TEXT,
+			doctor_json TEXT,
+			recent_errors_json TEXT,
 			raw_json TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS node_reports (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			node_id TEXT NOT NULL,
+			status TEXT,
+			health_score INTEGER DEFAULT 0,
+			interval_seconds INTEGER DEFAULT 0,
+			services_json TEXT,
+			summary_json TEXT,
+			doctor_json TEXT,
+			recent_errors_json TEXT,
+			raw_json TEXT,
+			created_at TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS entries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,7 +107,45 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	columns := map[string]string{
+		"interval_seconds":   "INTEGER DEFAULT 0",
+		"services_json":      "TEXT",
+		"summary_json":       "TEXT",
+		"doctor_json":        "TEXT",
+		"recent_errors_json": "TEXT",
+	}
+	for name, typ := range columns {
+		if err := s.addColumnIfMissing(ctx, "nodes", name, typ); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *Store) addColumnIfMissing(ctx context.Context, table, column, typ string) error {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, typ))
+	return err
 }
 
 func nowString() string {
@@ -117,6 +173,49 @@ func normalizeStatus(status string) string {
 	}
 }
 
+func jsonText(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "null"
+	}
+	return string(RedactJSONBytes(raw))
+}
+
+func rawJSONText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "null"
+	}
+	return string(RedactJSONBytes(raw))
+}
+
+func reportErrors(req ReportRequest) []string {
+	out := make([]string, 0, len(req.RecentErrors)+len(req.Errors))
+	out = append(out, req.RecentErrors...)
+	out = append(out, req.Errors...)
+	for i := range out {
+		out[i] = RedactString(out[i])
+	}
+	return out
+}
+
+func scanJSONMap(text string) map[string]string {
+	out := map[string]string{}
+	if text == "" || text == "null" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(text), &out)
+	return out
+}
+
+func scanStringSlice(text string) []string {
+	out := []string{}
+	if text == "" || text == "null" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(text), &out)
+	return out
+}
+
 func (s *Store) Register(ctx context.Context, req RegisterRequest, raw []byte) error {
 	if req.NodeID == "" {
 		return fmt.Errorf("node_id is required")
@@ -136,10 +235,9 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest, raw []byte) e
 		ON CONFLICT(node_id) DO UPDATE SET
 			node_name=excluded.node_name,
 			role=excluded.role,
-			status=excluded.status,
 			last_seen=excluded.last_seen,
 			raw_json=excluded.raw_json`,
-		req.NodeID, name, normalizeRole(req.Role), "online", now, redacted)
+		req.NodeID, name, normalizeRole(req.Role), "unknown", now, redacted)
 	if err != nil {
 		return err
 	}
@@ -160,14 +258,27 @@ func (s *Store) Report(ctx context.Context, req ReportRequest, raw []byte) error
 	status := normalizeStatus(req.Status)
 	now := nowString()
 	redacted := string(RedactJSONBytes(raw))
+	interval := req.IntervalSeconds
+	if interval <= 0 {
+		interval = 60
+	}
+	servicesJSON := jsonText(req.Services)
+	summaryJSON := rawJSONText(req.Summary)
+	doctorJSON := rawJSONText(req.Doctor)
+	recentErrorsJSON := jsonText(reportErrors(req))
+	oldStatus := "unknown"
+	var oldLastSeen string
+	var oldInterval int
+	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(status, 'unknown'), COALESCE(last_seen, ''), COALESCE(interval_seconds, 0) FROM nodes WHERE node_id=?`, req.NodeID).Scan(&oldStatus, &oldLastSeen, &oldInterval)
+	oldStatus = computedStatus(oldStatus, oldLastSeen, oldInterval)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `INSERT INTO nodes
-		(node_id, node_name, role, public_ip, lan_ip, easytier_ip, agent_version, core_version, status, health_score, last_seen, raw_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(node_id, node_name, role, public_ip, lan_ip, easytier_ip, agent_version, core_version, status, health_score, interval_seconds, last_seen, services_json, summary_json, doctor_json, recent_errors_json, raw_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(node_id) DO UPDATE SET
 			node_name=excluded.node_name,
 			role=excluded.role,
@@ -178,11 +289,22 @@ func (s *Store) Report(ctx context.Context, req ReportRequest, raw []byte) error
 			core_version=excluded.core_version,
 			status=excluded.status,
 			health_score=excluded.health_score,
+			interval_seconds=excluded.interval_seconds,
 			last_seen=excluded.last_seen,
+			services_json=excluded.services_json,
+			summary_json=excluded.summary_json,
+			doctor_json=excluded.doctor_json,
+			recent_errors_json=excluded.recent_errors_json,
 			raw_json=excluded.raw_json`,
 		req.NodeID, name, normalizeRole(req.Role), req.PublicIP, req.PrimaryLANIP, req.EasyTierIP,
-		req.AgentVersion, req.CoreVersion, status, req.HealthScore, now, redacted)
+		req.AgentVersion, req.CoreVersion, status, req.HealthScore, interval, now, servicesJSON, summaryJSON, doctorJSON, recentErrorsJSON, redacted)
 	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO node_reports
+		(node_id, status, health_score, interval_seconds, services_json, summary_json, doctor_json, recent_errors_json, raw_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.NodeID, status, req.HealthScore, interval, servicesJSON, summaryJSON, doctorJSON, recentErrorsJSON, redacted, now); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM entries WHERE node_id=?`, req.NodeID); err != nil {
@@ -216,12 +338,15 @@ func (s *Store) Report(ctx context.Context, req ReportRequest, raw []byte) error
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	if oldStatus != status {
+		_ = s.AddEvent(ctx, req.NodeID, "info", fmt.Sprintf("node status changed: %s -> %s", oldStatus, status))
+	}
 	level := "info"
-	if status == "degraded" || len(req.Errors) > 0 {
+	if status == "degraded" || len(req.Errors) > 0 || len(req.RecentErrors) > 0 {
 		level = "warn"
 	}
 	msg := "node report received"
-	if len(req.Errors) > 0 {
+	if len(req.Errors) > 0 || len(req.RecentErrors) > 0 {
 		msg = "node report has collector warnings"
 	}
 	return s.AddEvent(ctx, req.NodeID, level, msg)
@@ -233,33 +358,87 @@ func (s *Store) AddEvent(ctx context.Context, nodeID, level, message string) err
 	return err
 }
 
+func computedStatus(status, lastSeen string, intervalSeconds int) string {
+	if status == "" {
+		status = "unknown"
+	}
+	if status == "unknown" {
+		return status
+	}
+	threshold := 120 * time.Second
+	if intervalSeconds > 0 {
+		threshold = time.Duration(intervalSeconds*3) * time.Second
+	}
+	seen, err := time.Parse(time.RFC3339, lastSeen)
+	if err != nil {
+		return status
+	}
+	if time.Since(seen) > threshold {
+		return "offline"
+	}
+	return status
+}
+
+func (s *Store) updateOfflineNodes(ctx context.Context) {
+	nodes, err := s.listNodesRaw(ctx)
+	if err != nil {
+		return
+	}
+	for _, n := range nodes {
+		effective := computedStatus(n.Status, n.LastSeen, n.IntervalSeconds)
+		if effective == "offline" && n.Status != "offline" {
+			if _, err := s.db.ExecContext(ctx, `UPDATE nodes SET status='offline' WHERE node_id=?`, n.NodeID); err == nil {
+				_ = s.AddEvent(ctx, n.NodeID, "warn", fmt.Sprintf("node status changed: %s -> offline", n.Status))
+			}
+		}
+	}
+}
+
 func (s *Store) ListNodes(ctx context.Context) ([]Node, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, node_id, node_name, role, public_ip, lan_ip, easytier_ip, agent_version, core_version, status, health_score, last_seen, raw_json FROM nodes ORDER BY last_seen DESC`)
+	s.updateOfflineNodes(ctx)
+	return s.listNodesRaw(ctx)
+}
+
+func (s *Store) listNodesRaw(ctx context.Context) ([]Node, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, node_id, node_name, role, public_ip, lan_ip, easytier_ip, agent_version, core_version, COALESCE(status, 'unknown'), COALESCE(health_score, 0), COALESCE(interval_seconds, 0), COALESCE(last_seen, ''), COALESCE(services_json, '{}'), COALESCE(summary_json, 'null'), COALESCE(doctor_json, 'null'), COALESCE(recent_errors_json, '[]'), COALESCE(raw_json, '{}') FROM nodes ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Node
+	out := []Node{}
 	for rows.Next() {
 		var n Node
-		if err := rows.Scan(&n.ID, &n.NodeID, &n.NodeName, &n.Role, &n.PublicIP, &n.LANIP, &n.EasyTierIP, &n.AgentVersion, &n.CoreVersion, &n.Status, &n.HealthScore, &n.LastSeen, &n.RawJSON); err != nil {
+		var servicesJSON, summaryJSON, doctorJSON, errorsJSON string
+		if err := rows.Scan(&n.ID, &n.NodeID, &n.NodeName, &n.Role, &n.PublicIP, &n.LANIP, &n.EasyTierIP, &n.AgentVersion, &n.CoreVersion, &n.Status, &n.HealthScore, &n.IntervalSeconds, &n.LastSeen, &servicesJSON, &summaryJSON, &doctorJSON, &errorsJSON, &n.RawJSON); err != nil {
 			return nil, err
 		}
+		n.Status = computedStatus(n.Status, n.LastSeen, n.IntervalSeconds)
+		n.Services = scanJSONMap(servicesJSON)
+		n.Summary = json.RawMessage(summaryJSON)
+		n.Doctor = json.RawMessage(doctorJSON)
+		n.RecentErrors = scanStringSlice(errorsJSON)
 		out = append(out, n)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) GetNode(ctx context.Context, id string) (Node, bool, error) {
+	s.updateOfflineNodes(ctx)
 	var n Node
-	err := s.db.QueryRowContext(ctx, `SELECT id, node_id, node_name, role, public_ip, lan_ip, easytier_ip, agent_version, core_version, status, health_score, last_seen, raw_json
-		FROM nodes WHERE node_id=? OR CAST(id AS TEXT)=?`, id, id).Scan(&n.ID, &n.NodeID, &n.NodeName, &n.Role, &n.PublicIP, &n.LANIP, &n.EasyTierIP, &n.AgentVersion, &n.CoreVersion, &n.Status, &n.HealthScore, &n.LastSeen, &n.RawJSON)
+	var servicesJSON, summaryJSON, doctorJSON, errorsJSON string
+	err := s.db.QueryRowContext(ctx, `SELECT id, node_id, node_name, role, public_ip, lan_ip, easytier_ip, agent_version, core_version, COALESCE(status, 'unknown'), COALESCE(health_score, 0), COALESCE(interval_seconds, 0), COALESCE(last_seen, ''), COALESCE(services_json, '{}'), COALESCE(summary_json, 'null'), COALESCE(doctor_json, 'null'), COALESCE(recent_errors_json, '[]'), COALESCE(raw_json, '{}')
+		FROM nodes WHERE node_id=? OR CAST(id AS TEXT)=?`, id, id).Scan(&n.ID, &n.NodeID, &n.NodeName, &n.Role, &n.PublicIP, &n.LANIP, &n.EasyTierIP, &n.AgentVersion, &n.CoreVersion, &n.Status, &n.HealthScore, &n.IntervalSeconds, &n.LastSeen, &servicesJSON, &summaryJSON, &doctorJSON, &errorsJSON, &n.RawJSON)
 	if err == sql.ErrNoRows {
 		return Node{}, false, nil
 	}
 	if err != nil {
 		return Node{}, false, err
 	}
+	n.Status = computedStatus(n.Status, n.LastSeen, n.IntervalSeconds)
+	n.Services = scanJSONMap(servicesJSON)
+	n.Summary = json.RawMessage(summaryJSON)
+	n.Doctor = json.RawMessage(doctorJSON)
+	n.RecentErrors = scanStringSlice(errorsJSON)
 	return n, true, nil
 }
 
@@ -269,7 +448,7 @@ func (s *Store) ListEntries(ctx context.Context) ([]Entry, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Entry
+	out := []Entry{}
 	for rows.Next() {
 		var e Entry
 		if err := rows.Scan(&e.ID, &e.NodeID, &e.Name, &e.ListenPort, &e.Protocol, &e.PublicHost, &e.Status, &e.RawJSON); err != nil {
@@ -286,7 +465,7 @@ func (s *Store) ListForwards(ctx context.Context) ([]Forward, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Forward
+	out := []Forward{}
 	for rows.Next() {
 		var f Forward
 		if err := rows.Scan(&f.ID, &f.NodeID, &f.Name, &f.EntryName, &f.TargetHost, &f.TargetPort, &f.Protocol, &f.Status, &f.RawJSON); err != nil {
@@ -306,7 +485,53 @@ func (s *Store) ListEvents(ctx context.Context, limit int) ([]Event, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Event
+	out := []Event{}
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.ID, &e.NodeID, &e.Level, &e.Message, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListNodeReports(ctx context.Context, nodeID string, limit int) ([]NodeReport, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, node_id, COALESCE(status, 'unknown'), COALESCE(health_score, 0), COALESCE(interval_seconds, 0), COALESCE(services_json, '{}'), COALESCE(summary_json, 'null'), COALESCE(doctor_json, 'null'), COALESCE(recent_errors_json, '[]'), COALESCE(raw_json, '{}'), COALESCE(created_at, '')
+		FROM node_reports WHERE node_id=? ORDER BY id DESC LIMIT ?`, nodeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []NodeReport{}
+	for rows.Next() {
+		var r NodeReport
+		var servicesJSON, summaryJSON, doctorJSON, errorsJSON string
+		if err := rows.Scan(&r.ID, &r.NodeID, &r.Status, &r.HealthScore, &r.IntervalSeconds, &servicesJSON, &summaryJSON, &doctorJSON, &errorsJSON, &r.RawJSON, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		r.Services = scanJSONMap(servicesJSON)
+		r.Summary = json.RawMessage(summaryJSON)
+		r.Doctor = json.RawMessage(doctorJSON)
+		r.RecentErrors = scanStringSlice(errorsJSON)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListNodeEvents(ctx context.Context, nodeID string, limit int) ([]Event, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, node_id, level, message, created_at FROM events WHERE node_id=? ORDER BY id DESC LIMIT ?`, nodeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Event{}
 	for rows.Next() {
 		var e Event
 		if err := rows.Scan(&e.ID, &e.NodeID, &e.Level, &e.Message, &e.CreatedAt); err != nil {
