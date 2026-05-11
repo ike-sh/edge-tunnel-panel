@@ -1,6 +1,6 @@
 # 自更新与安全回滚
 
-Leikwan Toolkit 1.3.5 保持自更新能力。自更新只使用 GitHub Release 包，不会直接拉取 raw main 分支脚本。
+Leikwan Toolkit 1.4.0 保持自更新能力。自更新只使用 GitHub Release 包，不会直接拉取 raw main 分支脚本。
 
 ## 检查版本
 
@@ -9,17 +9,17 @@ lq update check
 lq --update-check
 ```
 
-交互模式也可以从“运维命令中心 -> 自更新”进入。
+交互模式也可以从“高级维护 -> 自更新”进入。
 
 `update check` 会优先读取 `/root/leikwan-toolkit.sh --version` 作为“当前安装版本”，再显示当前菜单进程里的运行版本。这样即使旧菜单进程尚未退出，也不会误判磁盘脚本没有更新。
 
 示例：
 
 ```text
-[INFO] 当前安装版本：1.3.5
+[INFO] 当前安装版本：1.4.0
 [INFO] 当前运行进程：1.3.2
-[INFO] 最新版本：1.3.5
-[OK] 当前已是最新版本：1.3.5
+[INFO] 最新版本：1.4.0
+[OK] 当前已是最新版本：1.4.0
 [WARN] 当前运行进程版本与已安装脚本版本不一致。
 [INFO] 建议重新进入菜单：lq
 ```
@@ -69,9 +69,9 @@ lq update status
 
 ```text
 当前运行版本: 1.3.2
-当前安装版本: 1.3.5
+当前安装版本: 1.4.0
 快捷命令: /usr/local/bin/lq -> /root/leikwan-toolkit.sh
-最近更新: 1.3.2 -> 1.3.5 / OK
+最近更新: 1.3.2 -> 1.4.0 / OK
 ```
 
 最近更新状态写入：
@@ -85,10 +85,10 @@ lq update status
 ```text
 LAST_UPDATE_TIME=2026-05-10 05:30:00
 LAST_UPDATE_FROM=1.1.1
-LAST_UPDATE_TO=1.3.5
+LAST_UPDATE_TO=1.4.0
 LAST_UPDATE_RESULT=ok
 LAST_UPDATE_BACKUP=/var/backups/leikwan-toolkit/root__leikwan-toolkit.sh.20260510-053000.bak
-LAST_UPDATE_SOURCE=https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.3.5/leikwan-toolkit-1.3.5.tar.gz
+LAST_UPDATE_SOURCE=https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.0/leikwan-toolkit-1.4.0.tar.gz
 ```
 
 ## 回滚

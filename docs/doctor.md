@@ -1,6 +1,6 @@
 # doctor 诊断
 
-Leikwan Toolkit 1.3.5 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
+Leikwan Toolkit 1.4.0 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
 
 ## 常用命令
 
@@ -70,9 +70,30 @@ lq --doctor-auto-fix
 
 JSON 输出不包含 EasyTier secret、配对码 base64、token 或 password。
 
+## 末尾摘要
+
+文本 doctor 末尾会保留最终版摘要：
+
+```text
+诊断结果摘要
+----------------------------------------
+角色: relay
+EasyTier: OK
+公网入口: OK
+转发目标: OK
+PBR: OK
+nftables: OK
+MSS clamp: OK
+DDNS: OK
+健康度: 96/100 excellent
+整体状态: OK
+```
+
+存在问题时会输出“建议修复”，优先给出 `lq doctor --auto-fix`、`lq ddns apply-entries` 或 `lq forward apply-relay --auto-fix-route`。
+
 ## DDNS 双端检查
 
-1.3.5 起，doctor 会同时提示 A/B 两侧 DDNS 边界：
+1.4.0 起，doctor 会同时提示 A/B 两侧 DDNS 边界：
 
 - A 公网入口使用域名但本机 DDNS 更新器未启用时，会 WARN，并提示 `lq entry ddns setup`。如果域名由外部 DDNS 客户端维护，可以忽略。
 - B 利群主机检测到 enabled 公网入口域名但 B 端 DDNS timer 未启用时，会提示 `lq ddns enable`。

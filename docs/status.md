@@ -1,11 +1,12 @@
 # 状态输出
 
-Leikwan Toolkit 1.3.5 对 `lq status` 做了稳定化整理，目标是让日常巡检像正式运维系统一样可读、可脚本化、不会误报角色。
+Leikwan Toolkit 1.4.0 对 `lq status` 做了稳定化整理，目标是让日常巡检像正式运维系统一样可读、可脚本化、不会误报角色。
 
 ## 常用命令
 
 ```bash
 lq status
+lq status --verbose
 lq --status
 lq --brief
 lq --compact
@@ -13,6 +14,28 @@ lq status --brief
 lq status --json
 lq --status-json
 LEIKWAN_BRIEF=1 lq status
+```
+
+1.4.0 LTS 起，`lq status` 默认输出最终版短状态：
+
+```text
+Leikwan 状态
+----------------------------------------
+版本: 1.4.0 LTS
+角色: relay
+健康度: 96/100 excellent
+公网入口: 2 enabled
+转发目标: 4 enabled
+DDNS: OK
+nftables: OK
+PBR: OK
+整体状态: OK
+```
+
+详细状态使用：
+
+```bash
+lq status --verbose
 ```
 
 ## 角色识别
@@ -63,7 +86,7 @@ JSON 输出不受简洁模式影响，仍输出结构化摘要。
 
 ## DDNS 总览
 
-1.3.5 起，`lq status` 会区分两类 DDNS：
+1.4.0 起，`lq status` 会区分两类 DDNS：
 
 - B 端监控：后端转发目标、公网入口域名、域名 PBR。
 - A 端更新器：本机公网入口域名是否启用更新、最近公网 IP / 解析 IP 是否一致。

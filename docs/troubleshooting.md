@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.3.5 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.4.0 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -17,7 +17,7 @@ lq status
 
 `lq init --dry-run` 只输出初始化计划，不写文件。`lq status` 会显示角色、角色来源、角色混合 WARN 和下一步建议。
 
-1.3.5 起，B relay 不会因为存在 `entries.tsv` 被误判为 entry。只有 relay service / `ROLE=leikwan-relay` 和 entry service / `ROLE=cloud-entry` / entry env 同时存在时，才会提示高级混合部署。
+1.4.0 起，B relay 不会因为存在 `entries.tsv` 被误判为 entry。只有 relay service / `ROLE=leikwan-relay` 和 entry service / `ROLE=cloud-entry` / entry env 同时存在时，才会提示高级混合部署。
 
 ## 一键诊断
 
@@ -159,7 +159,7 @@ lq ddns apply-entries
 
 ## 自更新后仍看到旧版本
 
-如果在菜单中执行更新后，磁盘上的 `/root/leikwan-toolkit.sh` 已经替换成功，但当前菜单仍显示旧运行版本，这是因为旧 Bash 进程仍在内存中。1.3.5 起，菜单更新成功后会自动重新载入新脚本；如果自动 reload 失败，会明确提示重新执行：
+如果在菜单中执行更新后，磁盘上的 `/root/leikwan-toolkit.sh` 已经替换成功，但当前菜单仍显示旧运行版本，这是因为旧 Bash 进程仍在内存中。1.4.0 起，菜单更新成功后会自动重新载入新脚本；如果自动 reload 失败，会明确提示重新执行：
 
 ```bash
 lq
@@ -176,7 +176,7 @@ lq update status
 
 ```text
 当前运行版本: 1.3.2
-当前安装版本: 1.3.5
+当前安装版本: 1.4.0
 快捷命令: /usr/local/bin/lq -> /root/leikwan-toolkit.sh
 ```
 
@@ -189,7 +189,7 @@ MSS clamp 用于提高 EasyTier/tun 场景下 TCP 转发稳定性。doctor 和�
 菜单路径：
 
 ```text
-高级功能 -> 配置快照 / 回滚
+高级维护 -> 配置备份 / 快照 / 回滚
 ```
 
 快照可能包含 EasyTier network secret，排障转交前必须确认保存范围。高危操作前会自动创建轻量快照，自动快照保存在：

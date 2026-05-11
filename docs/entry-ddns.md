@@ -1,6 +1,6 @@
 # A 端公网入口 DDNS
 
-Leikwan Toolkit 1.3.5 开始支持 A 公网入口机器主动维护自己的 DDNS 域名。
+Leikwan Toolkit 1.4.0 开始支持 A 公网入口机器主动维护自己的 DDNS 域名。
 
 双端职责要分清：
 

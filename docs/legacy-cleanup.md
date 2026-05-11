@@ -1,9 +1,9 @@
 ﻿# legacy 清理
 
-Leikwan Toolkit 1.3.5 主流程只使用 EasyTier、nftables、IPv4 PBR、DDNS 刷新和 MSS clamp。旧版本残留清理入口：
+Leikwan Toolkit 1.4.0 主流程只使用 EasyTier、nftables、IPv4 PBR、DDNS 刷新和 MSS clamp。旧版本残留清理入口：
 
 ```text
-高级功能 -> legacy 清理
+高级维护 -> EasyTier 服务管理 / 调试报告
 ```
 
 每一项都需要二次确认，默认不会执行。清理只针对本项目旧版创建的服务、配置和二进制，不会删除用户其它业务。

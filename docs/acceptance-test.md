@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.3.5 正式版验收。
+本页用于 Leikwan Toolkit 1.4.0 LTS 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.3.5"
-leikwan-toolkit 1.3.5
+TOOL_VERSION="1.4.0"
+leikwan-toolkit 1.4.0 LTS
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.3.5.tar.gz
-dist/leikwan-toolkit-1.3.5.tar.gz.sha256
+dist/leikwan-toolkit-1.4.0.tar.gz
+dist/leikwan-toolkit-1.4.0.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -44,6 +44,8 @@ release 包不得包含旧入口文件：
 bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
+bash tests/final-menu-regression.sh
+bash tests/final-readme-regression.sh
 bash tests/role-detection-regression.sh
 bash tests/doctor-reset-regression.sh
 bash tests/compact-output-regression.sh
@@ -82,7 +84,19 @@ lq plan
 - 不清屏、不等待回车。
 - 不触发全局 trap。
 
-交互执行 `lq` 后，主菜单应包含“初始化 / 快速组网”和“运维命令中心”。初始化向导可以选择 B 利群主机、A 公网入口、从配置包恢复或仅检查状态。
+交互执行 `lq` 后，主菜单只保留：
+
+```text
+1. 快速组网
+2. 利群主机 B
+3. 公网入口 A
+4. DDNS
+5. 状态 / 诊断
+6. 高级维护
+0. 退出
+```
+
+`lq init` 初始化向导仍可选择 B 利群主机、A 公网入口、从配置包恢复或仅检查状态。
 
 ## 状态 JSON / 日志 / 卸载 / 锁
 
@@ -315,7 +329,7 @@ cat /etc/leikwan-toolkit/status/last-apply.env
 菜单路径：
 
 ```text
-高级功能 -> 配置快照 / 回滚
+高级维护 -> 配置备份 / 快照 / 回滚
 ```
 
 验收：
@@ -366,7 +380,7 @@ lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz --mode full --yes
 菜单路径：
 
 ```text
-高级功能 -> 配置导入 / 导出
+高级维护 -> 配置导入 / 导出
 ```
 
 动作输出必须停留，按回车返回。

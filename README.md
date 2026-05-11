@@ -1,37 +1,44 @@
 # Leikwan Toolkit
 
-当前版本：`1.3.5`
+当前版本：`1.4.0 LTS`
 
-## 项目简介
+Leikwan Toolkit 是一个 **A 公网入口 + B 中转主机 + C 后端目标** 的 TCP/UDP 转发组网工具。
 
-Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转发管理工具。它使用 EasyTier 连接公网入口和利群主机，并用 nftables 管理 TCP/UDP 业务转发。
+1.4.0 LTS 是功能冻结版。后续版本主要只做 bug fix、兼容性修复、安全修复和文档完善，不再扩展大功能。
 
-典型链路：
+## 适用场景
+
+适合这样的链路：
 
 ```text
-外部客户端 -> A 公网入口端口 -> EasyTier -> B 利群主机 -> C 后端目标
+外部客户端 -> A 公网入口 -> EasyTier -> B 利群主机 -> C 后端目标
 ```
 
-多公网入口的 PRIMARY / BACKUP 只用于推荐、排序和输出展示，不是 B 侧自动负载均衡。真正的自动负载均衡应由客户端、DNS 或外部 LB 实现。
+核心用途：
 
-## 核心能力
+- 多公网入口接入
+- 中转主机统一转发
+- TCP/UDP 同时转发
+- 可选 PBR 出口策略
+- 可选 DDNS 自动刷新
+- 可选配置备份 / 自更新
 
-- 多公网入口接入、启用禁用、PRIMARY / BACKUP 切换
-- TCP+UDP EasyTier peer 展开和 A/B 双侧 DNAT
-- 转发目标、端口池、端口冲突预检和推荐避让
-- IPv4 PBR、forward 来源 PBR、域名 PBR
-- DDNS 双端架构：A 端主动更新公网入口域名，B 端监控后端目标、公网入口域名、PBR 域名
-- 状态总览、doctor 诊断、状态缓存和脱敏 debug report
-- 状态 / doctor JSON 摘要、简洁模式、健康度评分、运行锁状态和最近错误提示
-- doctor 自动修复常见问题：nftables、MSS clamp、DDNS timer、快捷命令、权限和 stale lock
-- 配置快照 / 回滚，高危操作前自动快照
-- 普通卸载 / 深度卸载，深度卸载前 final snapshot
-- 日志查看 / 清理命令中心
-- 配置导入 / 导出 / 迁移包，含 full / redacted 两种模式
-- 转发端点分享输出：TXT / TSV / JSON / HTML / 可选 QR
-- GitHub Release 自更新、sha256 校验和安全回滚
-- 自更新后菜单自动重新载入，`update status` 可区分运行版本和安装版本
-- 本地回归测试和 release 验证入口
+不做：
+
+- Web 面板
+- 多用户权限系统
+- 自动负载均衡控制面
+- 复杂监控平台
+- DNS 服务商完整 SDK
+- 代理协议客户端生成器
+
+## 三台机器角色
+
+- **A 公网入口**：接收外部 TCP/UDP 流量，可以有多台。
+- **B 利群主机**：中转和转发中心，管理公网入口、转发目标、PBR 和 nftables。
+- **C 后端目标**：最终被访问的服务。
+
+多公网入口的 PRIMARY / BACKUP 只用于排序、展示和端点输出，不是自动负载均衡控制面。
 
 ## 快速安装
 
@@ -54,182 +61,136 @@ lq init
 lq --version
 ```
 
-首次部署、重装恢复或不确定当前机器角色时，优先执行 `lq init`。它会先让你选择 B 利群主机、A 公网入口、从配置包恢复或仅检查状态。
+## 快速组网
 
-## 三机角色说明
+如果你只是要用，按这个顺序：
 
-- A：公网入口，可部署多台，负责接收外部 TCP/UDP 流量。
-- B：利群主机 / 中转主机，运行 EasyTier relay、nftables 转发和 PBR。
-- C：后端目标，接收 B 转发来的业务流量。
+1. 安装
+2. 执行 `lq init`
+3. B 生成接入码
+4. A 粘贴接入码
+5. B 粘贴 A 返回码
+6. B 添加转发目标
+7. 使用输出的端点
 
-常见端口：
+交互主菜单已经收敛为 6 个入口：
 
-- EasyTier 组网端口：默认 `8301`、`8302`、`8303`，建议位于 `8000-9000`。
-- 业务入口端口：常用 `10001-19999`，A 侧端口池会 TCP+UDP DNAT 到 B。
-- 后端目标端口：由用户填写。
-
-## 快速组网流程
-
-推荐按 B -> A -> B -> A -> B 执行：
-
-1. B：修复 DNS / IPv4。
-2. B：生成公网入口网络码。
-3. A：粘贴网络码部署入口。
-4. B：粘贴 A 返回码完成接入。
-5. A：配置公网入口端口池。
-6. B：添加后端转发目标。
-7. B：执行 `lq status` 或 `lq --doctor` 检查。
-
-进入交互菜单：
-
-```bash
-lq
+```text
+1. 快速组网
+2. 利群主机 B
+3. 公网入口 A
+4. DDNS
+5. 状态 / 诊断
+6. 高级维护
+0. 退出
 ```
 
-菜单动作输出会停留，按回车返回。配对码输出需要输入 `y` 返回，输入 `r` 重显，输入 `p` 显示保存路径。
+连接码输出仍支持：
+
+- `y`：确认返回
+- `r`：重显
+- `p`：显示保存路径
 
 ## 常用命令
 
+首页只列最常用命令，其它兼容 CLI 见 [CLI 参考](docs/cli.md)。
+
 ```bash
 lq init
-lq init --dry-run
-lq plan
 lq status
-lq --brief
-lq status --brief
-lq status --json
-lq --status
-lq --status-json
 lq --doctor
-lq doctor --auto-fix
-lq doctor --json
-lq port check
-lq --port-check
-lq forward list
-lq forward apply-relay --auto-fix-route
-lq pbr show
-lq pbr sync-from-forwards
-lq pbr domain list
-lq pbr domain sync
-lq ddns status
 lq ddns overview
-lq ddns run --scope all
-lq ddns apply-entries
-lq ddns check-consistency
-lq entry ddns status
-lq entry ddns setup
-lq entry ddns run
-lq entry ddns enable
+lq forward apply-relay --auto-fix-route
 lq update check
-lq update run
-lq update status
-lq logs
-lq logs ddns
-lq logs entry-ddns
 ```
 
-配置导入 / 导出：
+## DDNS 简明说明
+
+DDNS 分成两端：
+
+- **A 端 DDNS**：让域名指向 A 当前公网 IP。
+- **B 端 DDNS**：发现域名变化后刷新转发 / PBR / relay 状态。
+
+如果 A 的域名已经由路由器、云厂商客户端或其它外部 DDNS 客户端维护，可以不启用 `lq entry ddns`。
+
+常用检查：
 
 ```bash
-lq config export --full
-lq config export --redacted
-lq config inspect /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
-lq config import /root/leikwan-config-YYYYMMDD-HHMMSS.tar.gz
-lq config list
+lq ddns overview
+lq ddns check-consistency
+lq ddns apply-entries
 ```
 
-端点输出：
+公网入口 DDNS 变化后，B 端默认不会自动重启 relay。需要在维护窗口确认后执行：
 
 ```bash
-lq output generate
-lq output show
-lq output json
-lq output html
-lq output qr
+lq ddns apply-entries
 ```
-
-本地 release 验证：
-
-```bash
-bash scripts/verify-release.sh
-```
-
-## 功能模块
-
-`init` 是首次初始化向导，`wizard` 和 `quickstart` 是别名。`lq init --dry-run` / `lq plan` 只输出计划，不写文件、不启动服务、不应用 nftables / PBR。主菜单和运维命令中心会把状态、诊断、端口预检、端点输出、配置导入导出、DDNS 和自更新聚合到更短路径。
-
-`status` 是轻量日常总览：读取配置、状态缓存、systemd 状态和 nftables 表，不做大规模探测，也不自动修改系统。状态总览会显示系统健康度 `0-100`，并把 90+ 标为 excellent、75+ 标为 good、50+ 标为 warning，低于 50 标为 critical。
-
-`lq --brief`、`lq --compact`、`lq status --brief` 或 `LEIKWAN_BRIEF=1 lq status` 会输出更短的英文状态块。`doctor` 是详细诊断，适合部署后或故障时运行；`LEIKWAN_BRIEF=1 lq --doctor` 只显示 WARN / FAIL 和摘要。JSON 输出不受简洁模式影响。
-
-`lq doctor --auto-fix` / `lq --doctor-auto-fix` 可自动修复常见、安全边界明确的问题，包括 nftables / MSS clamp 缺失、route table 元数据不一致、relay service 丢失、DDNS timer 未启用、`lq` / `LQ` 快捷命令错误、权限错误和 stale lock。它不会删除 entries / forwards / PBR，也不会重置 EasyTier secret。
-
-`status --json` / `--status-json` 和 `doctor --json` / `--doctor-json` 输出轻量 JSON 摘要，适合脚本读取，不包含 EasyTier secret，并包含 `health_score` 与 `health_level`。
-
-配置快照位于 `/etc/leikwan-toolkit/snapshots/`，自动快照位于 `/etc/leikwan-toolkit/snapshots/auto/`。删除入口、删除转发目标、重新应用转发规则、恢复快照、配置导入等高危操作前会自动快照。
-
-配置导出分为 full 和 redacted。full 包可迁移和恢复运行；redacted 包用于排错和 issue，不含可恢复 EasyTier 网络的 secret。导入前会 inspect、校验 sha256、校验 manifest、检查 tar 安全边界并自动快照。
-
-端点输出位于 `/etc/leikwan-toolkit/outputs/`，用于分享 TCP/UDP 入口，不是代理链接，不包含 EasyTier secret 或配对码。
-
-卸载分普通卸载和深度卸载。普通卸载只移除服务、规则和快捷命令，保留 `/etc/leikwan-toolkit`、快照、配置包和备份；深度卸载会删除配置、状态和运行日志，并先生成 final snapshot。
-
-自更新在菜单中执行成功后会自动重新载入新版本菜单。若旧菜单进程仍在运行，`lq update check/status` 会同时显示“当前运行版本”和“当前安装版本”，并提示重新进入菜单。
-
-## 安全说明
-
-- 配对码、完整快照、full config 包都可能包含 EasyTier network secret。
-- redacted config 包和 debug report 会脱敏，但发送前仍建议人工快速检查。
-- config import 会拒绝路径穿越、绝对路径以及 symlink / hardlink 包成员。
-- 自更新只使用 GitHub Release 包，并校验 `.sha256`。
-- `lq output *` 只输出端点信息，不输出 secret、token 或 password。
-- 高危写操作使用 `/run/leikwan-*.lock` 锁；stale lock 会在下次获取锁时自动清理。
 
 ## 故障排查
 
+日常先看：
+
 ```bash
 lq status
+```
+
+需要详细检查：
+
+```bash
 lq --doctor
+```
+
+常见修复：
+
+```bash
+lq doctor --auto-fix
+lq forward apply-relay --auto-fix-route
 lq port check
-lq ddns status
+lq logs
+```
+
+## 升级与卸载
+
+自更新：
+
+```bash
+lq update check
+lq update run
 lq update status
 ```
 
-如果 TCP/UDP DNAT 缺失，可在维护窗口执行：
+卸载在菜单中：
 
-```bash
-nohup lq forward apply-relay --auto-fix-route >/root/lq-apply-relay.log 2>&1 &
-tail -f /root/lq-apply-relay.log
+```text
+高级维护 -> 卸载
 ```
 
-如果公网入口 DDNS 变化，默认只记录 `relay restart needed`，不会自动重启 relay。可在维护窗口执行 `lq ddns apply-entries`，或通过菜单确认重启。
+普通卸载保留配置、快照和备份；深度卸载会删除配置和状态，执行前会生成 final snapshot 并二次确认。
 
 ## 文档索引
 
-- [工作流](docs/workflow.md)
-- [初始化向导](docs/init-wizard.md)
-- [运维命令中心](docs/operations-center.md)
+- [最终版使用手册](docs/final-guide.md)
+- [CLI 参考](docs/cli.md)
+- [推荐工作流](docs/workflow.md)
 - [DDNS 自动刷新](docs/ddns-refresh.md)
-- [A 端公网入口 DDNS](docs/entry-ddns.md)
+- [A 端 DDNS](docs/entry-ddns.md)
 - [PBR](docs/pbr.md)
 - [配置迁移](docs/config-migration.md)
 - [端点输出](docs/endpoint-output.md)
-- [卸载](docs/uninstall.md)
-- [日志](docs/logs.md)
-- [自更新](docs/self-update.md)
 - [状态输出](docs/status.md)
 - [doctor 诊断](docs/doctor.md)
-- [状态 / 快照 / 端口预检](docs/status-snapshot-port-check.md)
 - [安全边界](docs/security.md)
-- [测试与验收](docs/testing.md)
 - [故障排查](docs/troubleshooting.md)
+- [测试与验收](docs/testing.md)
 - [验收清单](docs/acceptance-test.md)
+- [Release Notes](docs/release-notes.md)
 
 ## Release
 
 Release 包名：
 
 ```text
-leikwan-toolkit-1.3.5.tar.gz
-leikwan-toolkit-1.3.5.tar.gz.sha256
+leikwan-toolkit-1.4.0.tar.gz
+leikwan-toolkit-1.4.0.tar.gz.sha256
 ```

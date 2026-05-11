@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.3.5"
+TOOL_VERSION="1.4.0"
+RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -689,7 +690,7 @@ confirm_summary() {
 
 print_banner() {
   cat <<EOF
-Leikwan Toolkit ${TOOL_VERSION}
+Leikwan Toolkit $(tool_version_label)
 ${PROJECT_TITLE}
 GitHub: ${PROJECT_GITHUB}
 -------------------------------------------------
@@ -698,7 +699,7 @@ EOF
 
 print_help() {
   cat <<EOF
-${PROJECT_NAME} ${TOOL_VERSION}
+${PROJECT_NAME} $(tool_version_label)
 
 用法：
   sudo bash leikwan-toolkit.sh
@@ -707,6 +708,7 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh quickstart
   sudo bash leikwan-toolkit.sh plan
   sudo bash leikwan-toolkit.sh status
+  sudo bash leikwan-toolkit.sh status --verbose
   sudo bash leikwan-toolkit.sh status --brief
   sudo bash leikwan-toolkit.sh --brief
   sudo bash leikwan-toolkit.sh status --json
@@ -967,6 +969,14 @@ status_result_display() {
     fail) printf 'FAIL' ;;
     *) printf '%s' "${1:-unknown}" ;;
   esac
+}
+
+tool_version_label() {
+  if [[ -n "${RELEASE_CHANNEL:-}" ]]; then
+    printf '%s %s' "$TOOL_VERSION" "$RELEASE_CHANNEL"
+  else
+    printf '%s' "$TOOL_VERSION"
+  fi
 }
 
 pid_is_alive() {
@@ -6256,17 +6266,12 @@ ddns_menu() {
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_refresh_once --scope all ;;
-      2) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_refresh_once --scope forwards ;;
-      3) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_refresh_once --scope entries ;;
-      4) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_refresh_once --scope pbr ;;
-      5) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_apply_entries ;;
-      6) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_toggle_menu ;;
-      7) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_status_logs_menu ;;
-      8) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_setup ;;
-      9) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_run ;;
-      10) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_toggle_menu ;;
-      11) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_status_logs_menu ;;
-      12) run_menu_action_pause ddns_overview ;;
+      2) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_apply_entries ;;
+      3) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_status ;;
+      4) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_setup ;;
+      5) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_run ;;
+      6) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_status ;;
+      7) run_menu_action_pause ddns_check_consistency ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -6275,23 +6280,18 @@ ddns_menu() {
 }
 
 print_ddns_menu_options() {
-  print_menu_header "DDNS 自动刷新"
-  echo "B 端监控：检测域名解析变化并应用转发/PBR/relay"
-  echo "1. B：检测全部域名变化"
-  echo "2. B：检测后端转发目标"
-  echo "3. B：检测公网入口域名"
-  echo "4. B：检测域名 PBR"
-  echo "5. B：应用公网入口 DDNS 变化"
-  echo "6. B：启用 / 禁用自动监控"
-  echo "7. B：查看监控状态 / 日志"
+  print_menu_header "DDNS"
+  echo "B 端监控："
+  echo "1. 检测全部域名变化"
+  echo "2. 应用公网入口 DDNS 变化"
+  echo "3. 查看 B 端 DDNS 状态"
   echo
-  echo "A 端更新：把本机公网 IP 更新到入口域名"
-  echo "8. A：配置本机公网入口 DDNS"
-  echo "9. A：立即更新本机 DDNS"
-  echo "10. A：启用 / 禁用本机 DDNS"
-  echo "11. A：查看本机 DDNS 状态 / 日志"
+  echo "A 端更新："
+  echo "4. 配置 A 端 DDNS"
+  echo "5. 立即更新 A 端 DDNS"
+  echo "6. 查看 A 端 DDNS 状态"
   echo
-  echo "12. DDNS 总览"
+  echo "7. DDNS 一致性检查"
   echo "0. 返回"
 }
 
@@ -8840,7 +8840,7 @@ doctor_reset_state() {
 }
 
 doctor_print_summary() {
-  local role="$1" easytier entries forwards pbr nft mss ddns overall suggestions=()
+  local role="$1" easytier entries forwards pbr nft mss ddns overall health nft_for_health forwards_enabled suggestions=()
   role="${role:-$(detect_role)}"
   easytier="$(doctor_component_summary "$role" easytier)"
   entries="$(doctor_component_summary "$role" entries)"
@@ -8857,7 +8857,24 @@ doctor_print_summary() {
     overall="OK"
   fi
   [[ "$nft" != "OK" || "$mss" != "OK" ]] && suggestions+=("执行 lq forward apply-relay --auto-fix-route")
+  [[ "$overall" != "OK" ]] && suggestions+=("执行 lq doctor --auto-fix")
   [[ "$ddns" != "OK" ]] && suggestions+=("执行 lq ddns run --scope all")
+  if [[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)" == "true" ]]; then
+    suggestions+=("执行 lq ddns apply-entries")
+  fi
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  case "$role" in
+    leikwan-relay)
+      nft_for_health="$(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled" 2>/dev/null || printf 'WARN')"
+      ;;
+    cloud-entry)
+      nft_for_health="$(status_nft_summary cloud-entry "$(entry_expose_relay_ip)" "$(entry_expose_start)" "$(entry_expose_end)" 0 2>/dev/null || printf 'WARN')"
+      ;;
+    *)
+      nft_for_health="$(status_nft_summary unknown 2>/dev/null || printf 'WARN')"
+      ;;
+  esac
+  health="$(health_score_value "$role" "$nft_for_health" "$(status_mss_summary)" "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)")"
   echo
   echo "诊断结果摘要"
   echo "----------------------------------------"
@@ -8869,12 +8886,13 @@ doctor_print_summary() {
   echo "nftables: ${nft}"
   echo "MSS clamp: ${mss}"
   echo "DDNS: ${ddns}"
+  echo "健康度: ${health}/100 $(health_level "$health")"
   echo "整体状态: ${overall}"
   DOCTOR_SUMMARY_OVERALL="$overall"
   DOCTOR_SUMMARY_WARNINGS="$REPORT_WARN_COUNT"
   DOCTOR_SUMMARY_FAILURES="$REPORT_FAIL_COUNT"
   if (( ${#suggestions[@]} > 0 )); then
-    echo "建议:"
+    echo "建议修复:"
     printf -- '- %s\n' "${suggestions[@]}"
   fi
 }
@@ -9616,6 +9634,64 @@ status_health_line() {
   echo "系统健康度: ${health}/100 ($(health_level "$health"))"
 }
 
+status_lts() {
+  local role_info role _role_source role_mixed role_text entries_enabled forwards_enabled pbr_count
+  local nft_status mss_status ddns_result health overall
+  STATUS_OVERVIEW_RESULT="ok"
+  if [[ ! -d "$STATE_DIR" ]]; then
+    echo "Leikwan 状态"
+    echo "----------------------------------------"
+    echo "版本: $(tool_version_label)"
+    echo "角色: unknown"
+    echo "健康度: 50/100 warning"
+    echo "整体状态: WARN"
+    echo "[INFO] 未检测到 Leikwan 配置目录。"
+    echo "[INFO] 当前机器可能尚未初始化，建议执行：lq init"
+    return 0
+  fi
+  role_info="$(role_summary)"
+  IFS=$'\t' read -r role _role_source role_mixed <<<"$role_info"
+  entries_enabled="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  case "$role" in
+    leikwan-relay)
+      role_text="relay"
+      nft_status="$(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")"
+      ;;
+    cloud-entry)
+      role_text="entry"
+      nft_status="$(status_nft_summary cloud-entry "$(entry_expose_relay_ip)" "$(entry_expose_start)" "$(entry_expose_end)" 0)"
+      ;;
+    *)
+      role_text="unknown"
+      nft_status="$(status_nft_summary unknown)"
+      status_mark_result warn
+      ;;
+  esac
+  [[ "$role_mixed" == "true" ]] && status_mark_result warn
+  mss_status="$(status_mss_summary)"
+  ddns_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  [[ -n "$ddns_result" ]] || ddns_result="ok"
+  case "${ddns_result,,}" in
+    fail|failed|warn|warning) status_mark_result warn ;;
+  esac
+  health="$(health_score_value "$role" "$nft_status" "$mss_status" "$ddns_result")"
+  overall="$STATUS_OVERVIEW_RESULT"
+  echo "Leikwan 状态"
+  echo "----------------------------------------"
+  echo "版本: $(tool_version_label)"
+  echo "角色: ${role_text}"
+  echo "健康度: ${health}/100 $(health_level "$health")"
+  echo "公网入口: ${entries_enabled} enabled"
+  echo "转发目标: ${forwards_enabled} enabled"
+  echo "DDNS: $(status_result_display "$ddns_result")"
+  echo "nftables: $([[ "$nft_status" == OK* ]] && printf 'OK' || printf 'WARN')"
+  echo "PBR: $([[ "$pbr_count" =~ ^[0-9]+$ ]] && printf 'OK' || printf 'WARN')"
+  echo "整体状态: $(status_result_display "$overall")"
+  write_status_cache status "$overall"
+}
+
 status_brief() {
   local role_info role role_text entries_enabled forwards_enabled pbr_count service_state nft_status mss_status ddns_result overall health
   STATUS_OVERVIEW_RESULT="ok"
@@ -9667,7 +9743,7 @@ status_overview() {
   IFS=$'\t' read -r role role_source role_mixed <<<"$role_info"
   echo "Leikwan 状态总览"
   echo "----------------------------------------"
-  echo "脚本版本: ${TOOL_VERSION}"
+  echo "脚本版本: $(tool_version_label)"
   if [[ ! -d "$STATE_DIR" ]]; then
     echo "[INFO] 未检测到 Leikwan 配置目录。"
     echo "[INFO] 当前机器可能尚未初始化，建议执行：lq init"
@@ -10960,32 +11036,32 @@ install_shortcut_if_needed() {
 
 print_quick_networking_steps() {
   cat <<'EOF'
-完整分步说明
+快速组网详细说明
 ----------------------------------------
 步骤 0：利群主机先修复 DNS / IPv4 优先
 在 B 利群主机执行：
-主菜单 -> 快速组网（分步提示） -> 1
+主菜单 -> 快速组网 -> 1
 
 步骤 1：利群主机生成网络码
 在 B 利群主机执行：
-主菜单 -> 快速组网（分步提示） -> 2
+主菜单 -> 快速组网 -> 2
 脚本会读取 entries.tsv，自动推荐下一个不冲突的公网入口名称、EasyTier IP 和 8000-9000 内监听端口。
 复制输出的 NETWORK 网络码。
 
 步骤 2：公网入口加入网络
 在 A 公网入口机执行：
-主菜单 -> 快速组网（分步提示） -> 3
+主菜单 -> 快速组网 -> 3
 粘贴 B 生成的 NETWORK 网络码。
 完成后复制 A 输出的 ENTRY 入口码。
 
 步骤 3：利群主机完成接入
 在 B 利群主机执行：
-主菜单 -> 快速组网（分步提示） -> 4
+主菜单 -> 快速组网 -> 4
 粘贴 A 生成的 ENTRY 入口码。
 
 步骤 4：公网入口配置端口池
 在 A 公网入口机执行：
-主菜单 -> 快速组网（分步提示） -> 5
+主菜单 -> 公网入口 A -> 2
 小白常用范围可以先填：
 10001-10020 -> 10.198.1.1
 
@@ -10994,12 +11070,12 @@ print_quick_networking_steps() {
 
 步骤 5：如需指定 CN2 / 9929 出口，利群主机先配置 PBR
 在 B 利群主机执行：
-主菜单 -> 快速组网（分步提示） -> 7
+主菜单 -> 利群主机 B -> 3
 如果不需要 PBR，本步骤可以跳过。
 
 步骤 6：利群主机添加后端转发目标
 在 B 利群主机执行：
-主菜单 -> 快速组网（分步提示） -> 6
+主菜单 -> 快速组网 -> 5
 例如：
 10001 -> 后端IP:后端端口
 
@@ -11008,7 +11084,7 @@ lq forward apply-relay --auto-fix-route
 
 步骤 7：A/B 两边执行一键诊断
 A 和 B 都执行：
-主菜单 -> 一键诊断
+主菜单 -> 状态 / 诊断 -> 3
 
 步骤 8：外部机器测试公网入口端口
 nc -vz -w 5 A_PUBLIC_IP 10001
@@ -11016,7 +11092,7 @@ nc -vz -w 5 A_PUBLIC_IP 10001
 新增第二台公网入口：
 - B 执行第 2 项，脚本会自动推荐新的 EasyTier IP 和监听端口。
 - 新 A 执行第 3 项，粘贴网络码。
-- 新 A 执行第 5 项，配置端口池。
+- 新 A 执行“公网入口 A -> 配置入口端口池”。
 - B 执行第 4 项，粘贴 A 返回码。
 - B 执行 利群主机 -> 公网入口列表管理 查看 / 测试。
 
@@ -11030,40 +11106,29 @@ EOF
 }
 
 quick_networking_menu() {
-  local choice intro_shown=0
+  local choice
   while true; do
     clear_screen_if_interactive
-    if (( intro_shown == 0 )); then
-      print_compact_header "快速组网"
-      echo "B：利群主机，负责中转和后端转发"
-      echo "A：公网入口，可部署多台，用于接入公网流量"
-      echo "C：后端目标，支持 TCP/UDP 转发"
-      echo "----------------------------------------"
-      intro_shown=1
-    else
-      print_compact_header "快速组网"
-    fi
-    echo "1. B：修复 DNS / IPv4"
-    echo "2. B：生成公网入口网络码"
-    echo "3. A：粘贴网络码部署入口"
-    echo "4. B：粘贴入口返回码完成接入"
-    echo "5. A：配置入口端口池"
-    echo "6. B：添加后端转发目标"
-    echo "7. B：IPv4 PBR"
-    echo "8. 查看完整说明"
-    echo "0. 返回"
+    print_compact_header "快速组网"
+    echo "B：利群主机，负责中转和转发"
+    echo "A：公网入口，负责接入公网流量"
+    echo "C：后端目标，最终访问的服务"
     echo
-    echo "提示：后端需要指定出口时，先配置 PBR，再添加或重应用转发目标。"
+    echo "1. B：初始化利群主机"
+    echo "2. B：生成公网入口接入码"
+    echo "3. A：粘贴接入码并部署入口"
+    echo "4. B：粘贴入口返回码完成接入"
+    echo "5. B：添加后端转发目标"
+    echo "6. B：生成转发端点输出"
+    echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) run_menu_action fix_dns_ipv4_first || warn_and_pause "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
+      1) init_relay_wizard ;;
       2) run_menu_action quick_generate_network_pairing || warn_and_pause "生成 EasyTier 网络码未完成，请查看上方提示后重试。" ;;
       3) run_menu_action quick_deploy_entry_from_network_pairing || warn_and_pause "公网入口部署未完成，请查看上方提示后重试。" ;;
       4) run_menu_action quick_deploy_relay_from_entry_pairing || warn_and_pause "利群主机接入未完成，请查看上方提示后重试。" ;;
-      5) run_menu_action entry_expose_range || warn_and_pause "公网入口端口池配置未完成，请查看上方提示后重试。" ;;
-      6) run_menu_action add_forward || warn_and_pause "后端转发目标添加未完成，请查看上方提示后重试。" ;;
-      7) pbr_menu ;;
-      8) echo; print_quick_networking_steps; wait_enter_to_return ;;
+      5) run_menu_action add_forward || warn_and_pause "后端转发目标添加未完成，请查看上方提示后重试。" ;;
+      6) run_menu_action_pause generate_forward_outputs ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -11303,28 +11368,102 @@ operations_center_menu() {
   done
 }
 
+endpoint_output_menu() {
+  local choice
+  while true; do
+    print_menu_header "端点输出"
+    echo "1. 生成端点输出"
+    echo "2. 查看文本输出"
+    echo "3. 查看 JSON 输出"
+    echo "4. 查看 HTML 路径"
+    echo "5. 生成 QR（可选）"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause generate_forward_outputs ;;
+      2) run_menu_action_pause output_show ;;
+      3) run_menu_action_pause output_json ;;
+      4) run_menu_action_pause output_html ;;
+      5) run_menu_action_pause output_qr ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
+entry_ddns_menu() {
+  local choice
+  while true; do
+    print_menu_header "A 端 DDNS"
+    echo "1. 配置 A 端 DDNS"
+    echo "2. 立即更新 A 端 DDNS"
+    echo "3. 启用 / 禁用 A 端 DDNS"
+    echo "4. 查看 A 端 DDNS 状态"
+    echo "5. 查看 A 端 DDNS 日志"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause entry_ddns_setup ;;
+      2) run_menu_action_pause entry_ddns_run ;;
+      3) entry_ddns_toggle_menu ;;
+      4) run_menu_action_pause entry_ddns_status ;;
+      5) run_menu_action_pause entry_ddns_logs ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
+print_status_diagnostics_menu_options() {
+    print_menu_header "状态 / 诊断"
+    echo "1. 状态总览"
+    echo "2. 简洁状态"
+    echo "3. 一键诊断"
+    echo "4. 自动修复常见问题"
+    echo "5. 端口冲突检查"
+    echo "6. 查看日志"
+    echo "0. 返回"
+}
+
+status_diagnostics_menu() {
+  local choice
+  while true; do
+    print_status_diagnostics_menu_options
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause status_lts ;;
+      2) run_menu_action_pause status_brief ;;
+      3) run_menu_action run_doctor_interactive ;;
+      4) run_menu_action_pause doctor_auto_fix ;;
+      5) run_menu_action_pause port_check ;;
+      6) logs_menu ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
 relay_host_menu() {
   local choice
   ensure_role_or_warn leikwan-relay || return 0
   while true; do
-    print_menu_header "利群主机"
-    echo "1. EasyTier 组网管理"
-    echo "2. 公网入口列表管理"
-    echo "3. 转发目标管理"
-    echo "4. IPv4 多出口策略路由"
-    echo "5. IPv6 入站安全收口"
-    echo "6. 查看状态总览"
-    echo "7. 一键诊断"
+    print_menu_header "利群主机 B"
+    echo "1. 公网入口管理"
+    echo "2. 转发目标管理"
+    echo "3. IPv4 PBR 出口策略"
+    echo "4. 重新应用转发规则"
+    echo "5. 查看 B 端状态"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) easytier_menu ;;
-      2) entries_menu ;;
-      3) forwards_menu ;;
-      4) pbr_menu ;;
-      5) run_menu_action_pause ipv6_lockdown ;;
-      6) run_menu_action_pause status_overview ;;
-      7) run_menu_action run_doctor_interactive ;;
+      1) entries_menu ;;
+      2) forwards_menu ;;
+      3) pbr_menu ;;
+      4) apply_relay_rules_menu ;;
+      5) run_menu_action_pause status_lts ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -11336,26 +11475,18 @@ entry_host_menu() {
   local choice
   ensure_role_or_warn cloud-entry || return 0
   while true; do
-    print_menu_header "公网入口（A 本机）"
-    echo "1. 粘贴利群网络码，部署本机入口"
-    echo "2. 配置本机入口端口池"
-    echo "3. 查看状态总览"
-    echo "4. 一键诊断"
+    print_menu_header "公网入口 A"
+    echo "1. 粘贴接入码并部署入口"
+    echo "2. 配置入口端口池"
+    echo "3. 查看 A 端状态"
+    echo "4. A 端 DDNS"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action quick_deploy_entry_from_network_pairing ;;
       2) run_menu_action_pause entry_expose_range ;;
-      3) run_menu_action_pause status_overview ;;
-      4)
-        if [[ "$(detect_role)" == "leikwan-relay" ]]; then
-          warn "当前机器检测为利群主机，不是公网入口机。"
-          warn "如需管理已接入的公网入口列表，请进入：利群主机 -> 公网入口列表管理"
-        else
-          run_doctor_interactive
-        fi
-        wait_enter_to_return
-        ;;
+      3) run_menu_action_pause status_lts ;;
+      4) entry_ddns_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -11363,39 +11494,31 @@ entry_host_menu() {
   done
 }
 
+print_advanced_menu_options() {
+    print_menu_header "高级维护"
+    echo "1. EasyTier 服务管理"
+    echo "2. 配置备份 / 快照 / 回滚"
+    echo "3. 配置导入 / 导出"
+    echo "4. 自更新"
+    echo "5. 端点输出"
+    echo "6. 调试报告"
+    echo "7. 卸载"
+    echo "0. 返回"
+}
+
 advanced_menu() {
   local choice
   while true; do
-    print_menu_header "高级功能"
-    echo "1. nftables 规则管理"
-    echo "2. 链路测试"
-    echo "3. DNS / IPv4 优先修复"
-    echo "4. BBR / 系统优化"
-    echo "5. 状态总览"
-    echo "6. 一键诊断"
-    echo "7. 配置快照 / 回滚"
-    echo "8. 配置导入 / 导出"
-    echo "9. 端口冲突预检"
-    echo "10. 生成脱敏故障报告"
-    echo "11. 检查并更新脚本"
-    echo "12. 日志查看 / 清理"
-    echo "13. legacy 清理"
-    echo "0. 返回"
+    print_advanced_menu_options
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) nftables_menu ;;
-      2) link_test_menu ;;
-      3) run_menu_action fix_dns_ipv4_first || warn_and_pause "DNS / IPv4 优先修复未完成，请查看上方提示后重试。" ;;
-      4) bbr_menu ;;
-      5) run_menu_action_pause status_overview ;;
-      6) run_menu_action run_doctor_interactive ;;
-      7) snapshot_menu ;;
-      8) config_menu ;;
-      9) run_menu_action_pause port_check ;;
-      10) run_menu_action generate_debug_report ;;
-      11) update_menu ;;
-      12) logs_menu ;;
-      13) legacy_cleanup_menu ;;
+      1) easytier_menu ;;
+      2) snapshot_menu ;;
+      3) config_menu ;;
+      4) update_menu ;;
+      5) endpoint_output_menu ;;
+      6) run_menu_action_pause generate_debug_report ;;
+      7) uninstall_new_mode ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -11405,15 +11528,12 @@ advanced_menu() {
 
 print_main_menu_options() {
   print_banner
-    echo "1. 初始化 / 快速组网"
-    echo "2. 利群主机"
-    echo "3. 公网入口"
-    echo "4. DDNS 自动刷新"
-    echo "5. 状态总览"
-    echo "6. 运维命令中心"
-    echo "7. 高级功能"
-    echo "8. 一键诊断"
-    echo "9. 卸载全部"
+    echo "1. 快速组网"
+    echo "2. 利群主机 B"
+    echo "3. 公网入口 A"
+    echo "4. DDNS"
+    echo "5. 状态 / 诊断"
+    echo "6. 高级维护"
     echo "0. 退出"
 }
 
@@ -11428,15 +11548,12 @@ main_menu() {
     choice="$(prompt_menu_choice "请选择：")"
     # shellcheck disable=SC2119
     case "$choice" in
-      1) init_wizard ;;
+      1) quick_networking_menu ;;
       2) relay_host_menu ;;
       3) entry_host_menu ;;
       4) ddns_menu ;;
-      5) run_menu_action_pause status_overview ;;
-      6) operations_center_menu ;;
-      7) advanced_menu ;;
-      8) run_menu_action run_doctor_interactive ;;
-      9) uninstall_new_mode ;;
+      5) status_diagnostics_menu ;;
+      6) advanced_menu ;;
       0) exit 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -11466,11 +11583,13 @@ main() {
     status)
       if [[ "${2:-}" == "--json" ]]; then
         run_cli_action status_json
+      elif [[ "${2:-}" == "--verbose" ]]; then
+        run_cli_action status_overview
       elif [[ "${2:-}" == "--brief" || "${2:-}" == "--compact" || "${LEIKWAN_BRIEF:-0}" == "1" ]]; then
         LEIKWAN_BRIEF=1
         run_cli_action status_brief
       else
-        run_cli_action status_overview
+        run_cli_action status_lts
       fi
       ;;
     doctor)
@@ -11616,13 +11735,13 @@ main() {
       esac
       ;;
     --help|-h) print_help ;;
-    --version|-v) echo "${PROJECT_NAME} ${TOOL_VERSION}" ;;
+    --version|-v) echo "${PROJECT_NAME} $(tool_version_label)" ;;
     --status)
-      if [[ "${LEIKWAN_BRIEF:-0}" == "1" ]]; then
-        run_cli_action status_brief
-      else
-        run_cli_action status_overview
-      fi
+      case "${2:-}" in
+        --verbose) run_cli_action status_overview ;;
+        --brief|--compact) LEIKWAN_BRIEF=1; run_cli_action status_brief ;;
+        *) if [[ "${LEIKWAN_BRIEF:-0}" == "1" ]]; then run_cli_action status_brief; else run_cli_action status_lts; fi ;;
+      esac
       ;;
     --status-json) run_cli_action status_json ;;
     --compact|--brief) LEIKWAN_BRIEF=1; LEIKWAN_COMPACT=1; run_cli_action status_brief ;;

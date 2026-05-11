@@ -30,6 +30,12 @@ bash tests/cli-regression.sh
 section "render regression"
 bash tests/render-regression.sh
 
+section "final menu regression"
+bash tests/final-menu-regression.sh
+
+section "final README regression"
+bash tests/final-readme-regression.sh
+
 section "role detection regression"
 bash tests/role-detection-regression.sh
 

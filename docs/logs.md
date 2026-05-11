@@ -1,6 +1,6 @@
 # 日志查看 / 清理
 
-Leikwan Toolkit 1.3.5 新增 `lq logs` 命令中心，用于查看运行日志和最近状态文件。
+Leikwan Toolkit 1.4.0 新增 `lq logs` 命令中心，用于查看运行日志和最近状态文件。
 
 ## CLI
 

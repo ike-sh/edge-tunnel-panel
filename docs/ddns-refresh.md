@@ -1,6 +1,6 @@
 ﻿# DDNS 后端 / PBR / 公网入口自动刷新
 
-Leikwan Toolkit 1.3.5 把 DDNS 明确拆成双端职责：
+Leikwan Toolkit 1.4.0 把 DDNS 明确拆成双端职责：
 
 - A 公网入口机器：负责把自己的当前公网 IP 更新到 DNS 服务商。
 - B 利群主机：负责解析 `entries.tsv public_host`、`forwards.tsv target_host`、PBR 域名规则，并在 IP 变化后同步 nftables / PBR / relay。
@@ -41,11 +41,10 @@ lq --ddns-run
 交互菜单路径：
 
 ```text
-主菜单 -> DDNS 自动刷新
-运维命令中心 -> DDNS 自动刷新
+主菜单 -> DDNS
 ```
 
-旧的“转发目标管理”中仍保留兼容入口，但会提示 DDNS 已提升为主菜单一等功能。
+旧的“转发目标管理”中仍保留兼容提示，但普通用户从主菜单 DDNS 进入即可。
 
 ## 配置文件
 
@@ -241,7 +240,7 @@ lq ddns check-consistency
 - B 端 enabled `entries.tsv public_host` 的当前解析和 `resolved-entries.tsv` 缓存。
 - 如果本机也配置了 A 端 DDNS，则对比 `ENTRY_DDNS_HOST`、当前公网 IP 和域名解析 IP。
 
-1.3.5 起，`lq ddns run`、菜单刷新和日志中的末尾摘要改为面向运维人员阅读的分区格式：
+1.4.0 起，`lq ddns run`、菜单刷新和日志中的末尾摘要改为面向运维人员阅读的分区格式：
 
 ```text
 DDNS 检测摘要
@@ -282,4 +281,4 @@ DDNS 全流程使用：
 
 如果已有 Leikwan 任务运行，timer 会跳过本次刷新，不视为失败。
 
-1.3.5 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。
+1.4.0 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。

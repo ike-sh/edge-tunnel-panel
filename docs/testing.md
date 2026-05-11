@@ -1,6 +1,6 @@
 # 测试与 release 验证
 
-Leikwan Toolkit 1.3.5 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
+Leikwan Toolkit 1.4.0 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
 
 ## 一键验证
 
@@ -18,6 +18,8 @@ bash scripts/check-redaction.sh
 bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
+bash tests/final-menu-regression.sh
+bash tests/final-readme-regression.sh
 bash tests/role-detection-regression.sh
 bash tests/doctor-reset-regression.sh
 bash tests/compact-output-regression.sh
@@ -47,6 +49,8 @@ bash scripts/package-release.sh
 bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
+bash tests/final-menu-regression.sh
+bash tests/final-readme-regression.sh
 bash tests/role-detection-regression.sh
 bash tests/doctor-reset-regression.sh
 bash tests/compact-output-regression.sh
@@ -65,7 +69,9 @@ bash tests/redaction-regression.sh
 
 - `smoke.sh`：基础语法、版本、帮助和关键 CLI 参数识别。
 - `cli-regression.sh`：只读 CLI 在空状态目录下不触发全局 trap。
-- `render-regression.sh`：模拟 TSV，检查表格、紧凑渲染、初始化向导菜单和运维命令中心菜单。
+- `render-regression.sh`：模拟 TSV，检查表格、紧凑渲染和核心菜单渲染。
+- `final-menu-regression.sh`：检查 1.4.0 LTS 主菜单只暴露 6 个核心入口，DDNS 和高级维护菜单保持收敛。
+- `final-readme-regression.sh`：检查 README 标明 LTS、功能冻结、A/B 角色和常用命令。
 - `role-detection-regression.sh`：检查 relay 不因 entries.tsv 被误判为 entry，真实混合部署才 WARN。
 - `doctor-reset-regression.sh`：检查 doctor 每次运行都重置 WARN / FAIL 聚合，不继承历史 last-doctor。
 - `compact-output-regression.sh`：检查 `--brief` / `LEIKWAN_BRIEF=1` 输出专业简洁，JSON 不受影响。
