@@ -168,6 +168,20 @@ lq update status
 
 普通卸载保留配置、快照和备份；深度卸载会删除配置和状态，执行前会生成 final snapshot 并二次确认。
 
+## Leikwan Panel 2.0-alpha
+
+`1.4.x` 是 Shell LTS / Leikwan Core，后续只做 bugfix、兼容性、安全和文档维护。
+
+`2.0-alpha` 开始提供只读 Web Panel：
+
+- Controller / Agent 架构
+- Agent 只采集本机状态并上报
+- Controller 只保存和展示节点、入口、转发、事件
+- 不会修改现有转发配置
+- 不会远程执行任意命令
+
+详细说明见 [Panel 2.0-alpha 文档](panel/docs/panel-2.0-alpha.md)。
+
 ## 文档索引
 
 - [最终版使用手册](docs/final-guide.md)
