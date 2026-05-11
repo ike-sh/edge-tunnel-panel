@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.3.0 正式版验收。
+本页用于 Leikwan Toolkit 1.3.1 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.3.0"
-leikwan-toolkit 1.3.0
+TOOL_VERSION="1.3.1"
+leikwan-toolkit 1.3.1
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.3.0.tar.gz
-dist/leikwan-toolkit-1.3.0.tar.gz.sha256
+dist/leikwan-toolkit-1.3.1.tar.gz
+dist/leikwan-toolkit-1.3.1.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -45,6 +45,8 @@ bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
 bash tests/package-regression.sh
+bash tests/uninstall-regression.sh
+bash tests/lock-regression.sh
 bash tests/redaction-regression.sh
 bash scripts/verify-release.sh
 ```
@@ -71,6 +73,34 @@ lq plan
 - 不触发全局 trap。
 
 交互执行 `lq` 后，主菜单应包含“初始化 / 快速组网”和“运维命令中心”。初始化向导可以选择 B 利群主机、A 公网入口、从配置包恢复或仅检查状态。
+
+## 状态 JSON / 日志 / 卸载 / 锁
+
+```bash
+lq status --json
+lq --status-json
+lq doctor --json
+lq --doctor-json
+lq logs
+lq logs ddns
+lq logs apply
+```
+
+期望：
+
+- JSON 合法，不清屏、不等待回车、不包含 secret。
+- 无日志时友好提示。
+- doctor 文本输出末尾包含“诊断结果摘要”。
+
+卸载菜单应显示：
+
+```text
+1. 普通卸载：移除服务和规则，保留配置 / 快照 / 备份
+2. 深度卸载：移除服务、规则、配置、日志、状态
+0. 返回
+```
+
+模拟 lock 占用时，高危任务应提示已有任务运行；stale lock 应可清理。
 
 ## 快速组网
 

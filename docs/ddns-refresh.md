@@ -1,6 +1,6 @@
 ﻿# DDNS 后端 / PBR / 公网入口自动刷新
 
-Leikwan Toolkit 1.3.0 的 DDNS 刷新覆盖三类对象：
+Leikwan Toolkit 1.3.1 的 DDNS 刷新覆盖三类对象：
 
 - 转发目标：`forwards.tsv` 的 `target_host`
 - 公网入口：`entries.tsv` 的 `public_host`
@@ -213,3 +213,5 @@ DDNS 全流程使用：
 ```
 
 如果已有 Leikwan 任务运行，timer 会跳过本次刷新，不视为失败。
+
+1.3.1 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。

@@ -1,6 +1,6 @@
 # 运维命令中心
 
-Leikwan Toolkit 1.3.0 新增“运维命令中心”，用于把日常维护入口集中到一个菜单，减少在多个子菜单之间来回查找。
+Leikwan Toolkit 1.3.1 继续增强“运维命令中心”，用于把日常维护入口集中到一个菜单，减少在多个子菜单之间来回查找。
 
 ## 入口
 
@@ -22,6 +22,7 @@ Leikwan Toolkit 1.3.0 新增“运维命令中心”，用于把日常维护入�
 7. 配置导出 / 导入
 8. DDNS 自动刷新
 9. 自更新
+10. 日志查看 / 清理
 0. 返回
 ```
 
@@ -37,6 +38,7 @@ Leikwan Toolkit 1.3.0 新增“运维命令中心”，用于把日常维护入�
 - `lq ddns status/run/enable/disable/logs`
 - `lq update check/run/status/rollback`
 - `lq forward apply-relay --auto-fix-route`
+- `lq logs [ddns|apply|update|doctor|clean]`
 
 只读动作不会修改系统。高危动作继续沿用原有确认、自动快照、锁和后台执行策略。
 
@@ -46,4 +48,3 @@ Leikwan Toolkit 1.3.0 新增“运维命令中心”，用于把日常维护入�
 - 变更后确认：重新应用转发规则后执行端口预检和状态总览。
 - 迁移前后：从运维中心进入配置导出 / 导入，再执行状态总览。
 - DDNS 排查：查看 timer 状态、刷新日志和最近运行结果。
-

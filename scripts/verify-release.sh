@@ -33,6 +33,12 @@ bash tests/render-regression.sh
 section "package regression"
 bash tests/package-regression.sh
 
+section "uninstall regression"
+bash tests/uninstall-regression.sh
+
+section "lock regression"
+bash tests/lock-regression.sh
+
 section "redaction regression"
 bash tests/redaction-regression.sh
 

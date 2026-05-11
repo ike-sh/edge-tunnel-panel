@@ -43,6 +43,23 @@ for value in "$secret_value" "$base64_value" "$token_value" "$password_value"; d
 done
 grep -R "REDACTED" "$fixture" >/dev/null
 
+mkdir -p "$EASYTIER_DIR"
+cat >"$NETWORK_ENV" <<EOF
+ROLE=leikwan-relay
+EASYTIER_NETWORK_NAME=test-net
+EASYTIER_NETWORK_SECRET=${secret_value}
+EOF
+status_json="$(bash leikwan-toolkit.sh status --json 2>&1)"
+doctor_json="$(bash leikwan-toolkit.sh doctor --json 2>&1)"
+if grep -q "$secret_value" <<<"${status_json}${doctor_json}"; then
+  echo "FAIL: JSON status/doctor leaked EasyTier secret" >&2
+  exit 1
+fi
+if grep -Eq 'EASYTIER_NETWORK_SECRET|PAIRING_CODE_BASE64|LEIKWAN_[A-Z0-9_]*_BASE64|password=|token=' <<<"${status_json}${doctor_json}"; then
+  echo "FAIL: JSON status/doctor leaked sensitive marker" >&2
+  exit 1
+fi
+
 mkdir -p "$ENTRIES_DIR" "$FORWARDS_DIR" "$PBR_DIR" "$OUTPUT_DIR"
 cat >"$ENTRIES_TSV" <<'EOF'
 # entry_name	public_host	et_ip	easytier_protocol	easytier_port	weight	enabled

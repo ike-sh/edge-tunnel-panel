@@ -1,6 +1,6 @@
 # 初始化向导
 
-Leikwan Toolkit 1.3.0 新增 `lq init`，适合首次部署、重装恢复和不确定当前机器角色时使用。
+Leikwan Toolkit 1.3.1 新增 `lq init`，适合首次部署、重装恢复和不确定当前机器角色时使用。
 
 ## 入口
 
@@ -13,7 +13,7 @@ lq init --plan
 lq plan
 ```
 
-`wizard` 和 `quickstart` 是 `init` 的别名。`--dry-run` / `--plan` 只输出计划，不写文件、不启动服务、不应用 nftables / PBR。
+`wizard` 和 `quickstart` 是 `init` 的别名。`--dry-run` / `--plan` 只输出计划，不写文件、不创建目录、不启动服务、不应用 nftables / PBR、不创建 snapshot、不下载 EasyTier、不修改快捷命令。
 
 ## 角色选择
 
@@ -41,7 +41,7 @@ B 向导聚合这些步骤：
 7. 可选启用 DDNS 自动刷新
 8. 查看状态总览
 
-如果检测到已有 entries / forwards / pbr 或 network.env，向导会进入维护模式，不会重新初始化 network.env。生成公网入口接入码会复用现有 network name / secret。
+如果检测到已有 entries / forwards / pbr、DDNS 配置或 network.env，向导会进入维护模式，不会重新初始化 network.env。生成公网入口接入码会复用现有 network name / secret。
 
 ## A 公网入口
 
@@ -56,6 +56,8 @@ A 向导聚合这些步骤：
 7. 查看本机公网入口状态
 
 EasyTier IP 必须是 10.x 虚拟 IP。DDNS 域名应填入公网地址 / 域名字段，不能作为 EasyTier IP。
+
+如果检测到已有 A 公网入口配置，向导会进入维护模式，不会默认重复覆盖 entry service、entry env、端口池或 ENTRY 返回码状态。确实需要重做部署时需要再次确认。
 
 ## 配置包恢复
 

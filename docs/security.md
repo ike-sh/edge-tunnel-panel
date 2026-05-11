@@ -1,6 +1,6 @@
 # 安全边界
 
-本页汇总 Leikwan Toolkit 1.3.0 的敏感信息和高危操作边界。
+本页汇总 Leikwan Toolkit 1.3.1 的敏感信息和高危操作边界。
 
 ## 敏感内容
 
@@ -81,8 +81,32 @@ lq update rollback
 
 默认只保留最近 10 个。
 
+深度卸载会额外创建 `/root/final-before-uninstall-YYYYMMDD-HHMMSS.tar.gz`。如果 final snapshot 失败，默认不继续深度卸载。
+
+## 并发锁
+
+高危写操作会使用锁避免并发写配置或规则：
+
+```text
+/run/leikwan-toolkit.lock
+/run/leikwan-ddns-refresh.lock
+/run/leikwan-update.lock
+/run/leikwan-config.lock
+```
+
+如果已有任务运行，脚本会提示稍后再试。systemd timer 模式下 DDNS 遇到锁占用会跳过本次运行，不视为失败。若检测到 PID 已不存在的 stale lock，下次获取锁时会清理并提示。
+
+## JSON 输出
+
+```bash
+lq status --json
+lq doctor --json
+```
+
+JSON 只输出状态摘要、计数和 WARN / FAIL 概要，不包含 EasyTier network secret、配对码 base64、token 或 password。
+
 ## 角色保护
 
-1.3.0 起，脚本会根据 `network.env`、relay / entry systemd service、entries / forwards / PBR 配置和 entry env 做角色检测。B 菜单在 A 机器执行高危操作、A 菜单在 B 机器执行高危操作时会先提示角色不匹配，交互模式默认不继续。
+1.3.1 起，脚本会根据 `network.env`、relay / entry systemd service、entries / forwards / PBR 配置和 entry env 做角色检测。B 菜单在 A 机器执行高危操作、A 菜单在 B 机器执行高危操作时会先提示角色不匹配，交互模式默认不继续。
 
 如果同时检测到 relay 和 entry 痕迹，`lq status` 会提示角色混合。高级部署可以继续操作，但普通部署建议先执行 `lq --doctor` 确认。

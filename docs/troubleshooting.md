@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.3.0 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.3.1 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -23,6 +23,7 @@ lq status
 
 ```bash
 lq status
+lq status --json
 lq --status
 ```
 
@@ -38,7 +39,10 @@ lq --status
 
 ```bash
 lq --doctor
+lq doctor --json
 ```
+
+`doctor` 文本输出末尾会增加“诊断结果摘要”，便于快速看到 EasyTier、公网入口、转发目标、PBR、nftables、MSS clamp、DDNS 和整体状态。
 
 doctor 会检查：
 
@@ -88,6 +92,28 @@ lq --port-check
 ## 终端显示
 
 窄终端会自动切换为紧凑列表，避免中英文混排导致表格错位。可用 `LEIKWAN_COMPACT=1 lq` 强制紧凑显示；调试输出时可用 `LEIKWAN_NO_CLEAR=1 lq` 禁用清屏。
+
+## 日志
+
+```bash
+lq logs
+lq logs ddns
+lq logs apply
+lq logs update
+lq logs doctor
+```
+
+无日志时会友好提示。清理运行日志使用 `lq logs clean`，它不会删除配置、快照或备份。
+
+## 并发锁
+
+如果看到：
+
+```text
+[WARN] 已有 Leikwan 任务运行中，请稍后再试。
+```
+
+说明当前有 DDNS、配置导入、转发应用、自更新或卸载等写操作正在运行。若旧进程异常退出留下 stale lock，下次获取锁时会自动清理并提示。
 
 ## MSS clamp
 

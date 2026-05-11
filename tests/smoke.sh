@@ -52,23 +52,32 @@ run_ok bash leikwan-toolkit.sh --version
 run_ok bash leikwan-toolkit.sh --help
 
 version="$(bash leikwan-toolkit.sh --version)"
-[[ "$version" == "leikwan-toolkit 1.3.0" ]] || { echo "FAIL: version output: ${version}" >&2; exit 1; }
+[[ "$version" == "leikwan-toolkit 1.3.1" ]] || { echo "FAIL: version output: ${version}" >&2; exit 1; }
 
 help_text="$(bash leikwan-toolkit.sh --help)"
 grep -q "init" <<<"$help_text"
 grep -q "config export" <<<"$help_text"
 grep -q "output generate" <<<"$help_text"
 grep -q "port check" <<<"$help_text"
+grep -q "status --json" <<<"$help_text"
+grep -q "logs" <<<"$help_text"
+grep -q "uninstall" <<<"$help_text"
 
 run_ok bash leikwan-toolkit.sh init --dry-run
+[[ ! -e "$LEIKWAN_STATE_DIR" ]] || { echo "FAIL: init --dry-run created state dir" >&2; exit 1; }
+[[ ! -e "$LEIKWAN_BACKUP_DIR" ]] || { echo "FAIL: init --dry-run created backup dir" >&2; exit 1; }
 run_ok bash leikwan-toolkit.sh init --plan
 run_ok bash leikwan-toolkit.sh wizard --dry-run
 run_ok bash leikwan-toolkit.sh quickstart --dry-run
 run_ok bash leikwan-toolkit.sh plan
 run_ok bash leikwan-toolkit.sh status
+run_ok bash leikwan-toolkit.sh status --json
 run_ok bash leikwan-toolkit.sh --status
+run_ok bash leikwan-toolkit.sh --status-json
 run_ok bash leikwan-toolkit.sh port check
 run_ok bash leikwan-toolkit.sh ddns status
+run_ok bash leikwan-toolkit.sh logs
+run_ok bash leikwan-toolkit.sh logs ddns
 run_ok bash leikwan-toolkit.sh update status
 run_ok bash leikwan-toolkit.sh config list
 run_ok bash leikwan-toolkit.sh output show

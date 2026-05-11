@@ -1,6 +1,6 @@
 # 测试与 release 验证
 
-Leikwan Toolkit 1.3.0 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
+Leikwan Toolkit 1.3.1 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
 
 ## 一键验证
 
@@ -19,6 +19,8 @@ bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
 bash tests/package-regression.sh
+bash tests/uninstall-regression.sh
+bash tests/lock-regression.sh
 bash tests/redaction-regression.sh
 bash scripts/package-release.sh
 ```
@@ -36,6 +38,8 @@ bash tests/smoke.sh
 bash tests/cli-regression.sh
 bash tests/render-regression.sh
 bash tests/package-regression.sh
+bash tests/uninstall-regression.sh
+bash tests/lock-regression.sh
 bash tests/redaction-regression.sh
 ```
 
@@ -43,6 +47,8 @@ bash tests/redaction-regression.sh
 - `cli-regression.sh`：只读 CLI 在空状态目录下不触发全局 trap。
 - `render-regression.sh`：模拟 TSV，检查表格、紧凑渲染、初始化向导菜单和运维命令中心菜单。
 - `package-regression.sh`：检查 release 包内容边界。
+- `uninstall-regression.sh`：检查普通 / 深度卸载菜单、dry-run 和卸载后状态友好输出。
+- `lock-regression.sh`：检查 stale lock 清理和锁占用时的友好拒绝。
 - `redaction-regression.sh`：检查脱敏、端点 HTML 转义、恶意 tar 拒绝。
 
 测试脚本会使用临时 `LEIKWAN_STATE_DIR`，不会修改真实 `/etc/leikwan-toolkit`。
@@ -84,3 +90,14 @@ lq plan
 ```
 
 这些命令必须不清屏、不等待回车、不写文件、不触发全局 trap。
+
+真实部署稳定化回归：
+
+```bash
+lq status --json
+lq doctor --json
+lq logs
+lq --dry-run uninstall normal --yes
+```
+
+JSON 输出必须合法且不包含 secret；卸载 dry-run 不应删除真实文件。

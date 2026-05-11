@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.3.0"
+TOOL_VERSION="1.3.1"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
@@ -678,9 +678,13 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh quickstart
   sudo bash leikwan-toolkit.sh plan
   sudo bash leikwan-toolkit.sh status
+  sudo bash leikwan-toolkit.sh status --json
   sudo bash leikwan-toolkit.sh --status
+  sudo bash leikwan-toolkit.sh --status-json
   sudo bash leikwan-toolkit.sh --doctor
   sudo bash leikwan-toolkit.sh --doctor --verbose
+  sudo bash leikwan-toolkit.sh doctor --json
+  sudo bash leikwan-toolkit.sh --doctor-json
   sudo bash leikwan-toolkit.sh port check
   sudo bash leikwan-toolkit.sh --port-check
   sudo bash leikwan-toolkit.sh config export [--full|--redacted]
@@ -712,11 +716,13 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   sudo bash leikwan-toolkit.sh ddns enable
   sudo bash leikwan-toolkit.sh ddns disable
   sudo bash leikwan-toolkit.sh ddns logs
+  sudo bash leikwan-toolkit.sh logs [ddns|apply|update|doctor|clean]
   sudo bash leikwan-toolkit.sh --self-update
   sudo bash leikwan-toolkit.sh --update-check
   sudo bash leikwan-toolkit.sh --ddns-run
   sudo bash leikwan-toolkit.sh --pbr-apply
   sudo bash leikwan-toolkit.sh --pbr-delete 203.0.113.10/32
+  sudo bash leikwan-toolkit.sh uninstall [normal|deep]
   sudo bash leikwan-toolkit.sh --uninstall
   bash leikwan-toolkit.sh --help
   bash leikwan-toolkit.sh --version
@@ -731,10 +737,10 @@ ${PROJECT_NAME} ${TOOL_VERSION}
   不部署后端协议，不生成代理客户端链接。
 
 一键安装：
-  curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq
+  curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq init
   # 管道方式只安装，不自动进入菜单：
   curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh | bash
-  lq
+  lq init
 
 如果 GitHub 下载慢，可设置：
   export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
@@ -873,6 +879,7 @@ write_status_cache() {
   local kind="$1" result="$2" action="${3:-}" file prefix
   (( DRY_RUN == 1 )) && return 0
   [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
+  [[ -d "$STATE_DIR" ]] || return 0
   mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
   case "$kind" in
     apply) file="${STATUS_DIR}/last-apply.env"; prefix="LAST_APPLY" ;;
@@ -923,13 +930,57 @@ status_result_display() {
   esac
 }
 
+pid_is_alive() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+lock_cleanup_stale_if_possible() {
+  local lock_path="$1" pid_file pid cleaned=0
+  pid_file="${lock_path}.pid"
+  if [[ -f "$pid_file" ]]; then
+    pid="$(head -n 1 "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && ! pid_is_alive "$pid"; then
+      rm -f "$lock_path" "$pid_file" 2>/dev/null || true
+      cleaned=1
+    fi
+  fi
+  pid_file="${lock_path}.d/pid"
+  if [[ -f "$pid_file" ]]; then
+    pid="$(head -n 1 "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && ! pid_is_alive "$pid"; then
+      rm -rf "${lock_path}.d" 2>/dev/null || true
+      cleaned=1
+    fi
+  fi
+  if (( cleaned == 1 )); then
+    warn "检测到 stale lock，已清理。"
+  fi
+}
+
 lock_acquire() {
-  local lock_path="$1" label="$2" out_var="$3" fd token lock_dir
+  local lock_path="$1" label="$2" out_var="$3" fd token lock_dir pid
+  mkdir -p "$(dirname "$lock_path")" 2>/dev/null || true
+  lock_cleanup_stale_if_possible "$lock_path"
   if command -v flock >/dev/null 2>&1; then
     exec {fd}>"$lock_path"
     if flock -n "$fd"; then
+      printf '%s\n' "$$" >"${lock_path}.pid" 2>/dev/null || true
       printf -v "$out_var" 'flock:%s:%s' "$fd" "$lock_path"
       return 0
+    fi
+    pid="$(head -n 1 "${lock_path}.pid" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && ! pid_is_alive "$pid"; then
+      warn "检测到 stale lock，已清理。"
+      rm -f "$lock_path" "${lock_path}.pid" 2>/dev/null || true
+      eval "exec ${fd}>&-" 2>/dev/null || true
+      exec {fd}>"$lock_path"
+      if flock -n "$fd"; then
+        printf '%s\n' "$$" >"${lock_path}.pid" 2>/dev/null || true
+        printf -v "$out_var" 'flock:%s:%s' "$fd" "$lock_path"
+        return 0
+      fi
     fi
     eval "exec ${fd}>&-"
   else
@@ -939,19 +990,32 @@ lock_acquire() {
       printf -v "$out_var" 'mkdir:%s' "$lock_dir"
       return 0
     fi
+    pid="$(head -n 1 "${lock_dir}/pid" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && ! pid_is_alive "$pid"; then
+      warn "检测到 stale lock，已清理。"
+      rm -rf "$lock_dir" 2>/dev/null || true
+      if mkdir "$lock_dir" 2>/dev/null; then
+        printf '%s\n' "$$" >"${lock_dir}/pid" 2>/dev/null || true
+        printf -v "$out_var" 'mkdir:%s' "$lock_dir"
+        return 0
+      fi
+    fi
   fi
-  warn "已有 Leikwan 任务运行中，跳过本次 ${label}。"
+  warn "已有 Leikwan 任务运行中，请稍后再试。"
+  [[ -n "$label" ]] && info "本次操作已跳过：${label}"
   return 1
 }
 
 lock_release() {
-  local token="$1" rest fd lock_dir
+  local token="$1" rest fd lock_dir lock_path
   [[ -n "$token" ]] || return 0
   case "$token" in
     flock:*)
       rest="${token#flock:}"
       fd="${rest%%:*}"
+      lock_path="${rest#*:}"
       eval "exec ${fd}>&-" 2>/dev/null || true
+      rm -f "${lock_path}.pid" 2>/dev/null || true
       ;;
     mkdir:*)
       lock_dir="${token#mkdir:}"
@@ -971,6 +1035,66 @@ global_lock_release() {
   [[ -n "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]] || return 0
   lock_release "$LEIKWAN_GLOBAL_LOCK_TOKEN"
   LEIKWAN_GLOBAL_LOCK_TOKEN=""
+}
+
+lock_path_active_state() {
+  local lock_path="$1" fd pid
+  if command -v flock >/dev/null 2>&1; then
+    [[ -e "$lock_path" ]] || return 1
+    exec {fd}<>"$lock_path" || return 1
+    if flock -n "$fd"; then
+      flock -u "$fd" 2>/dev/null || true
+      eval "exec ${fd}>&-" 2>/dev/null || true
+      return 1
+    fi
+    eval "exec ${fd}>&-" 2>/dev/null || true
+    return 0
+  fi
+  if [[ -d "${lock_path}.d" ]]; then
+    pid="$(head -n 1 "${lock_path}.d/pid" 2>/dev/null || true)"
+    [[ -n "$pid" ]] && pid_is_alive "$pid" && return 0
+    return 2
+  fi
+  return 1
+}
+
+status_lock_lines() {
+  local rows=() stale=() label path
+  while IFS=$'\t' read -r label path; do
+    [[ -n "$path" ]] || continue
+    if lock_path_active_state "$path"; then
+      rows+=("${label}:${path}")
+    else
+      case $? in
+        2) stale+=("${path}") ;;
+      esac
+    fi
+  done <<EOF
+toolkit	${LEIKWAN_LOCK_PATH}
+ddns-refresh	${DDNS_LOCK_PATH}
+update	${UPDATE_LOCK_PATH}
+config	${CONFIG_LOCK_PATH}
+EOF
+  if (( ${#rows[@]} == 0 && ${#stale[@]} == 0 )); then
+    echo "运行中任务: 无"
+    echo "锁状态: OK"
+    return 0
+  fi
+  if (( ${#rows[@]} > 0 )); then
+    local tasks="" locks="" item
+    for item in "${rows[@]}"; do
+      tasks="${tasks:+${tasks}, }${item%%:*}"
+      locks="${locks:+${locks}, }${item#*:}"
+    done
+    echo "运行中任务: ${tasks}"
+    echo "锁状态: ${locks}"
+  else
+    echo "运行中任务: 无"
+  fi
+  if (( ${#stale[@]} > 0 )); then
+    echo "锁状态: WARN stale ${stale[*]}"
+    status_mark_result warn
+  fi
 }
 
 ensure_nc_for_test() {
@@ -1586,22 +1710,32 @@ update_run() {
 }
 
 update_rollback() {
-  local backup from to current_version
+  local backup from to current_version update_lock="" release_global_lock=0
   need_root_unless_dry_run
+  if ! lock_acquire "$UPDATE_LOCK_PATH" "更新任务" update_lock; then
+    return 1
+  fi
+  if ! global_lock_acquire; then
+    lock_release "$update_lock"
+    return 1
+  fi
+  release_global_lock=1
   backup="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_BACKUP)"
   from="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_FROM)"
   to="$(env_file_get "$UPDATE_STATUS_FILE" LAST_UPDATE_TO)"
-  [[ -n "$backup" ]] || { warn "没有可回滚的更新备份记录。"; return 0; }
-  [[ -f "$backup" ]] || { fail "备份脚本不存在：${backup}"; return 1; }
+  [[ -n "$backup" ]] || { warn "没有可回滚的更新备份记录。"; global_lock_release; lock_release "$update_lock"; return 0; }
+  [[ -f "$backup" ]] || { fail "备份脚本不存在：${backup}"; global_lock_release; lock_release "$update_lock"; return 1; }
   warn "即将用备份脚本恢复 ${UPDATE_TARGET_SCRIPT}。"
   warn "备份：${backup}"
-  prompt_yes_no "第一次确认：继续回滚？" "N" || return 0
-  prompt_yes_no "第二次确认：确实恢复上一个脚本版本？" "N" || return 0
-  update_restore_backup "$backup"
+  prompt_yes_no "第一次确认：继续回滚？" "N" || { global_lock_release; lock_release "$update_lock"; return 0; }
+  prompt_yes_no "第二次确认：确实恢复上一个脚本版本？" "N" || { global_lock_release; lock_release "$update_lock"; return 0; }
+  update_restore_backup "$backup" || { global_lock_release; lock_release "$update_lock"; return 1; }
   current_version="$(bash "$UPDATE_TARGET_SCRIPT" --version 2>/dev/null | awk '{print $2; exit}')"
   update_write_status "rollback" "${to:-$TOOL_VERSION}" "${current_version:-$from}" "$backup" "rollback"
   ok "已回滚脚本版本：${current_version:-unknown}"
   command -v lq >/dev/null 2>&1 && lq --version || true
+  (( release_global_lock == 1 )) && global_lock_release
+  lock_release "$update_lock"
 }
 
 update_menu() {
@@ -4932,6 +5066,89 @@ ddns_logs() {
   fi
 }
 
+logs_index() {
+  echo "日志查看 / 清理"
+  echo "----------------------------------------"
+  echo "DDNS 日志: ${DDNS_LOG_FILE}"
+  echo "apply-relay 日志: ${APPLY_RELAY_LOG}"
+  echo "update 状态: ${UPDATE_STATUS_FILE}"
+  echo "doctor 最近状态: ${STATUS_DIR}/last-doctor.env"
+  echo
+  echo "用法:"
+  echo "  lq logs ddns"
+  echo "  lq logs apply"
+  echo "  lq logs update"
+  echo "  lq logs doctor"
+  echo "  lq logs clean"
+}
+
+logs_tail_file() {
+  local label="$1" file="$2"
+  if [[ -f "$file" ]]; then
+    echo "${label}"
+    echo "----------------------------------------"
+    tail -n 100 "$file"
+  else
+    info "暂无${label}：${file}"
+  fi
+}
+
+logs_show_update() {
+  update_status
+}
+
+logs_show_doctor() {
+  logs_tail_file "doctor 最近状态" "${STATUS_DIR}/last-doctor.env"
+}
+
+logs_clean() {
+  need_root_unless_dry_run
+  warn "将清理运行日志，但不会删除配置、快照、备份。"
+  prompt_yes_no "确认继续？" "N" || return 0
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] rm -f ${DDNS_LOG_FILE} ${APPLY_RELAY_LOG} ${LOG_FILE}"
+    return 0
+  fi
+  rm -f "$DDNS_LOG_FILE" "$APPLY_RELAY_LOG" "$LOG_FILE" 2>/dev/null || true
+  ok "运行日志已清理。"
+}
+
+logs_menu() {
+  local choice
+  while true; do
+    print_menu_header "日志查看 / 清理"
+    echo "1. 查看 DDNS 日志"
+    echo "2. 查看 apply-relay 日志"
+    echo "3. 查看 update 状态"
+    echo "4. 查看 doctor 最近状态"
+    echo "5. 清理运行日志"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause ddns_logs ;;
+      2) run_menu_action_pause logs_tail_file "apply-relay 日志" "$APPLY_RELAY_LOG" ;;
+      3) run_menu_action_pause logs_show_update ;;
+      4) run_menu_action_pause logs_show_doctor ;;
+      5) run_menu_action_pause logs_clean ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
+logs_cli() {
+  case "${1:-}" in
+    "") logs_index ;;
+    ddns) ddns_logs ;;
+    apply) logs_tail_file "apply-relay 日志" "$APPLY_RELAY_LOG" ;;
+    update) logs_show_update ;;
+    doctor) logs_show_doctor ;;
+    clean) logs_clean ;;
+    *) fail "未知 logs 子命令：$1"; echo "用法：lq logs [ddns|apply|update|doctor|clean]" >&2; return 1 ;;
+  esac
+}
+
 ddns_set_interval() {
   need_root_unless_dry_run
   ddns_ensure_config
@@ -6959,9 +7176,7 @@ config_import() {
   fi
   config_apply_after_import "$mode" "$assume_yes"
   ok "配置导入完成：${pkg}"
-  info "建议下一步执行：lq status"
-  info "建议下一步执行：lq --doctor"
-  info "如需重应用转发规则：lq forward apply-relay --auto-fix-route"
+  print_post_restore_next_steps
   write_config_import_status "ok" "$import_mode" "$pkg"
   rm -rf "$tmp"
   global_lock_release
@@ -7466,6 +7681,156 @@ doctor_apt_sources() {
   rm -f "$tmp"
 }
 
+doctor_component_summary() {
+  local role="$1" component="$2" entries_enabled forwards_enabled ddns_result value
+  entries_enabled="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  case "$component" in
+    easytier)
+      case "$role" in
+        leikwan-relay)
+          value="$(systemd_active_state "${EASYTIER_RELAY_SERVICE_NAME}.service" || true)"
+          [[ "$value" == "active" ]] && printf 'OK' || printf 'WARN'
+          ;;
+        cloud-entry)
+          value="$(systemd_active_state "$(entry_service_name "$(env_file_get "$NETWORK_ENV" ENTRY_NAME)").service" || true)"
+          [[ "$value" == "active" ]] && printf 'OK' || printf 'WARN'
+          ;;
+        *) printf 'WARN' ;;
+      esac
+      ;;
+    entries)
+      if [[ "$role" == "cloud-entry" ]]; then
+        printf 'OK'
+      elif (( entries_enabled > 0 )); then
+        printf 'OK'
+      else
+        printf 'WARN'
+      fi
+      ;;
+    forwards)
+      if [[ "$role" == "cloud-entry" ]]; then
+        printf 'OK'
+      elif (( forwards_enabled > 0 )); then
+        printf 'OK'
+      else
+        printf 'WARN'
+      fi
+      ;;
+    pbr)
+      printf 'OK'
+      ;;
+    nftables)
+      STATUS_OVERVIEW_RESULT="ok"
+      case "$role" in
+        leikwan-relay) value="$(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")" ;;
+        cloud-entry) value="$(status_nft_summary cloud-entry "$(entry_expose_relay_ip)" "$(entry_expose_start)" "$(entry_expose_end)" 0)" ;;
+        *) value="$(status_nft_summary unknown)" ;;
+      esac
+      [[ "$value" == OK* ]] && printf 'OK' || printf 'WARN'
+      ;;
+    mss)
+      STATUS_OVERVIEW_RESULT="ok"
+      value="$(status_mss_summary)"
+      [[ "$value" == OK* || "$value" == "disabled" ]] && printf 'OK' || printf 'WARN'
+      ;;
+    ddns)
+      ddns_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+      case "${ddns_result,,}" in
+        fail|failed) printf 'FAIL' ;;
+        warn|warning) printf 'WARN' ;;
+        *) printf 'OK' ;;
+      esac
+      ;;
+  esac
+}
+
+doctor_print_summary() {
+  local role="$1" easytier entries forwards pbr nft mss ddns overall suggestions=()
+  role="${role:-$(detect_role)}"
+  easytier="$(doctor_component_summary "$role" easytier)"
+  entries="$(doctor_component_summary "$role" entries)"
+  forwards="$(doctor_component_summary "$role" forwards)"
+  pbr="$(doctor_component_summary "$role" pbr)"
+  nft="$(doctor_component_summary "$role" nftables)"
+  mss="$(doctor_component_summary "$role" mss)"
+  ddns="$(doctor_component_summary "$role" ddns)"
+  if (( REPORT_FAIL_COUNT > 0 )) || [[ "$ddns" == "FAIL" ]]; then
+    overall="FAIL"
+  elif (( REPORT_WARN_COUNT > 0 )) || [[ "$easytier$entries$forwards$nft$mss$ddns" == *WARN* ]]; then
+    overall="WARN"
+  else
+    overall="OK"
+  fi
+  [[ "$nft" != "OK" || "$mss" != "OK" ]] && suggestions+=("执行 lq forward apply-relay --auto-fix-route")
+  [[ "$ddns" != "OK" ]] && suggestions+=("执行 lq ddns run --scope all")
+  echo
+  echo "诊断结果摘要"
+  echo "----------------------------------------"
+  echo "角色: ${role}"
+  echo "EasyTier: ${easytier}"
+  echo "公网入口: ${entries}"
+  echo "转发目标: ${forwards}"
+  echo "PBR: ${pbr}"
+  echo "nftables: ${nft}"
+  echo "MSS clamp: ${mss}"
+  echo "DDNS: ${ddns}"
+  echo "整体状态: ${overall}"
+  if (( ${#suggestions[@]} > 0 )); then
+    echo "建议:"
+    printf -- '- %s\n' "${suggestions[@]}"
+  fi
+}
+
+doctor_json() {
+  local role_info role role_source role_mixed entries_total entries_enabled forwards_total forwards_enabled pbr_count
+  local nft_status mss_status ddns_result overall warnings=() failures=()
+  STATUS_OVERVIEW_RESULT="ok"
+  role_info="$(role_summary)"
+  IFS=$'\t' read -r role role_source role_mixed <<<"$role_info"
+  entries_total="$(entries_rows | awk 'END{print NR+0}')"
+  entries_enabled="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  forwards_total="$(forwards_rows | awk 'END{print NR+0}')"
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  case "$role" in
+    leikwan-relay) nft_status="$(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")" ;;
+    cloud-entry) nft_status="$(status_nft_summary cloud-entry "$(entry_expose_relay_ip)" "$(entry_expose_start)" "$(entry_expose_end)" 0)" ;;
+    *) nft_status="$(status_nft_summary unknown)"; status_mark_result warn ;;
+  esac
+  mss_status="$(status_mss_summary)"
+  ddns_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  [[ -n "$ddns_result" ]] || ddns_result="unknown"
+  [[ "$role_mixed" == "true" ]] && warnings+=("mixed role")
+  [[ ! -d "$STATE_DIR" ]] && warnings+=("state dir missing")
+  [[ "$nft_status" == WARN* ]] && warnings+=("nftables: ${nft_status}")
+  [[ "$mss_status" == WARN* ]] && warnings+=("mss_clamp: ${mss_status}")
+  case "${ddns_result,,}" in
+    fail|failed) failures+=("ddns failed") ;;
+    warn|warning) warnings+=("ddns warn") ;;
+  esac
+  overall="$STATUS_OVERVIEW_RESULT"
+  (( ${#failures[@]} > 0 )) && overall="fail"
+  cat <<EOF
+{
+  "version": "$(json_escape "$TOOL_VERSION")",
+  "role": "$(json_escape "$role")",
+  "role_source": "$(json_escape "${role_source:-无}")",
+  "overall": "$(json_escape "$overall")",
+  "entries_total": ${entries_total},
+  "entries_enabled": ${entries_enabled},
+  "forwards_total": ${forwards_total},
+  "forwards_enabled": ${forwards_enabled},
+  "pbr_count": ${pbr_count},
+  "nftables": "$(json_escape "$nft_status")",
+  "mss_clamp": "$(json_escape "$mss_status")",
+  "ddns": "$(json_escape "$ddns_result")",
+  "warnings": $(json_array "${warnings[@]}"),
+  "failures": $(json_array "${failures[@]}")
+}
+EOF
+}
+
 doctor() {
   local role bbr_cc bbr_qdisc
   REPORT_WARN_COUNT=0
@@ -7488,6 +7853,7 @@ doctor() {
     report DEBUG "network.env=${NETWORK_ENV}"
     report DEBUG "nft=${NFT_RULE_FILE}"
   fi
+  doctor_print_summary "$role"
   write_status_cache doctor "$(status_result_from_counts)"
 }
 
@@ -7532,6 +7898,37 @@ named_status_summary() {
     fi
   else
     printf '%s' "$default_text"
+  fi
+}
+
+recent_status_error_line() {
+  local label="$1" file="$2" prefix="$3" time result
+  time="$(env_file_get "$file" "${prefix}_TIME")"
+  result="$(env_file_get "$file" "${prefix}_RESULT")"
+  case "${result,,}" in
+    fail|failed)
+      printf -- '- %s: failed at %s\n' "$label" "${time:-unknown}"
+      ;;
+    warn|warning)
+      printf -- '- %s: warn at %s\n' "$label" "${time:-unknown}"
+      ;;
+  esac
+}
+
+status_recent_errors() {
+  local errors
+  errors="$(
+    recent_status_error_line "DDNS" "$DDNS_STATUS_FILE" LAST_DDNS
+    recent_status_error_line "Update" "$UPDATE_STATUS_FILE" LAST_UPDATE
+    recent_status_error_line "Doctor" "${STATUS_DIR}/last-doctor.env" LAST_DOCTOR
+    recent_status_error_line "Config import" "${STATUS_DIR}/last-config-import.env" LAST_CONFIG_IMPORT
+  )"
+  if [[ -n "$errors" ]]; then
+    echo "最近错误:"
+    printf '%s\n' "$errors"
+    status_mark_result warn
+  else
+    echo "最近错误: 无"
   fi
 }
 
@@ -7906,6 +8303,11 @@ status_overview() {
   echo "Leikwan 状态总览"
   echo "----------------------------------------"
   echo "脚本版本: ${TOOL_VERSION}"
+  if [[ ! -d "$STATE_DIR" ]]; then
+    echo "[INFO] 未检测到 Leikwan 配置目录。"
+    echo "[INFO] 当前机器可能尚未初始化，建议执行：lq init"
+    status_mark_result warn
+  fi
   echo "角色来源: ${role_source:-无}"
   if [[ "$role_mixed" == "true" ]]; then
     echo "[WARN] 检测到角色混合：relay + entry"
@@ -7913,6 +8315,8 @@ status_overview() {
     status_mark_result warn
   fi
   echo "最近更新: $(update_status_line)"
+  status_lock_lines
+  status_recent_errors
   case "$role" in
     leikwan-relay) status_overview_relay ;;
     cloud-entry) status_overview_entry ;;
@@ -7934,6 +8338,66 @@ status_overview() {
   else
     echo "[INFO] 建议执行：lq --doctor"
   fi
+}
+
+json_array() {
+  local first=1 item
+  printf '['
+  for item in "$@"; do
+    (( first == 0 )) && printf ','
+    printf '"%s"' "$(json_escape "$item")"
+    first=0
+  done
+  printf ']'
+}
+
+status_json() {
+  local role_info role role_source role_mixed entries_total entries_enabled forwards_total forwards_enabled pbr_count
+  local nft_status mss_status ddns_result overall warnings=() failures=()
+  STATUS_OVERVIEW_RESULT="ok"
+  role_info="$(role_summary)"
+  IFS=$'\t' read -r role role_source role_mixed <<<"$role_info"
+  entries_total="$(entries_rows | awk 'END{print NR+0}')"
+  entries_enabled="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  forwards_total="$(forwards_rows | awk 'END{print NR+0}')"
+  forwards_enabled="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
+  pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
+  case "$role" in
+    leikwan-relay) nft_status="$(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")" ;;
+    cloud-entry) nft_status="$(status_nft_summary cloud-entry "$(entry_expose_relay_ip)" "$(entry_expose_start)" "$(entry_expose_end)" 0)" ;;
+    *) nft_status="$(status_nft_summary unknown)"; status_mark_result warn ;;
+  esac
+  mss_status="$(status_mss_summary)"
+  ddns_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  [[ -n "$ddns_result" ]] || ddns_result="unknown"
+  [[ "$role_mixed" == "true" ]] && warnings+=("mixed role")
+  [[ ! -d "$STATE_DIR" ]] && warnings+=("state dir missing")
+  [[ "$nft_status" == WARN* ]] && warnings+=("nftables: ${nft_status}")
+  [[ "$mss_status" == WARN* ]] && warnings+=("mss_clamp: ${mss_status}")
+  case "${ddns_result,,}" in
+    fail|failed) failures+=("ddns failed") ;;
+    warn|warning) warnings+=("ddns warn") ;;
+  esac
+  overall="$STATUS_OVERVIEW_RESULT"
+  (( ${#failures[@]} > 0 )) && overall="fail"
+  cat <<EOF
+{
+  "version": "$(json_escape "$TOOL_VERSION")",
+  "role": "$(json_escape "$role")",
+  "role_source": "$(json_escape "${role_source:-无}")",
+  "overall": "$(json_escape "$overall")",
+  "entries_total": ${entries_total},
+  "entries_enabled": ${entries_enabled},
+  "forwards_total": ${forwards_total},
+  "forwards_enabled": ${forwards_enabled},
+  "pbr_count": ${pbr_count},
+  "nftables": "$(json_escape "$nft_status")",
+  "mss_clamp": "$(json_escape "$mss_status")",
+  "ddns": "$(json_escape "$ddns_result")",
+  "warnings": $(json_array "${warnings[@]}"),
+  "failures": $(json_array "${failures[@]}")
+}
+EOF
 }
 
 port_check_mark() {
@@ -8434,24 +8898,7 @@ uninstall_check_line() {
   esac
 }
 
-uninstall_new_mode() {
-  need_root
-  echo
-  echo "${BOLD}卸载全部说明${RESET}"
-  echo "这会删除通过本脚本安装/生成的服务、配置、nftables 规则、EasyTier 文件、快捷命令。"
-  echo "不会删除系统本身，也不会删除用户手动部署的业务。"
-  echo "将处理的路径："
-  echo "- ${STATE_DIR}"
-  echo "- ${OLD_STATE_DIR}（历史路径清理）"
-  echo "- ${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}"
-  echo "- ${SHORTCUT_LQ} / ${SHORTCUT_LQ_UPPER}"
-  echo "- ${NFT_RULE_FILE} / ${NFT_SERVICE}"
-  prompt_yes_no "第一次确认：继续卸载全部？" "N" || return 0
-  prompt_yes_no "第二次确认：确实删除本脚本生成的组件？" "N" || return 0
-  auto_snapshot_or_confirm "uninstall-all" || return 0
-
-  LOG_DISABLED=1
-  set +e
+uninstall_stop_services_and_rules() {
   if command -v systemctl >/dev/null 2>&1; then
     safe_stop_disable_service "$EASYTIER_RELAY_SERVICE_NAME"
     safe_stop_disable_service "$NFT_SERVICE_NAME"
@@ -8468,14 +8915,12 @@ uninstall_new_mode() {
     nft delete table inet lq_mss 2>/dev/null || true
   fi
   cleanup_leikwan_policy_routes
-  safe_rm_file "$EASYTIER_CORE_BIN" "$EASYTIER_CLI_BIN" "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER" \
-    "/root/leikwan-toolkit.sh" "$OLD_ROOT_SCRIPT" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF" "$LOG_FILE" "$OLD_LOG_FILE" "$DDNS_LOG_FILE"
+  safe_rm_file "$SHORTCUT_LQ" "$SHORTCUT_LQ_UPPER" "$FORWARD_SYSCTL" "$BBR_SYSCTL_CONF" "$DNS_RESOLVED_CONF"
   rm -rf /tmp/leikwan-update.* 2>/dev/null || true
-  safe_rm_dir "$STATE_DIR" "$OLD_STATE_DIR" "$BACKUP_DIR" "$OLD_BACKUP_DIR"
-  rm -f "$LOG_FILE" "$OLD_LOG_FILE" 2>/dev/null || true
   systemd_reload_reset_failed
-  set -e
+}
 
+uninstall_print_check_result() {
   echo
   echo "${BOLD}卸载检查结果${RESET}"
   uninstall_check_line "nftables 转发表" nft leikwan_forward
@@ -8485,26 +8930,138 @@ uninstall_new_mode() {
   uninstall_check_line "DDNS refresh 服务" service "${DDNS_SERVICE_NAME}.service"
   uninstall_check_line "DDNS refresh timer" file "$DDNS_TIMER"
   uninstall_check_line "MSS clamp 旧服务" service "leikwan-mss-clamp.service"
-  uninstall_check_line "EasyTier core" file "$EASYTIER_CORE_BIN"
-  uninstall_check_line "EasyTier cli" file "$EASYTIER_CLI_BIN"
   uninstall_check_line "快捷命令 lq" file "$SHORTCUT_LQ"
   uninstall_check_line "快捷命令 LQ" file "$SHORTCUT_LQ_UPPER"
   uninstall_check_command_absent "command -v lq" lq
   uninstall_check_command_absent "command -v LQ" LQ
-  uninstall_check_line "主脚本" file "/root/leikwan-toolkit.sh"
-  uninstall_check_line "历史主脚本路径" file "$OLD_ROOT_SCRIPT"
-  uninstall_check_line "配置目录" dir "$STATE_DIR"
-  uninstall_check_line "旧配置目录" dir "$OLD_STATE_DIR"
-  uninstall_check_line "备份目录" dir "$BACKUP_DIR"
-  uninstall_check_line "旧备份目录" dir "$OLD_BACKUP_DIR"
-  uninstall_check_line "日志文件" file "$LOG_FILE"
-  uninstall_check_line "旧日志文件" file "$OLD_LOG_FILE"
-  uninstall_check_line "DDNS 日志文件" file "$DDNS_LOG_FILE"
   uninstall_check_line "IPv4 转发 sysctl" file "$FORWARD_SYSCTL"
   uninstall_check_line "BBR sysctl" file "$BBR_SYSCTL_CONF"
   uninstall_check_line "DNS resolved 配置" file "$DNS_RESOLVED_CONF"
-  ok "卸载流程已完成；如上方有 WARN，表示对应对象仍存在，需要按提示手动检查。"
-  rm -f "$LOG_FILE" "$OLD_LOG_FILE" 2>/dev/null || true
+}
+
+uninstall_normal() {
+  local assume_yes="${1:-0}" release_global_lock=0
+  need_root_unless_dry_run
+  warn "将停止并删除 Leikwan 相关服务和 nftables/PBR 规则。"
+  info "将保留 ${STATE_DIR} 和 ${BACKUP_DIR}。"
+  if is_interactive && (( assume_yes == 0 )); then
+    prompt_yes_no "确认继续？" "N" || return 0
+  elif (( assume_yes == 0 && DRY_RUN == 0 )); then
+    fail "非交互普通卸载必须显式传入 --yes。"
+    return 1
+  fi
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] stop/disable Leikwan services, delete nftables/PBR rules, remove lq shortcuts"
+    return 0
+  fi
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 1
+    release_global_lock=1
+  fi
+  LOG_DISABLED=1
+  set +e
+  uninstall_stop_services_and_rules
+  set -e
+  (( release_global_lock == 1 )) && global_lock_release
+  uninstall_print_check_result
+  ok "普通卸载完成；配置、快照和备份已保留。"
+}
+
+uninstall_final_snapshot() {
+  local dest
+  dest="/root/final-before-uninstall-$(snapshot_timestamp).tar.gz"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] create final snapshot ${dest}"
+    return 0
+  fi
+  if create_snapshot_archive "$dest"; then
+    ok "已创建卸载前 final snapshot：${dest}"
+    return 0
+  fi
+  warn "卸载前快照失败。"
+  prompt_yes_no "是否仍继续深度卸载？" "N"
+}
+
+uninstall_deep() {
+  local assume_yes="${1:-0}" confirm release_global_lock=0
+  need_root_unless_dry_run
+  warn "深度卸载会删除 ${STATE_DIR} 配置、状态、DDNS、PBR、entries、forwards。"
+  warn "删除后若没有配置包或快照，将无法直接恢复。"
+  if is_interactive && (( assume_yes == 0 )); then
+    confirm="$(prompt_value "请输入 DELETE 确认")"
+    [[ "$confirm" == "DELETE" ]] || { info "已取消深度卸载。"; return 0; }
+  elif (( assume_yes == 0 )); then
+    fail "非交互深度卸载必须显式传入 --yes。"
+    return 1
+  fi
+  if (( DRY_RUN == 0 )) && [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 1
+    release_global_lock=1
+  fi
+  if ! uninstall_final_snapshot; then
+    (( release_global_lock == 1 )) && global_lock_release
+    return 0
+  fi
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] deep uninstall removes services/rules/config/logs/status/locks"
+    return 0
+  fi
+  LOG_DISABLED=1
+  set +e
+  uninstall_stop_services_and_rules
+  safe_rm_dir "$STATE_DIR" "$OLD_STATE_DIR"
+  safe_rm_file "$DDNS_LOG_FILE" "$APPLY_RELAY_LOG" "$LOG_FILE" "$OLD_LOG_FILE" "$OLD_ROOT_SCRIPT"
+  rm -f "${LEIKWAN_RUN_DIR}"/leikwan-*.lock "${LEIKWAN_RUN_DIR}"/leikwan-*.lock.pid 2>/dev/null || true
+  rm -rf "${LEIKWAN_RUN_DIR}"/leikwan-*.lock.d 2>/dev/null || true
+  if is_interactive; then
+    prompt_yes_no "是否同时删除 ${BACKUP_DIR}？" "N" && safe_rm_dir "$BACKUP_DIR" "$OLD_BACKUP_DIR"
+  fi
+  set -e
+  (( release_global_lock == 1 )) && global_lock_release
+  uninstall_print_check_result
+  uninstall_check_line "配置目录" dir "$STATE_DIR"
+  uninstall_check_line "DDNS 日志文件" file "$DDNS_LOG_FILE"
+  uninstall_check_line "apply-relay 日志" file "$APPLY_RELAY_LOG"
+  ok "深度卸载完成。"
+}
+
+print_uninstall_menu() {
+  print_menu_header "卸载"
+  echo "1. 普通卸载：移除服务和规则，保留配置 / 快照 / 备份"
+  echo "2. 深度卸载：移除服务、规则、配置、日志、状态"
+  echo "0. 返回"
+}
+
+uninstall_new_mode() {
+  local choice
+  while true; do
+    print_uninstall_menu
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause uninstall_normal; return 0 ;;
+      2) run_menu_action_pause uninstall_deep; return 0 ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
+uninstall_cli() {
+  local mode="${1:-}" assume_yes=0
+  shift || true
+  while (($# > 0)); do
+    case "$1" in
+      --yes|-y) assume_yes=1; shift ;;
+      *) fail "未知 uninstall 参数：$1"; return 1 ;;
+    esac
+  done
+  case "$mode" in
+    normal|"") uninstall_normal "$assume_yes" ;;
+    deep|--deep) uninstall_deep "$assume_yes" ;;
+    menu) uninstall_new_mode ;;
+    *) fail "未知 uninstall 模式：${mode}"; echo "用法：lq uninstall [normal|deep] [--yes]" >&2; return 1 ;;
+  esac
 }
 
 snapshot_timestamp() {
@@ -8634,6 +9191,12 @@ restart_restored_services() {
     warn "未找到 systemctl，跳过服务重启。"
     return 0
   fi
+  echo "将重启以下 Leikwan 相关服务（若存在）："
+  [[ -f "$EASYTIER_RELAY_SERVICE" ]] && echo "- ${EASYTIER_RELAY_SERVICE_NAME}.service"
+  while IFS= read -r svc; do
+    [[ -n "$svc" ]] && echo "- $(basename "$svc")"
+  done < <(find /etc/systemd/system -maxdepth 1 -type f -name 'easytier-entry-*.service' 2>/dev/null || true)
+  [[ -f "$NFT_SERVICE" ]] && echo "- ${NFT_SERVICE_NAME}.service"
   systemctl daemon-reload || warn "systemd daemon-reload 失败。"
   [[ -f "$EASYTIER_RELAY_SERVICE" ]] && systemctl restart "${EASYTIER_RELAY_SERVICE_NAME}.service" || true
   while IFS= read -r svc; do
@@ -8642,9 +9205,16 @@ restart_restored_services() {
   [[ -f "$NFT_SERVICE" ]] && systemctl restart "${NFT_SERVICE_NAME}.service" || true
 }
 
+print_post_restore_next_steps() {
+  echo "下一步建议:"
+  echo "1. lq status"
+  echo "2. lq --doctor"
+  echo "3. 如需应用转发规则：lq forward apply-relay --auto-fix-route"
+}
+
 restore_snapshot() {
   need_root_unless_dry_run
-  local path="${1:-}"
+  local path="${1:-}" release_global_lock=0
   [[ -n "$path" ]] || path="$(select_snapshot_by_number "请输入要恢复的快照编号")" || return 0
   if [[ ! -f "$path" ]]; then
     [[ "$path" == *.tar.gz ]] || { warn "快照不存在：${path}"; return 0; }
@@ -8657,13 +9227,23 @@ restore_snapshot() {
     echo "[DRY-RUN] tar -xzf ${path} -C /"
     return 0
   fi
-  tar -xzf "$path" -C /
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 1
+    release_global_lock=1
+  fi
+  if ! tar -xzf "$path" -C /; then
+    (( release_global_lock == 1 )) && global_lock_release
+    fail "快照恢复失败：${path}"
+    return 1
+  fi
   ok "快照已恢复：${path}"
   if prompt_yes_no "是否立即重新加载 systemd 并重启相关服务？" "N"; then
     restart_restored_services
   else
     info "已跳过服务重启。请按需手动执行 systemctl daemon-reload / restart。"
   fi
+  print_post_restore_next_steps
+  (( release_global_lock == 1 )) && global_lock_release
 }
 
 delete_snapshot() {
@@ -9064,7 +9644,19 @@ init_step_action() {
   shift
   echo
   echo "[INFO] ${title}"
+  if (( DRY_RUN == 1 )) || [[ "${1:-}" == "status_overview" || "${1:-}" == "init_plan" ]]; then
+    run_menu_action_pause "$@"
+    return $?
+  fi
+  local release_global_lock=0 rc
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 1
+    release_global_lock=1
+  fi
   run_menu_action_pause "$@"
+  rc=$?
+  (( release_global_lock == 1 )) && global_lock_release
+  return "$rc"
 }
 
 init_relay_wizard() {
@@ -9076,7 +9668,8 @@ init_relay_wizard() {
     pbr_count="$(pbr_rules_count 2>/dev/null || printf '0')"
     print_menu_header "B 利群主机初始化"
     if (( entries_count + forwards_count + pbr_count > 0 )) || relay_network_env_ready; then
-      info "检测到已有利群主机配置，将进入维护模式，不会重新初始化 network.env。"
+      info "检测到已有利群主机配置。"
+      info "将进入维护模式，不会重新初始化 network.env。"
     fi
     echo "1. 环境预检"
     echo "2. 修复 DNS / IPv4 优先"
@@ -9112,7 +9705,8 @@ init_entry_wizard() {
   while true; do
     print_menu_header "A 公网入口初始化"
     if [[ "$(detect_leikwan_role)" == "cloud-entry" ]]; then
-      info "检测到当前机器已有公网入口配置，将进入维护模式，不会重复破坏配置。"
+      info "检测到已有公网入口配置。"
+      info "将进入维护模式，不会重复覆盖 entry service。"
     fi
     echo "1. 环境预检"
     echo "2. 粘贴 B 生成的公网入口接入码"
@@ -9126,7 +9720,7 @@ init_entry_wizard() {
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) init_step_action "将读取当前入口配置和状态，不修改系统。" status_overview ;;
-      2|4|6) init_step_action "将粘贴 B 生成的网络码并部署入口；EasyTier IP 必须是 10.x 虚拟 IP，DDNS 域名应填写为公网地址 / 域名。" quick_deploy_entry_from_network_pairing ;;
+      2|4|6) init_step_action "将粘贴 B 生成的网络码并部署入口；EasyTier IP 必须是 10.x 虚拟 IP，DDNS 域名应填写为公网地址 / 域名。" init_entry_deploy_guarded ;;
       3) init_step_action "将安装或修复 EasyTier 二进制，执行前会确认下载来源。" install_easytier_binary repair ;;
       5) init_step_action "将配置 A 侧公网入口端口池 TCP+UDP DNAT。" entry_expose_range ;;
       7) init_step_action "将显示 A 公网入口状态总览，并提示 DDNS 是否一致。" status_overview ;;
@@ -9154,6 +9748,15 @@ init_import_wizard() {
 
 init_status_only() {
   init_step_action "仅查看当前状态，不修改系统。" status_overview
+}
+
+init_entry_deploy_guarded() {
+  if [[ "$(detect_leikwan_role)" == "cloud-entry" ]] && { [[ -f "$NETWORK_ENV" || -f "$ENTRY_PAIRING_FILE" || -f "$ENTRY_EXPOSE_ENV" ]] || role_has_service 'easytier-entry-*.service'; }; then
+    warn "检测到已有公网入口配置。"
+    warn "为避免覆盖 entry service / entry env / ENTRY 返回码状态，默认不重新部署。"
+    prompt_yes_no "是否仍然重新粘贴接入码并部署？" "N" || return 0
+  fi
+  quick_deploy_entry_from_network_pairing
 }
 
 print_init_wizard_menu() {
@@ -9207,6 +9810,7 @@ print_operations_center_menu() {
   echo "7. 配置导出 / 导入"
   echo "8. DDNS 自动刷新"
   echo "9. 自更新"
+  echo "10. 日志查看 / 清理"
   echo "0. 返回"
 }
 
@@ -9225,6 +9829,7 @@ operations_center_menu() {
       7) config_menu ;;
       8) ddns_menu ;;
       9) update_menu ;;
+      10) logs_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -9307,7 +9912,8 @@ advanced_menu() {
     echo "9. 端口冲突预检"
     echo "10. 生成脱敏故障报告"
     echo "11. 检查并更新脚本"
-    echo "12. legacy 清理"
+    echo "12. 日志查看 / 清理"
+    echo "13. legacy 清理"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -9322,7 +9928,8 @@ advanced_menu() {
       9) run_menu_action_pause port_check ;;
       10) run_menu_action generate_debug_report ;;
       11) update_menu ;;
-      12) legacy_cleanup_menu ;;
+      12) logs_menu ;;
+      13) legacy_cleanup_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -9376,7 +9983,19 @@ main() {
       run_cli_action init_plan
       ;;
     status)
-      run_cli_action status_overview
+      if [[ "${2:-}" == "--json" ]]; then
+        run_cli_action status_json
+      else
+        run_cli_action status_overview
+      fi
+      ;;
+    doctor)
+      case "${2:-}" in
+        --json) run_cli_action doctor_json ;;
+        --verbose) VERBOSE_DOCTOR=1; doctor ;;
+        "") doctor ;;
+        *) fail "未知 doctor 参数：${2:-}"; print_help; exit 1 ;;
+      esac
       ;;
     config)
       case "${2:-}" in
@@ -9472,6 +10091,10 @@ main() {
         *) fail "未知 ddns 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
+    logs)
+      shift
+      run_cli_action logs_cli "$@"
+      ;;
     update)
       case "${2:-}" in
         check) update_check || exit $? ;;
@@ -9484,13 +10107,16 @@ main() {
     --help|-h) print_help ;;
     --version|-v) echo "${PROJECT_NAME} ${TOOL_VERSION}" ;;
     --status) run_cli_action status_overview ;;
+    --status-json) run_cli_action status_json ;;
     --port-check) run_cli_action port_check ;;
     --doctor|--validate) [[ "${2:-}" == "--verbose" ]] && VERBOSE_DOCTOR=1; doctor ;;
+    --doctor-json) run_cli_action doctor_json ;;
     --self-update) update_run 1 || exit $? ;;
     --update-check) update_check || exit $? ;;
     --ddns-run) shift; ddns_refresh_once "$@" ;;
     --pbr-apply) pbr_apply ;;
     --pbr-delete) delete_pbr_rule "${2:-}" ;;
+    uninstall) shift; uninstall_cli "$@" ;;
     --uninstall) uninstall_new_mode ;;
     "") main_menu ;;
     *) fail "未知参数：$1"; print_help; exit 1 ;;

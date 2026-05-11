@@ -1,6 +1,6 @@
 ﻿# 配置导入 / 导出 / 迁移包
 
-Leikwan Toolkit 1.3.0 增加配置包，用于备份、迁移和排错。
+Leikwan Toolkit 1.3.1 增加配置包，用于备份、迁移和排错。
 
 ## 完整包和脱敏包
 
@@ -82,6 +82,7 @@ lq init
 - 展示 inspect 摘要
 - 自动创建 `auto-before-config-import-YYYYMMDD-HHMMSS.tar.gz` 快照
 - 二次确认覆盖风险
+- 持有配置锁和全局锁，避免与 DDNS、转发应用、自更新、卸载并发
 
 导入模式：
 
@@ -110,3 +111,12 @@ lq forward apply-relay --auto-fix-route
 ```
 
 导入不会盲目重启所有服务。选择 apply / full 时会提示 EasyTier、nftables 和 PBR 应用风险。
+
+导入完成后会提示：
+
+```text
+下一步建议:
+1. lq status
+2. lq --doctor
+3. 如需应用转发规则：lq forward apply-relay --auto-fix-route
+```

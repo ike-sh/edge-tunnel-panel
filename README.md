@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-当前版本：`1.3.0`
+当前版本：`1.3.1`
 
 ## 项目简介
 
@@ -22,7 +22,10 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 - IPv4 PBR、forward 来源 PBR、域名 PBR
 - DDNS 刷新：后端目标、公网入口域名、PBR 域名
 - 状态总览、doctor 诊断、状态缓存和脱敏 debug report
+- 状态 / doctor JSON 摘要、运行锁状态和最近错误提示
 - 配置快照 / 回滚，高危操作前自动快照
+- 普通卸载 / 深度卸载，深度卸载前 final snapshot
+- 日志查看 / 清理命令中心
 - 配置导入 / 导出 / 迁移包，含 full / redacted 两种模式
 - 转发端点分享输出：TXT / TSV / JSON / HTML / 可选 QR
 - GitHub Release 自更新、sha256 校验和安全回滚
@@ -90,8 +93,11 @@ lq init
 lq init --dry-run
 lq plan
 lq status
+lq status --json
 lq --status
+lq --status-json
 lq --doctor
+lq doctor --json
 lq port check
 lq --port-check
 lq forward list
@@ -104,6 +110,8 @@ lq ddns status
 lq ddns run --scope all
 lq update check
 lq update run
+lq logs
+lq logs ddns
 ```
 
 配置导入 / 导出：
@@ -138,11 +146,15 @@ bash scripts/verify-release.sh
 
 `status` 是轻量日常总览：读取配置、状态缓存、systemd 状态和 nftables 表，不做大规模探测，也不自动修改系统。`doctor` 是详细诊断，适合部署后或故障时运行。
 
+`status --json` / `--status-json` 和 `doctor --json` / `--doctor-json` 输出轻量 JSON 摘要，适合脚本读取，不包含 EasyTier secret。
+
 配置快照位于 `/etc/leikwan-toolkit/snapshots/`，自动快照位于 `/etc/leikwan-toolkit/snapshots/auto/`。删除入口、删除转发目标、重新应用转发规则、恢复快照、配置导入等高危操作前会自动快照。
 
 配置导出分为 full 和 redacted。full 包可迁移和恢复运行；redacted 包用于排错和 issue，不含可恢复 EasyTier 网络的 secret。导入前会 inspect、校验 sha256、校验 manifest、检查 tar 安全边界并自动快照。
 
 端点输出位于 `/etc/leikwan-toolkit/outputs/`，用于分享 TCP/UDP 入口，不是代理链接，不包含 EasyTier secret 或配对码。
+
+卸载分普通卸载和深度卸载。普通卸载只移除服务、规则和快捷命令，保留 `/etc/leikwan-toolkit`、快照、配置包和备份；深度卸载会删除配置、状态和运行日志，并先生成 final snapshot。
 
 ## 安全说明
 
@@ -151,6 +163,7 @@ bash scripts/verify-release.sh
 - config import 会拒绝路径穿越、绝对路径以及 symlink / hardlink 包成员。
 - 自更新只使用 GitHub Release 包，并校验 `.sha256`。
 - `lq output *` 只输出端点信息，不输出 secret、token 或 password。
+- 高危写操作使用 `/run/leikwan-*.lock` 锁；stale lock 会在下次获取锁时自动清理。
 
 ## 故障排查
 
@@ -180,6 +193,8 @@ tail -f /root/lq-apply-relay.log
 - [PBR](docs/pbr.md)
 - [配置迁移](docs/config-migration.md)
 - [端点输出](docs/endpoint-output.md)
+- [卸载](docs/uninstall.md)
+- [日志](docs/logs.md)
 - [自更新](docs/self-update.md)
 - [状态 / 快照 / 端口预检](docs/status-snapshot-port-check.md)
 - [安全边界](docs/security.md)
@@ -192,6 +207,6 @@ tail -f /root/lq-apply-relay.log
 Release 包名：
 
 ```text
-leikwan-toolkit-1.3.0.tar.gz
-leikwan-toolkit-1.3.0.tar.gz.sha256
+leikwan-toolkit-1.3.1.tar.gz
+leikwan-toolkit-1.3.1.tar.gz.sha256
 ```
