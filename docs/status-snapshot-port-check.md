@@ -1,6 +1,6 @@
 ﻿# 状态、快照与端口预检
 
-本文记录状态总览、快照 / 回滚、端口预检，以及 1.3.3 的 DDNS 状态集成。
+本文记录状态总览、快照 / 回滚、端口预检，以及 1.3.4 的 DDNS 状态集成。
 
 ## 状态总览
 
@@ -15,7 +15,7 @@ lq --status-json
 
 `doctor` 用于详细排障，会检查更多链路细节，并在交互菜单中提供部分修复入口。
 
-1.3.3 起，状态总览会显示角色来源、运行中任务、锁状态、最近错误、系统健康度和下一步建议。例如 `network.env + easytier-relay.service`、`entry service`，或真实 relay + entry 混合部署 WARN。`entries.tsv` 不再作为 entry 判据，因为 relay 本来就管理公网入口列表。下一步建议只基于本地配置判断，不联网、不修改系统。
+1.3.4 起，状态总览会显示角色来源、运行中任务、锁状态、最近错误、系统健康度和下一步建议。例如 `network.env + easytier-relay.service`、`entry service`，或真实 relay + entry 混合部署 WARN。`entries.tsv` 不再作为 entry 判据，因为 relay 本来就管理公网入口列表。下一步建议只基于本地配置判断，不联网、不修改系统。
 
 状态缓存文件：
 
@@ -28,7 +28,7 @@ lq --status-json
 
 缓存只记录时间、动作、结果和版本，不写 EasyTier secret。
 
-1.3.3 起，B 利群主机状态总览还会显示 DDNS scope 和三类 DDNS 状态：
+1.3.4 起，B 利群主机状态总览还会显示 DDNS scope 和三类 DDNS 状态：
 
 ```text
 DDNS 自动刷新: active / disabled
@@ -54,8 +54,8 @@ DDNS 最近状态缓存：
 脚本自更新最近状态也会显示在 `lq status` 中：
 
 ```text
-脚本版本: 1.3.3
-最近更新: 2026-05-10 05:30:00 / 1.1.2 -> 1.3.3 / OK
+脚本版本: 1.3.4
+最近更新: 2026-05-10 05:30:00 / 1.1.2 -> 1.3.4 / OK
 ```
 
 `status` 不联网检查 latest release；联网检查只由 `lq update check` 执行。

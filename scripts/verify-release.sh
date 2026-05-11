@@ -42,6 +42,15 @@ bash tests/compact-output-regression.sh
 section "ddns summary regression"
 bash tests/ddns-summary-regression.sh
 
+section "entry ddns regression"
+bash tests/entry-ddns-regression.sh
+
+section "ddns menu regression"
+bash tests/ddns-menu-regression.sh
+
+section "ddns overview regression"
+bash tests/ddns-overview-regression.sh
+
 section "health score regression"
 bash tests/health-score-regression.sh
 

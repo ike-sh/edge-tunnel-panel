@@ -1,6 +1,13 @@
 ﻿# DDNS 后端 / PBR / 公网入口自动刷新
 
-Leikwan Toolkit 1.3.3 的 DDNS 刷新覆盖三类对象：
+Leikwan Toolkit 1.3.4 把 DDNS 明确拆成双端职责：
+
+- A 公网入口机器：负责把自己的当前公网 IP 更新到 DNS 服务商。
+- B 利群主机：负责解析 `entries.tsv public_host`、`forwards.tsv target_host`、PBR 域名规则，并在 IP 变化后同步 nftables / PBR / relay。
+
+B 端不能替 A 端修改 DNS 服务商记录。如果 A 端没有 DDNS 更新器或外部 DDNS 客户端，B 端解析到的仍然会是旧 IP。
+
+B 端 DDNS 监控覆盖三类对象：
 
 - 转发目标：`forwards.tsv` 的 `target_host`
 - 公网入口：`entries.tsv` 的 `public_host`
@@ -16,19 +23,28 @@ lq ddns run --scope forwards
 lq ddns run --scope entries
 lq ddns run --scope pbr
 lq ddns run --scope all
+lq ddns overview
+lq ddns apply-entries
 lq ddns status
 lq ddns enable
 lq ddns disable
 lq ddns logs
+lq entry ddns status
+lq entry ddns setup
+lq entry ddns run
+lq entry ddns enable
+lq entry ddns logs
 lq --ddns-run
 ```
 
 交互菜单路径：
 
 ```text
-利群主机 -> 转发目标管理 -> DDNS 后端 / PBR / 公网入口自动刷新
+主菜单 -> DDNS 自动刷新
 运维命令中心 -> DDNS 自动刷新
 ```
+
+旧的“转发目标管理”中仍保留兼容入口，但会提示 DDNS 已提升为主菜单一等功能。
 
 ## 配置文件
 
@@ -201,10 +217,10 @@ LAST_DDNS_RELAY_RESTARTED=
 
 日志会记录 scope、三类对象 checked / changed / failed、是否应用 nftables、是否应用 PBR、是否需要或已经重启 relay。日志不会写入 EasyTier network secret。
 
-1.3.3 起，`lq ddns run`、菜单刷新和日志中的末尾摘要改为面向运维人员阅读的分区格式：
+1.3.4 起，`lq ddns run`、菜单刷新和日志中的末尾摘要改为面向运维人员阅读的分区格式：
 
 ```text
-DDNS 摘要
+DDNS 检测摘要
 ----------------------------------------
 后端转发：
 - 检查 4
@@ -242,4 +258,4 @@ DDNS 全流程使用：
 
 如果已有 Leikwan 任务运行，timer 会跳过本次刷新，不视为失败。
 
-1.3.3 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。
+1.3.4 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。

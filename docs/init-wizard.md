@@ -1,6 +1,6 @@
 # 初始化向导
 
-Leikwan Toolkit 1.3.3 新增 `lq init`，适合首次部署、重装恢复和不确定当前机器角色时使用。
+Leikwan Toolkit 1.3.4 新增 `lq init`，适合首次部署、重装恢复和不确定当前机器角色时使用。
 
 ## 入口
 
@@ -28,7 +28,7 @@ lq plan
 
 B 利群主机负责 EasyTier relay、entries、forwards、PBR、DDNS 和 nftables 转发。A 公网入口负责 entry service、端口池和入口网络码部署。
 
-1.3.3 起，角色检测不会把 B 机器上的 `entries.tsv` 当成 entry 角色。只有 entry service、`ROLE=cloud-entry` 或 entry env 这类 A 侧信号存在时，才识别为公网入口。
+1.3.4 起，角色检测不会把 B 机器上的 `entries.tsv` 当成 entry 角色。只有 entry service、`ROLE=cloud-entry` 或 entry env 这类 A 侧信号存在时，才识别为公网入口。
 
 ## B 利群主机
 

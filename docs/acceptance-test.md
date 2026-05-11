@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.3.3 正式版验收。
+本页用于 Leikwan Toolkit 1.3.4 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.3.3"
-leikwan-toolkit 1.3.3
+TOOL_VERSION="1.3.4"
+leikwan-toolkit 1.3.4
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.3.3.tar.gz
-dist/leikwan-toolkit-1.3.3.tar.gz.sha256
+dist/leikwan-toolkit-1.3.4.tar.gz
+dist/leikwan-toolkit-1.3.4.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -48,6 +48,9 @@ bash tests/role-detection-regression.sh
 bash tests/doctor-reset-regression.sh
 bash tests/compact-output-regression.sh
 bash tests/ddns-summary-regression.sh
+bash tests/entry-ddns-regression.sh
+bash tests/ddns-menu-regression.sh
+bash tests/ddns-overview-regression.sh
 bash tests/health-score-regression.sh
 bash tests/update-regression.sh
 bash tests/package-regression.sh
@@ -179,6 +182,12 @@ lq ddns run --scope forwards
 lq ddns run --scope entries
 lq ddns run --scope pbr
 lq ddns run --scope all
+lq ddns overview
+lq ddns apply-entries
+lq entry ddns status
+lq entry ddns setup
+lq entry ddns run
+lq entry ddns enable
 lq --ddns-run
 ```
 
@@ -189,6 +198,7 @@ lq --ddns-run
 - forward IP 未变化时不重应用 nftables。
 - forward IP 变化时更新 `resolved.tsv`，创建 `auto-before-ddns-apply-*.tar.gz` 快照并安全重应用 nftables。
 - entry IP 变化时更新 `resolved-entries.tsv`，默认只记录 `relay restart needed`，timer 不自动重启 relay。
+- A 端 `entry ddns` 可用 custom-url / custom-cmd 更新本机公网入口域名；若域名由外部 DDNS 客户端维护，可保持 disabled。
 - pbr domain IP 变化时更新 `resolved-pbr-domains.tsv`，生成新的 `pbr-domain:<name>` `/32` 规则。
 - 解析失败时保留旧 resolved IP。
 

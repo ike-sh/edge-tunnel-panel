@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.3.3 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.3.4 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -17,7 +17,7 @@ lq status
 
 `lq init --dry-run` 只输出初始化计划，不写文件。`lq status` 会显示角色、角色来源、角色混合 WARN 和下一步建议。
 
-1.3.3 起，B relay 不会因为存在 `entries.tsv` 被误判为 entry。只有 relay service / `ROLE=leikwan-relay` 和 entry service / `ROLE=cloud-entry` / entry env 同时存在时，才会提示高级混合部署。
+1.3.4 起，B relay 不会因为存在 `entries.tsv` 被误判为 entry。只有 relay service / `ROLE=leikwan-relay` 和 entry service / `ROLE=cloud-entry` / entry env 同时存在时，才会提示高级混合部署。
 
 ## 一键诊断
 
@@ -134,7 +134,7 @@ lq logs doctor
 
 ## 自更新后仍看到旧版本
 
-如果在菜单中执行更新后，磁盘上的 `/root/leikwan-toolkit.sh` 已经替换成功，但当前菜单仍显示旧运行版本，这是因为旧 Bash 进程仍在内存中。1.3.3 起，菜单更新成功后会自动重新载入新脚本；如果自动 reload 失败，会明确提示重新执行：
+如果在菜单中执行更新后，磁盘上的 `/root/leikwan-toolkit.sh` 已经替换成功，但当前菜单仍显示旧运行版本，这是因为旧 Bash 进程仍在内存中。1.3.4 起，菜单更新成功后会自动重新载入新脚本；如果自动 reload 失败，会明确提示重新执行：
 
 ```bash
 lq
@@ -151,7 +151,7 @@ lq update status
 
 ```text
 当前运行版本: 1.3.2
-当前安装版本: 1.3.3
+当前安装版本: 1.3.4
 快捷命令: /usr/local/bin/lq -> /root/leikwan-toolkit.sh
 ```
 
@@ -256,13 +256,20 @@ lq ddns run
 lq ddns run --scope forwards
 lq ddns run --scope entries
 lq ddns run --scope pbr
+lq ddns overview
+lq ddns apply-entries
 lq ddns enable
 lq ddns logs
+lq entry ddns status
+lq entry ddns setup
+lq entry ddns run
 ```
 
 如果 `lq ddns run --scope forwards` 显示 IP 未变化，不会重应用 nftables。如果显示解析变化，会更新 `resolved.tsv` 并安全重应用转发规则。解析失败时会保留旧 IP。
 
-公网入口 DDNS 变化时，默认不会自动重启 relay。状态中会显示 `relay restart needed`，因为 EasyTier 运行中不一定重新解析 peer 域名。建议在维护窗口重启 relay；只有设置 `DDNS_ENTRY_AUTO_RESTART_RELAY=true` 后，timer 才会自动重启。
+公网入口 DDNS 分两端：A 端负责把自己的当前公网 IP 更新到 DNS 服务商，B 端只负责解析和监控 `entries.tsv public_host`。如果 A 端没有 `entry ddns` 或外部 DDNS 客户端，B 端看到的仍会是旧 IP。
+
+公网入口 DDNS 变化时，默认不会自动重启 relay。状态中会显示 `relay restart needed`，因为 EasyTier 运行中不一定重新解析 peer 域名。建议执行 `lq ddns apply-entries` 并在维护窗口确认重启；只有设置 `DDNS_ENTRY_AUTO_RESTART_RELAY=true` 后，timer 才会自动重启。
 
 forward 来源 PBR 可执行：
 

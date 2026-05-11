@@ -17,7 +17,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 fixture="${TMP_DIR}/redact-tree"
-mkdir -p "$fixture/status" "$fixture/ddns" "$fixture/update" "$fixture/outputs" "$fixture/debug"
+mkdir -p "$fixture/status" "$fixture/ddns" "$fixture/update" "$fixture/outputs" "$fixture/debug" "$fixture/entry" "$fixture/logs"
 secret_value="abc123456789"
 base64_value="QUJDREVGR0hJSktMTU5PUA=="
 token_value="token-value-12345"
@@ -33,6 +33,11 @@ cp "${fixture}/status/last-config-export.env" "${fixture}/ddns/last-ddns.env"
 cp "${fixture}/status/last-config-export.env" "${fixture}/update/last-update.env"
 cp "${fixture}/status/last-config-export.env" "${fixture}/outputs/forward-endpoints.json"
 cp "${fixture}/status/last-config-export.env" "${fixture}/debug/leikwan-debug-report.txt"
+{
+  printf 'ENTRY_DDNS_UPDATE_URL=https://ddns.example.test/update?%s=%s&domain={host}&ip={ip}\n' "token" "$token_value"
+  printf 'ENTRY_DDNS_UPDATE_CMD=/usr/local/bin/update-ddns --%s %s {host} {ip}\n' "token" "$token_value"
+} >"${fixture}/entry/ddns.env"
+cp "${fixture}/entry/ddns.env" "${fixture}/logs/leikwan-entry-ddns.log"
 
 config_sensitive_redact_tree "$fixture"
 for value in "$secret_value" "$base64_value" "$token_value" "$password_value"; do

@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-当前版本：`1.3.3`
+当前版本：`1.3.4`
 
 ## 项目简介
 
@@ -20,7 +20,7 @@ Leikwan Toolkit 是一个面向多公网入口场景的快速组网与四层转�
 - TCP+UDP EasyTier peer 展开和 A/B 双侧 DNAT
 - 转发目标、端口池、端口冲突预检和推荐避让
 - IPv4 PBR、forward 来源 PBR、域名 PBR
-- DDNS 刷新：后端目标、公网入口域名、PBR 域名
+- DDNS 双端架构：A 端主动更新公网入口域名，B 端监控后端目标、公网入口域名、PBR 域名
 - 状态总览、doctor 诊断、状态缓存和脱敏 debug report
 - 状态 / doctor JSON 摘要、简洁模式、健康度评分、运行锁状态和最近错误提示
 - doctor 自动修复常见问题：nftables、MSS clamp、DDNS timer、快捷命令、权限和 stale lock
@@ -112,7 +112,13 @@ lq pbr sync-from-forwards
 lq pbr domain list
 lq pbr domain sync
 lq ddns status
+lq ddns overview
 lq ddns run --scope all
+lq ddns apply-entries
+lq entry ddns status
+lq entry ddns setup
+lq entry ddns run
+lq entry ddns enable
 lq update check
 lq update run
 lq update status
@@ -194,7 +200,7 @@ nohup lq forward apply-relay --auto-fix-route >/root/lq-apply-relay.log 2>&1 &
 tail -f /root/lq-apply-relay.log
 ```
 
-如果公网入口 DDNS 变化，默认只记录 `relay restart needed`，不会自动重启 relay。可在维护窗口通过菜单重启 relay。
+如果公网入口 DDNS 变化，默认只记录 `relay restart needed`，不会自动重启 relay。可在维护窗口执行 `lq ddns apply-entries`，或通过菜单确认重启。
 
 ## 文档索引
 
@@ -202,6 +208,7 @@ tail -f /root/lq-apply-relay.log
 - [初始化向导](docs/init-wizard.md)
 - [运维命令中心](docs/operations-center.md)
 - [DDNS 自动刷新](docs/ddns-refresh.md)
+- [A 端公网入口 DDNS](docs/entry-ddns.md)
 - [PBR](docs/pbr.md)
 - [配置迁移](docs/config-migration.md)
 - [端点输出](docs/endpoint-output.md)
@@ -221,6 +228,6 @@ tail -f /root/lq-apply-relay.log
 Release 包名：
 
 ```text
-leikwan-toolkit-1.3.3.tar.gz
-leikwan-toolkit-1.3.3.tar.gz.sha256
+leikwan-toolkit-1.3.4.tar.gz
+leikwan-toolkit-1.3.4.tar.gz.sha256
 ```

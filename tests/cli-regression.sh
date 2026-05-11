@@ -68,11 +68,15 @@ run_cli --dry-run --doctor --auto-fix
 run_cli port check
 run_cli --port-check
 run_cli ddns status
+run_cli ddns overview
+run_cli ddns entry status
+run_cli entry ddns status
 run_cli update status
 run_cli config list
 run_cli output show
 run_cli logs
 run_cli logs ddns
+run_cli logs entry-ddns
 run_cli logs apply
 run_cli logs update
 run_cli logs doctor
