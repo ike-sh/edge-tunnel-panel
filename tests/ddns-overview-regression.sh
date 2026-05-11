@@ -44,7 +44,7 @@ LAST_DDNS_RELAY_RESTART_NEEDED=true
 LAST_DDNS_NFT_APPLIED=false
 LAST_DDNS_PBR_APPLIED=false
 LAST_DDNS_RELAY_RESTARTED=false
-LAST_DDNS_VERSION=1.3.4
+LAST_DDNS_VERSION=1.3.5
 EOF
 entry_ddns_write_config true home.example.test custom-url "" "" "" "" 5min last
 cat >"$ENTRY_DDNS_STATUS_FILE" <<'EOF'
@@ -54,16 +54,17 @@ LAST_ENTRY_DDNS_HOST=home.example.test
 LAST_ENTRY_DDNS_PUBLIC_IP=198.51.100.10
 LAST_ENTRY_DDNS_RESOLVED_IP=198.51.100.10
 LAST_ENTRY_DDNS_CHANGED=false
-LAST_ENTRY_DDNS_VERSION=1.3.4
+LAST_ENTRY_DDNS_VERSION=1.3.5
 EOF
 
 overview="$(ddns_overview)"
 grep -q "DDNS 总览" <<<"$overview"
-grep -q "B 端监控" <<<"$overview"
-grep -q "公网入口域名" <<<"$overview"
+grep -q "B 端监控:" <<<"$overview"
+grep -q "公网入口: enabled，域名 1，relay restart needed: yes" <<<"$overview"
 grep -q "relay restart needed: yes" <<<"$overview"
-grep -q "A 端更新" <<<"$overview"
+grep -q "A 端更新:" <<<"$overview"
 grep -q "一致性: OK" <<<"$overview"
+grep -q "整体状态: WARN" <<<"$overview"
 
 status_out="$(ddns_status)"
 grep -q "公网入口 DDNS:" <<<"$status_out"

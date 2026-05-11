@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,7 +32,7 @@ LAST_ENTRY_DDNS_HOST=home.example.test
 LAST_ENTRY_DDNS_PUBLIC_IP=198.51.100.10
 LAST_ENTRY_DDNS_RESOLVED_IP=198.51.100.10
 LAST_ENTRY_DDNS_CHANGED=false
-LAST_ENTRY_DDNS_VERSION=1.3.4
+LAST_ENTRY_DDNS_VERSION=1.3.5
 EOF
 
 [[ -f "$ENTRY_DDNS_CONFIG" ]] || { echo "FAIL: entry ddns config not created" >&2; exit 1; }
@@ -40,6 +41,10 @@ status_out="$(entry_ddns_status)"
 grep -q "A 端公网入口 DDNS 状态" <<<"$status_out"
 grep -q "home.example.test" <<<"$status_out"
 grep -q "一致性: OK" <<<"$status_out"
+
+summary_out="$(entry_ddns_current_config_summary)"
+grep -q "A 端公网入口 DDNS 当前配置" <<<"$summary_out"
+grep -q "provider: custom-url" <<<"$summary_out"
 
 safe_url="$(redact_sensitive_inline "$update_url")"
 safe_cmd="$(redact_sensitive_inline "$update_cmd")"
@@ -72,6 +77,21 @@ grep -q "未配置 A 端 DDNS 更新器" <<<"$out"
 if grep -q "错误：脚本在第" <<<"$out"; then
   echo "FAIL: entry ddns status triggered global trap" >&2
   echo "$out" >&2
+  exit 1
+fi
+
+entry_ddns_write_config true home.example.test custom-url "$update_url" "" "$secret_value" "" 5min auto
+DRY_RUN=1
+detect_public_ipv4() { printf '%s' "198.51.100.10"; }
+resolve_ipv4_first() { printf '%s' "198.51.100.10"; }
+entry_ddns_run_update() { echo "UPDATE_CALLED"; return 0; }
+same_out="$(entry_ddns_run 2>&1)"
+grep -q "正在检测当前公网 IPv4" <<<"$same_out"
+grep -q "正在解析域名：home.example.test" <<<"$same_out"
+grep -q "DDNS 已一致，无需更新" <<<"$same_out"
+if grep -q "UPDATE_CALLED" <<<"$same_out"; then
+  echo "FAIL: entry ddns run called updater when already consistent" >&2
+  echo "$same_out" >&2
   exit 1
 fi
 

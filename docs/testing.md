@@ -1,6 +1,6 @@
 # 测试与 release 验证
 
-Leikwan Toolkit 1.3.4 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
+Leikwan Toolkit 1.3.5 增加正式回归测试入口，用于发布前检查 CLI、渲染、打包和脱敏边界。
 
 ## 一键验证
 
@@ -25,6 +25,7 @@ bash tests/ddns-summary-regression.sh
 bash tests/entry-ddns-regression.sh
 bash tests/ddns-menu-regression.sh
 bash tests/ddns-overview-regression.sh
+bash tests/ddns-consistency-regression.sh
 bash tests/health-score-regression.sh
 bash tests/update-regression.sh
 bash tests/package-regression.sh
@@ -53,6 +54,7 @@ bash tests/ddns-summary-regression.sh
 bash tests/entry-ddns-regression.sh
 bash tests/ddns-menu-regression.sh
 bash tests/ddns-overview-regression.sh
+bash tests/ddns-consistency-regression.sh
 bash tests/health-score-regression.sh
 bash tests/update-regression.sh
 bash tests/package-regression.sh
@@ -71,6 +73,7 @@ bash tests/redaction-regression.sh
 - `entry-ddns-regression.sh`：检查 A 端 DDNS status、配置生成、custom-url / custom-cmd 脱敏和 JSON 字段。
 - `ddns-menu-regression.sh`：检查主菜单和 DDNS 菜单包含 A/B 双端入口。
 - `ddns-overview-regression.sh`：检查 `lq ddns overview`、B 端 entries 状态和 A 端一致性摘要。
+- `ddns-consistency-regression.sh`：检查 `lq ddns check-consistency` 不写状态，并能比较 B entries 缓存与 A entry DDNS 摘要。
 - `health-score-regression.sh`：检查健康度评分和 JSON 字段。
 - `update-regression.sh`：模拟运行进程版本与安装脚本版本不一致，检查 update check/status 和菜单 reload 提示。
 - `package-regression.sh`：检查 release 包内容边界。

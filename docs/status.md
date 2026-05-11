@@ -1,6 +1,6 @@
 # 状态输出
 
-Leikwan Toolkit 1.3.4 对 `lq status` 做了稳定化整理，目标是让日常巡检像正式运维系统一样可读、可脚本化、不会误报角色。
+Leikwan Toolkit 1.3.5 对 `lq status` 做了稳定化整理，目标是让日常巡检像正式运维系统一样可读、可脚本化、不会误报角色。
 
 ## 常用命令
 
@@ -63,7 +63,7 @@ JSON 输出不受简洁模式影响，仍输出结构化摘要。
 
 ## DDNS 总览
 
-1.3.4 起，`lq status` 会区分两类 DDNS：
+1.3.5 起，`lq status` 会区分两类 DDNS：
 
 - B 端监控：后端转发目标、公网入口域名、域名 PBR。
 - A 端更新器：本机公网入口域名是否启用更新、最近公网 IP / 解析 IP 是否一致。
@@ -71,11 +71,20 @@ JSON 输出不受简洁模式影响，仍输出结构化摘要。
 如果 B 端检测到公网入口域名变化但 relay 尚未重启，状态会提示：
 
 ```text
-[WARN] 公网入口 DDNS 已变化，EasyTier relay 可能仍在使用旧解析。
+[WARN] 公网入口 DDNS 已变化，relay 可能需要重启。
 [INFO] 可执行：lq ddns apply-entries
 ```
 
-JSON 输出新增 `entry_ddns_enabled`、`entry_ddns_host`、`entry_ddns_public_ip`、`entry_ddns_resolved_ip`、`entry_ddns_match`、`relay_restart_needed`，不包含 token、secret 或自定义更新 URL。
+状态块还会显示：
+
+```text
+DDNS:
+- B 端监控: active / disabled / not configured
+- A 端更新: active / disabled / not configured
+- 公网入口变化: none / relay restart needed
+```
+
+JSON 输出包含 `entry_ddns_enabled`、`entry_ddns_host`、`entry_ddns_public_ip`、`entry_ddns_resolved_ip`、`entry_ddns_match`、`relay_restart_needed`，不包含 token、secret 或自定义更新 URL。
 
 ## disabled 项
 

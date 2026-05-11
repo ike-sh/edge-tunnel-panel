@@ -1,6 +1,6 @@
 ﻿# 工作流
 
-本文说明 Leikwan Toolkit 1.3.4 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.3.5 的推荐操作顺序。
 
 ## 角色
 
@@ -199,6 +199,8 @@ lq pbr domain sync
 lq ddns enable
 lq ddns status
 lq ddns run --scope all
+lq ddns overview
+lq ddns check-consistency
 ```
 
 常用 scope：
@@ -211,11 +213,21 @@ lq ddns run --scope pbr
 
 脚本会定期检查 enabled 转发目标中的域名后端、公网入口域名和域名 PBR。后端变化时更新 `resolved.tsv`、创建自动快照并安全重应用 nftables；PBR 变化时同步 `/32` 规则并应用 PBR；解析失败时保留旧 IP。
 
-公网入口 DDNS 变化默认不会自动重启 relay，只会记录 `relay restart needed`。原因是 relay 重启会短暂中断所有入口，而 EasyTier 运行中又不一定重新解析 peer 域名。确认可以接受维护窗口自动重启时，可设置：
+公网入口 DDNS 变化默认不会自动重启 relay，只会记录 `relay restart needed`。维护窗口内执行 `lq ddns apply-entries` 可交互确认重启。原因是 relay 重启会短暂中断所有入口，而 EasyTier 运行中又不一定重新解析 peer 域名。确认可以接受维护窗口自动重启时，可设置：
 
 ```text
 DDNS_ENTRY_AUTO_RESTART_RELAY=true
 ```
+
+A 公网入口如果需要由本工具主动更新 DNS 服务商记录，在 A 上执行：
+
+```bash
+lq entry ddns setup
+lq entry ddns run
+lq entry ddns enable
+```
+
+如果域名已经由路由器或外部 DDNS 客户端维护，可以不启用 A 端更新器；B 端监控仍可检测解析变化。
 
 forward 来源 PBR 可手动同步：
 

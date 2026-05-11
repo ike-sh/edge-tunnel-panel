@@ -1,6 +1,6 @@
 # 安全边界
 
-本页汇总 Leikwan Toolkit 1.3.4 的敏感信息和高危操作边界。
+本页汇总 Leikwan Toolkit 1.3.5 的敏感信息和高危操作边界。
 
 ## 敏感内容
 
@@ -107,7 +107,7 @@ JSON 只输出状态摘要、计数、健康度评分和 WARN / FAIL 概要，�
 
 ## 角色保护
 
-1.3.4 起，脚本会根据真正的角色信号做检测：relay service 或 `ROLE=leikwan-relay` 表示 B 角色；entry service、`ROLE=cloud-entry` 或 entry env 表示 A 角色。`entries.tsv` 不再作为 entry 判据，`forwards.tsv` 也不能单独决定角色。B 菜单在 A 机器执行高危操作、A 菜单在 B 机器执行高危操作时会先提示角色不匹配，交互模式默认不继续。
+1.3.5 起，脚本会根据真正的角色信号做检测：relay service 或 `ROLE=leikwan-relay` 表示 B 角色；entry service、`ROLE=cloud-entry` 或 entry env 表示 A 角色。`entries.tsv` 不再作为 entry 判据，`forwards.tsv` 也不能单独决定角色。B 菜单在 A 机器执行高危操作、A 菜单在 B 机器执行高危操作时会先提示角色不匹配，交互模式默认不继续。
 
 ## A 端 DDNS 凭据
 
@@ -126,7 +126,7 @@ A 端 `lq entry ddns setup` 可能保存 DNS 服务商 token、custom URL 或 cu
 - custom-url query
 - `ENTRY_DDNS_UPDATE_CMD`
 
-完整配置包仍可能包含这些信息，只适合自己迁移恢复，不能公开分享。
+完整配置包会包含 `/etc/leikwan-toolkit/entry/ddns.env` 和最近的 `last-entry-ddns.env`，仍可能包含这些信息，只适合自己迁移恢复，不能公开分享。
 
 如果同时检测到真实 relay 和 entry 信号，`lq status` 会提示“高级混合部署：relay + entry”。高级部署可以继续操作，但普通部署建议先执行 `lq --doctor` 确认。
 

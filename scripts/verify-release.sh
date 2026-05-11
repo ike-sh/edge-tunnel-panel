@@ -51,6 +51,9 @@ bash tests/ddns-menu-regression.sh
 section "ddns overview regression"
 bash tests/ddns-overview-regression.sh
 
+section "ddns consistency regression"
+bash tests/ddns-consistency-regression.sh
+
 section "health score regression"
 bash tests/health-score-regression.sh
 

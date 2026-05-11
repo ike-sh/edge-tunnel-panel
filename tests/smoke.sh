@@ -52,7 +52,7 @@ run_ok bash leikwan-toolkit.sh --version
 run_ok bash leikwan-toolkit.sh --help
 
 version="$(bash leikwan-toolkit.sh --version)"
-[[ "$version" == "leikwan-toolkit 1.3.4" ]] || { echo "FAIL: version output: ${version}" >&2; exit 1; }
+[[ "$version" == "leikwan-toolkit 1.3.5" ]] || { echo "FAIL: version output: ${version}" >&2; exit 1; }
 
 help_text="$(bash leikwan-toolkit.sh --help)"
 grep -q "init" <<<"$help_text"
@@ -82,6 +82,7 @@ run_ok bash leikwan-toolkit.sh --status-json
 run_ok bash leikwan-toolkit.sh port check
 run_ok bash leikwan-toolkit.sh ddns status
 run_ok bash leikwan-toolkit.sh ddns overview
+run_ok bash leikwan-toolkit.sh ddns check-consistency
 run_ok bash leikwan-toolkit.sh entry ddns status
 run_ok bash leikwan-toolkit.sh logs
 run_ok bash leikwan-toolkit.sh logs ddns

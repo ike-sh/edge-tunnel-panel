@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-当前版本：`1.3.4`
+当前版本：`1.3.5`
 
 ## 项目简介
 
@@ -115,6 +115,7 @@ lq ddns status
 lq ddns overview
 lq ddns run --scope all
 lq ddns apply-entries
+lq ddns check-consistency
 lq entry ddns status
 lq entry ddns setup
 lq entry ddns run
@@ -124,6 +125,7 @@ lq update run
 lq update status
 lq logs
 lq logs ddns
+lq logs entry-ddns
 ```
 
 配置导入 / 导出：
@@ -228,6 +230,6 @@ tail -f /root/lq-apply-relay.log
 Release 包名：
 
 ```text
-leikwan-toolkit-1.3.4.tar.gz
-leikwan-toolkit-1.3.4.tar.gz.sha256
+leikwan-toolkit-1.3.5.tar.gz
+leikwan-toolkit-1.3.5.tar.gz.sha256
 ```

@@ -64,6 +64,6 @@ grep -q "查看状态总览" <<<"$ops_out"
 main_out="$(print_main_menu_options)"
 grep -q "DDNS 自动刷新" <<<"$main_out"
 ddns_out="$(print_ddns_menu_options)"
-grep -q "A 端：配置本机公网入口 DDNS" <<<"$ddns_out"
+grep -q "A：配置本机公网入口 DDNS" <<<"$ddns_out"
 
 echo "[OK] render regression passed"

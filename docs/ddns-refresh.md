@@ -1,6 +1,6 @@
 ﻿# DDNS 后端 / PBR / 公网入口自动刷新
 
-Leikwan Toolkit 1.3.4 把 DDNS 明确拆成双端职责：
+Leikwan Toolkit 1.3.5 把 DDNS 明确拆成双端职责：
 
 - A 公网入口机器：负责把自己的当前公网 IP 更新到 DNS 服务商。
 - B 利群主机：负责解析 `entries.tsv public_host`、`forwards.tsv target_host`、PBR 域名规则，并在 IP 变化后同步 nftables / PBR / relay。
@@ -25,6 +25,7 @@ lq ddns run --scope pbr
 lq ddns run --scope all
 lq ddns overview
 lq ddns apply-entries
+lq ddns check-consistency
 lq ddns status
 lq ddns enable
 lq ddns disable
@@ -145,8 +146,12 @@ LAST_DDNS_RELAY_RESTART_NEEDED=true
 交互执行时会询问是否立即重启 relay；timer 非交互模式默认不重启。选择不重启时，可在维护窗口执行：
 
 ```text
-利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务
+lq ddns apply-entries
 ```
+
+`lq ddns run --scope entries` 会输出公网入口 DDNS 检测分区。发现变化时会显示入口名、域名、上次解析、当前解析和 `relay restart needed`；没有变化时只显示域名入口数量、变化数、失败数和是否需要重启 relay。
+
+`lq ddns apply-entries` 只处理公网入口域名变化。如果没有 pending 变化，会直接输出 OK；如果需要 relay 重新解析 peer 域名，交互模式会提示重启风险，确认后创建快照、重启 relay，并执行 enabled entries 测试。非交互模式只有在 `DDNS_ENTRY_AUTO_RESTART_RELAY=true` 时才会自动重启。
 
 ## 域名 PBR DDNS
 
@@ -217,7 +222,26 @@ LAST_DDNS_RELAY_RESTARTED=
 
 日志会记录 scope、三类对象 checked / changed / failed、是否应用 nftables、是否应用 PBR、是否需要或已经重启 relay。日志不会写入 EasyTier network secret。
 
-1.3.4 起，`lq ddns run`、菜单刷新和日志中的末尾摘要改为面向运维人员阅读的分区格式：
+## 总览与一致性检查
+
+```bash
+lq ddns overview
+lq ddns check-consistency
+```
+
+`overview` 适合日常巡检，会分别显示：
+
+- B 端监控：后端转发、公网入口、域名 PBR、timer。
+- A 端更新：本机域名、最近公网 IP、最近解析 IP、一致性、timer。
+
+任意一端未配置时只显示“未配置”，不会报错。
+
+`check-consistency` 不修改系统，只比较：
+
+- B 端 enabled `entries.tsv public_host` 的当前解析和 `resolved-entries.tsv` 缓存。
+- 如果本机也配置了 A 端 DDNS，则对比 `ENTRY_DDNS_HOST`、当前公网 IP 和域名解析 IP。
+
+1.3.5 起，`lq ddns run`、菜单刷新和日志中的末尾摘要改为面向运维人员阅读的分区格式：
 
 ```text
 DDNS 检测摘要
@@ -258,4 +282,4 @@ DDNS 全流程使用：
 
 如果已有 Leikwan 任务运行，timer 会跳过本次刷新，不视为失败。
 
-1.3.4 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。
+1.3.5 起，锁会记录 PID。若检测到 PID 已不存在的 stale lock，下次获取锁时会自动清理并输出 WARN。

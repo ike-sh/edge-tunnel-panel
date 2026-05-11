@@ -69,6 +69,7 @@ run_cli port check
 run_cli --port-check
 run_cli ddns status
 run_cli ddns overview
+run_cli ddns check-consistency
 run_cli ddns entry status
 run_cli entry ddns status
 run_cli update status

@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.3.4 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.3.5 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -17,7 +17,7 @@ lq status
 
 `lq init --dry-run` 只输出初始化计划，不写文件。`lq status` 会显示角色、角色来源、角色混合 WARN 和下一步建议。
 
-1.3.4 起，B relay 不会因为存在 `entries.tsv` 被误判为 entry。只有 relay service / `ROLE=leikwan-relay` 和 entry service / `ROLE=cloud-entry` / entry env 同时存在时，才会提示高级混合部署。
+1.3.5 起，B relay 不会因为存在 `entries.tsv` 被误判为 entry。只有 relay service / `ROLE=leikwan-relay` 和 entry service / `ROLE=cloud-entry` / entry env 同时存在时，才会提示高级混合部署。
 
 ## 一键诊断
 
@@ -115,12 +115,37 @@ lq --port-check
 ```bash
 lq logs
 lq logs ddns
+lq logs entry-ddns
 lq logs apply
 lq logs update
 lq logs doctor
 ```
 
 无日志时会友好提示。清理运行日志使用 `lq logs clean`，它不会删除配置、快照或备份。
+
+## A/B DDNS 不一致
+
+A 公网入口端负责把本机公网 IP 更新到 DNS 服务商；B 利群主机只负责检测域名解析变化并同步本机规则。B 端不能替 A 端更新 DNS 记录。
+
+先看总览：
+
+```bash
+lq ddns overview
+lq ddns check-consistency
+```
+
+如果 A 端公网 IP 和域名解析不一致，先在 A 上执行：
+
+```bash
+lq entry ddns status
+lq entry ddns run
+```
+
+如果 B 端显示 `relay restart needed`，说明公网入口域名已经变化，relay 可能需要重启才能重新解析 peer。维护窗口内执行：
+
+```bash
+lq ddns apply-entries
+```
 
 ## 并发锁
 
@@ -134,7 +159,7 @@ lq logs doctor
 
 ## 自更新后仍看到旧版本
 
-如果在菜单中执行更新后，磁盘上的 `/root/leikwan-toolkit.sh` 已经替换成功，但当前菜单仍显示旧运行版本，这是因为旧 Bash 进程仍在内存中。1.3.4 起，菜单更新成功后会自动重新载入新脚本；如果自动 reload 失败，会明确提示重新执行：
+如果在菜单中执行更新后，磁盘上的 `/root/leikwan-toolkit.sh` 已经替换成功，但当前菜单仍显示旧运行版本，这是因为旧 Bash 进程仍在内存中。1.3.5 起，菜单更新成功后会自动重新载入新脚本；如果自动 reload 失败，会明确提示重新执行：
 
 ```bash
 lq
@@ -151,7 +176,7 @@ lq update status
 
 ```text
 当前运行版本: 1.3.2
-当前安装版本: 1.3.4
+当前安装版本: 1.3.5
 快捷命令: /usr/local/bin/lq -> /root/leikwan-toolkit.sh
 ```
 

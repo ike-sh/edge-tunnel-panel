@@ -1,6 +1,6 @@
 # doctor 诊断
 
-Leikwan Toolkit 1.3.4 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
+Leikwan Toolkit 1.3.5 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
 
 ## 常用命令
 
@@ -72,9 +72,9 @@ JSON 输出不包含 EasyTier secret、配对码 base64、token 或 password。
 
 ## DDNS 双端检查
 
-1.3.4 起，doctor 会同时提示 A/B 两侧 DDNS 边界：
+1.3.5 起，doctor 会同时提示 A/B 两侧 DDNS 边界：
 
-- A 公网入口使用域名但本机 DDNS 更新器未启用时，会 WARN，并提示 `lq entry ddns setup`。如果域名由其它客户端维护，可以忽略。
+- A 公网入口使用域名但本机 DDNS 更新器未启用时，会 WARN，并提示 `lq entry ddns setup`。如果域名由外部 DDNS 客户端维护，可以忽略。
 - B 利群主机检测到 enabled 公网入口域名但 B 端 DDNS timer 未启用时，会提示 `lq ddns enable`。
 - B 端发现公网入口域名变化且 relay 尚未重启时，会提示 `lq ddns apply-entries`。
 
