@@ -12,6 +12,8 @@ import (
 	"github.com/ike-sh/edge-tunnel-panel/panel/agent/internal/agent"
 )
 
+var version = "v0.1.0-mvp"
+
 func main() {
 	cfg := agent.ConfigFromEnv()
 	once := flag.Bool("once", false, "run one report/task cycle and exit")
@@ -27,7 +29,7 @@ func main() {
 	flag.StringVar(&cfg.StateDir, "state-dir", cfg.StateDir, "state dir")
 	flag.Parse()
 	if *showVersion {
-		fmt.Println(agent.Version)
+		fmt.Printf("edge-tunnel-agent %s\n", version)
 		return
 	}
 	_ = cfg.Normalize()

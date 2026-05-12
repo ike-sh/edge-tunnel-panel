@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -8,6 +10,8 @@ import (
 
 	"github.com/ike-sh/edge-tunnel-panel/panel/controller/internal/controller"
 )
+
+var version = "v0.1.0-mvp"
 
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -17,6 +21,12 @@ func getenv(key, fallback string) string {
 }
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version")
+	flag.Parse()
+	if *showVersion {
+		fmt.Printf("edge-tunnel-controller %s\n", version)
+		return
+	}
 	listen := getenv("EDGE_LISTEN", "0.0.0.0:18080")
 	dataDir := getenv("EDGE_DATA_DIR", "/var/lib/edge-tunnel/controller")
 	webDir := getenv("EDGE_WEB_DIR", filepath.Join(dataDir, "web"))

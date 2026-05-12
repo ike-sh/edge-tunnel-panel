@@ -36,6 +36,20 @@ USAGE
 log() { printf '[edge-tunnel-controller] %s\n' "$*"; }
 fail() { printf '[edge-tunnel-controller] ERROR: %s\n' "$*" >&2; exit 1; }
 
+find_file_cmd() {
+  if command -v file >/dev/null 2>&1; then
+    printf 'file\n'
+    return 0
+  fi
+  for candidate in "/mnt/host/d/Program Files/Git/usr/bin/file.exe" "/mnt/host/c/Program Files/Git/usr/bin/file.exe" "/d/Program Files/Git/usr/bin/file.exe" "/c/Program Files/Git/usr/bin/file.exe"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
     fail "please run as root"
@@ -98,6 +112,12 @@ install_from_release() {
   if [ ! -f "$tmp/edge-tunnel-controller" ]; then
     find "$tmp" -maxdepth 3 -type f | sort >&2
     fail "edge-tunnel-controller not found in release archive"
+  fi
+  if file_cmd="$(find_file_cmd)"; then
+    "$file_cmd" "$tmp/edge-tunnel-controller" || true
+  fi
+  if ! "$tmp/edge-tunnel-controller" --version >/dev/null 2>&1; then
+    fail "downloaded edge-tunnel-controller cannot run on this machine; check release asset architecture"
   fi
   install -m 0755 "$tmp/edge-tunnel-controller" "$INSTALL_DIR/edge-tunnel-controller"
   if [ -d "$tmp/web" ]; then
