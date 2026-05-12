@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,17 +43,69 @@ func NewServer(store *Store, agentToken, operatorToken string, strictAuth bool, 
 	mux.HandleFunc("/api/v1/tasks/", s.handleTasks)
 	mux.HandleFunc("/api/v1/ddns", s.handleDDNS)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/") {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		target := filepath.Join(s.webDir, "index.html")
-		if _, err := os.Stat(target); err == nil {
-			http.ServeFile(w, r, target)
-			return
-		}
-		http.NotFound(w, r)
+		s.serveWeb(w, r)
 	})
+}
+
+func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) {
+	webDir := s.webDir
+	if webDir == "" {
+		webDir = os.Getenv("EDGE_WEB_DIR")
+	}
+	if webDir == "" {
+		webDir = "/var/lib/edge-tunnel/controller/web"
+	}
+	indexPath := filepath.Join(webDir, "index.html")
+	reqPath := path.Clean("/" + r.URL.Path)
+	if reqPath == "/" {
+		http.ServeFile(w, r, indexPath)
+		return
+	}
+	rel := strings.TrimPrefix(reqPath, "/")
+	target := filepath.Join(webDir, rel)
+	absWeb, err := filepath.Abs(webDir)
+	if err != nil {
+		http.Error(w, "invalid web directory", http.StatusInternalServerError)
+		return
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if absTarget != absWeb && !strings.HasPrefix(absTarget, absWeb+string(os.PathSeparator)) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if st, err := os.Stat(absTarget); err == nil && !st.IsDir() {
+		http.ServeFile(w, r, absTarget)
+		return
+	}
+	if isStaticAssetPath(reqPath) {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := os.Stat(indexPath); err != nil {
+		http.Error(w, "Edge Tunnel Panel web assets not found", http.StatusInternalServerError)
+		return
+	}
+	http.ServeFile(w, r, indexPath)
+}
+
+func isStaticAssetPath(p string) bool {
+	if strings.HasPrefix(p, "/assets/") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".js", ".css", ".map", ".ico", ".png", ".jpg", ".jpeg", ".svg", ".webp", ".json", ".txt":
+		return true
+	default:
+		return false
+	}
 }
 
 func writeOK(w http.ResponseWriter, status int, data any) {

@@ -5,17 +5,40 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func testServer(t *testing.T) http.Handler {
+	return testServerWithWebDir(t, t.TempDir())
+}
+
+func testServerWithWebDir(t *testing.T, webDir string) http.Handler {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "store.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewServer(store, "agent-token", "operator-token", true, t.TempDir())
+	return NewServer(store, "agent-token", "operator-token", true, webDir)
+}
+
+func testWebServer(t *testing.T) http.Handler {
+	webDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<!doctype html><title>Edge Tunnel Panel</title>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assetsDir := filepath.Join(webDir, "assets")
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assetsDir, "app.js"), []byte(`console.log("ok")`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assetsDir, "app.css"), []byte("body{color:#fff}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return testServerWithWebDir(t, webDir)
 }
 
 func post(t *testing.T, h http.Handler, path, token string, body any) *httptest.ResponseRecorder {
@@ -143,5 +166,77 @@ func TestTokenRedaction(t *testing.T) {
 	masked := redactToken("abcdefghijklmnop")
 	if strings.Contains(masked, "abcdefgh") || !strings.HasSuffix(masked, "mnop") {
 		t.Fatalf("bad redaction: %s", masked)
+	}
+}
+
+func TestServeWebIndex(t *testing.T) {
+	rr := get(t, testWebServer(t), "/", "")
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Edge Tunnel Panel") {
+		t.Fatalf("bad index response: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestServeWebAssetJS(t *testing.T) {
+	rr := get(t, testWebServer(t), "/assets/app.js", "")
+	body := rr.Body.String()
+	contentType := rr.Header().Get("Content-Type")
+	if rr.Code != 200 || !strings.Contains(body, `console.log("ok")`) {
+		t.Fatalf("bad js response: %d %s", rr.Code, body)
+	}
+	if strings.Contains(body, "<!doctype html>") || strings.HasPrefix(contentType, "text/html") {
+		t.Fatalf("js returned html: content-type=%s body=%s", contentType, body)
+	}
+}
+
+func TestServeWebAssetCSS(t *testing.T) {
+	rr := get(t, testWebServer(t), "/assets/app.css", "")
+	body := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(body, "body{color:#fff}") {
+		t.Fatalf("bad css response: %d %s", rr.Code, body)
+	}
+	if strings.Contains(body, "<!doctype html>") {
+		t.Fatalf("css returned html: %s", body)
+	}
+}
+
+func TestMissingStaticAssetReturns404(t *testing.T) {
+	rr := get(t, testWebServer(t), "/assets/missing.js", "")
+	if rr.Code != 404 || strings.Contains(rr.Body.String(), "<!doctype html>") {
+		t.Fatalf("missing asset should be 404, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSPAFallback(t *testing.T) {
+	rr := get(t, testWebServer(t), "/nodes", "")
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Edge Tunnel Panel") {
+		t.Fatalf("spa fallback failed: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAPIRouteNotCapturedByWeb(t *testing.T) {
+	rr := get(t, testWebServer(t), "/api/v1/health", "")
+	if rr.Code != 200 || strings.Contains(rr.Body.String(), "<!doctype html>") || !strings.Contains(rr.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("api route captured by web: %d %s %s", rr.Code, rr.Header().Get("Content-Type"), rr.Body.String())
+	}
+}
+
+func TestPathTraversalBlocked(t *testing.T) {
+	webDir := t.TempDir()
+	parentSecret := filepath.Join(filepath.Dir(webDir), "secret")
+	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<!doctype html><title>Edge Tunnel Panel</title>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(parentSecret, []byte("secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/../secret", nil)
+	req.URL.RawPath = "/../secret"
+	rr := httptest.NewRecorder()
+	testServerWithWebDir(t, webDir).ServeHTTP(rr, req)
+	if rr.Code == 200 && strings.Contains(rr.Body.String(), "secret") {
+		t.Fatalf("path traversal leaked file: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr.Code != 400 && rr.Code != 404 {
+		t.Fatalf("expected traversal to be blocked, got %d %s", rr.Code, rr.Body.String())
 	}
 }
