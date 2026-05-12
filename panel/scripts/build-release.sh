@@ -57,10 +57,52 @@ find_npm() {
   return 1
 }
 
+native_path() {
+  local path="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$path"
+    return
+  fi
+  if command -v wslpath >/dev/null 2>&1; then
+    wslpath -w "$path"
+    return
+  fi
+  case "$path" in
+    /mnt/host/*)
+      local rest="${path#/mnt/host/}"
+      local drive="${rest%%/*}"
+      local tail="${rest#*/}"
+      drive="$(printf '%s' "$drive" | tr '[:lower:]' '[:upper:]')"
+      printf '%s:\\%s\n' "$drive" "$(printf '%s' "$tail" | sed 's#/#\\#g')"
+      ;;
+    /mnt/[a-zA-Z]/*)
+      local rest="${path#/mnt/}"
+      local drive="${rest%%/*}"
+      local tail="${rest#*/}"
+      drive="$(printf '%s' "$drive" | tr '[:lower:]' '[:upper:]')"
+      printf '%s:\\%s\n' "$drive" "$(printf '%s' "$tail" | sed 's#/#\\#g')"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
+go_output_path() {
+  local output="$1"
+  if "$GO_BIN" env GOHOSTOS 2>/dev/null | grep -qx 'windows'; then
+    native_path "$output"
+  else
+    printf '%s\n' "$output"
+  fi
+}
+
 build_go() {
   local module="$1" package="$2" arch="$3" output="$4" ldflags="$5"
   command -v "$GO_BIN" >/dev/null 2>&1 || [ -x "$GO_BIN" ] || { printf '[build-release] ERROR: go not found\n' >&2; exit 1; }
-  (cd "$ROOT/$module" && GOOS=linux GOARCH="$arch" CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags "$ldflags" -o "$output" "$package")
+  local native_output
+  native_output="$(go_output_path "$output")"
+  (cd "$ROOT/$module" && GOOS=linux GOARCH="$arch" CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags "$ldflags" -o "$native_output" "$package")
 }
 
 package_arch() {
@@ -72,11 +114,15 @@ package_arch() {
   local agent_ldflags=""
   build_go "panel/controller" "./cmd/edge-tunnel-controller" "$arch" "$stage/edge-tunnel-controller" "$controller_ldflags"
   build_go "panel/agent" "./cmd/edge-tunnel-agent" "$arch" "$stage/edge-tunnel-agent" "$agent_ldflags"
+  test -s "$stage/edge-tunnel-controller" || die "missing controller binary for linux/$arch"
+  test -s "$stage/edge-tunnel-agent" || die "missing agent binary for linux/$arch"
   cp -a "$ROOT/panel/controller/web/dist" "$stage/web"
   cp -a "$ROOT/panel/docs" "$stage/docs"
   cp -a "$ROOT/panel/examples" "$stage/examples"
   cp -a "$ROOT/panel/scripts" "$stage/scripts"
   printf '%s\n' "$VERSION" >"$stage/VERSION"
+  chmod +x "$stage/edge-tunnel-controller" "$stage/edge-tunnel-agent"
+  chmod +x "$stage/scripts/"*.sh
   (cd "$stage" && tar -czf "$DIST_DIR/edge-tunnel-panel-${VERSION}-linux-${arch}.tar.gz" .)
 }
 

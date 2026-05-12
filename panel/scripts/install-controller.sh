@@ -95,6 +95,10 @@ install_from_release() {
     fail "release asset not available; use --source-build or run panel/scripts/build-release.sh first"
   fi
   tar -xzf "$tmp/$asset" -C "$tmp"
+  if [ ! -f "$tmp/edge-tunnel-controller" ]; then
+    find "$tmp" -maxdepth 3 -type f | sort >&2
+    fail "edge-tunnel-controller not found in release archive"
+  fi
   install -m 0755 "$tmp/edge-tunnel-controller" "$INSTALL_DIR/edge-tunnel-controller"
   if [ -d "$tmp/web" ]; then
     rm -rf "$WEB_DIR"
