@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="3.0.0-alpha.2"
+VERSION="3.0.0-alpha.4"
 CONTROLLER_URL=""
 TOKEN=""
 NODE_NAME=""
@@ -9,6 +9,8 @@ ROLE="unknown"
 ENABLE_TASKS="true"
 ENABLE_WRITE_ACTIONS="false"
 RELEASE_URL=""
+REPO="ike-sh/leikwan-toolkit"
+SOURCE_REF="panel-3-alpha"
 CONFIG_DIR="/etc/leikwan-agent"
 CONFIG_FILE="${CONFIG_DIR}/config.yml"
 STATE_DIR="/var/lib/leikwan-agent"
@@ -26,6 +28,8 @@ while [[ $# -gt 0 ]]; do
     --enable-write-actions) ENABLE_WRITE_ACTIONS="true"; shift ;;
     --version) VERSION="${2:-}"; shift 2 ;;
     --release-url|--install-url) RELEASE_URL="${2:-}"; shift 2 ;;
+    --repo) REPO="${2:-}"; shift 2 ;;
+    --source-ref) SOURCE_REF="${2:-}"; shift 2 ;;
     *) echo "[FAIL] Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -131,7 +135,7 @@ try_release_download() {
     )
     for tag in "${tags[@]}"; do
       for asset in "${assets[@]}"; do
-        urls+=("https://github.com/ike-sh/leikwan-toolkit/releases/download/${tag}/${asset}")
+        urls+=("https://github.com/${REPO}/releases/download/${tag}/${asset}")
       done
     done
   fi
@@ -153,8 +157,14 @@ try_release_download() {
 source_build_fallback() {
   local tmp="$1"
   install_deps_for_source_build
-  echo "[INFO] Falling back to Agent source build from GitHub main branch."
-  download_file "https://github.com/ike-sh/leikwan-toolkit/archive/refs/heads/main.tar.gz" "${tmp}/source.tar.gz"
+  echo "[INFO] Falling back to Agent source build from GitHub ref: ${SOURCE_REF}"
+  local source_url
+  if [[ "${SOURCE_REF}" == v* ]]; then
+    source_url="https://github.com/${REPO}/archive/refs/tags/${SOURCE_REF}.tar.gz"
+  else
+    source_url="https://github.com/${REPO}/archive/refs/heads/${SOURCE_REF}.tar.gz"
+  fi
+  download_file "${source_url}" "${tmp}/source.tar.gz"
   rm -rf "${tmp}/source"
   mkdir -p "${tmp}/source"
   tar -xzf "${tmp}/source.tar.gz" -C "${tmp}/source" --strip-components=1

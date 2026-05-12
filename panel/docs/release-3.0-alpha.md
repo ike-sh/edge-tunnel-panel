@@ -1,38 +1,34 @@
-# Leikwan Panel 3.0.0-alpha.2
+# Leikwan Panel 3.0.0-alpha.4
 
-`3.0.0-alpha.2` is the first real apply alpha for the Panel line.
+`3.0.0-alpha.4` 是安装链路和中文 Web 面板收敛版。
 
-It can queue fixed Agent actions for:
+## 本轮修复
 
-- EasyTier install/config/start/status.
-- Entry node public port range config.
-- Relay node TCP/UDP forward config.
-- PBR rule config.
-- DDNS config and sync.
-- Agent / EasyTier restart and confirmed node reboot.
+- Controller 一键安装支持 `curl | bash` / `sudo bash` / 本地脚本执行。
+- 安装脚本不再直接依赖未定义的 `BASH_SOURCE[0]`。
+- alpha 阶段默认 source ref 为 `panel-3-alpha`，release 缺失时 fallback 到同一 ref 源码构建。
+- Controller systemd service 使用 `--web-dir` 前，会校验 binary 是否支持该参数。
+- Web build 会安装到 `/var/lib/leikwan-panel/web`。
+- Web UI 主要页面中文化，并优化 Add Agent 命令框体验。
 
-The Shell Core remains independent at `1.4.0 LTS`; `leikwan-toolkit.sh` is not modified by this release.
+## 安装命令
 
-## Boundaries
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-controller.sh | sudo bash
+```
 
-- No arbitrary command strings.
-- No Web shell input.
-- No Controller `command` / `cmd` / `shell` payload.
-- No `shell -c`, `bash -c` or `eval`.
-- No raw nft / iptables / ip route payload.
-- Backend / landing machines do not need Agent.
-- Relay restart automation is still not implemented.
-- Smooth public entry switching is still not implemented.
+Agent 通过 Web 面板 `添加节点` 页面生成一键命令。
 
-## Managed Paths
+## 安全边界
 
-Agents write only Panel-managed files:
+- 不接受任意命令字符串。
+- 不执行 `shell -c` / `bash -c` / `eval`。
+- 不做 raw nft / iptables / ip route 输入。
+- 不做公网入口平滑切换。
+- 不做 relay restart 自动化。
+- 不做 backend node 管理。
+- 不修改 `leikwan-toolkit.sh`。
 
-- `/etc/leikwan-agent/easytier/config.json`
-- `/etc/systemd/system/leikwan-easytier.service`
-- `/etc/leikwan-agent/nftables/leikwan-panel.nft`
-- `/etc/leikwan-agent/pbr/pbr.json`
-- `/etc/leikwan-agent/ddns/config.json`
+## 已知限制
 
-Backups are written under `/var/backups/leikwan-panel-agent/`.
-
+这是 alpha 版本，UI 和真实落地规则仍需继续实机打磨。建议先在测试 VPS 上验证。

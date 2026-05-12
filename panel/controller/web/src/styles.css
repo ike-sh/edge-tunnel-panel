@@ -23,6 +23,9 @@ button {
 }
 
 .sidebar {
+  position: sticky;
+  top: 0;
+  min-height: 100vh;
   background: #111820;
   color: #f7f9fb;
   padding: 24px;
@@ -101,6 +104,13 @@ nav button:hover {
   cursor: pointer;
 }
 
+button.danger,
+.button-row button.danger {
+  border-color: #b72a2a;
+  color: #fff;
+  background: #c73535;
+}
+
 .action-row {
   display: flex;
   flex-wrap: wrap;
@@ -151,7 +161,25 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   margin-bottom: 24px;
+}
+
+.top-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: #536273;
+}
+
+.top-status button {
+  border: 1px solid #ccd6df;
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: #fff;
+  cursor: pointer;
 }
 
 .eyebrow {
@@ -470,10 +498,19 @@ button:disabled {
 .command-box {
   overflow-x: auto;
   border-radius: 8px;
-  padding: 14px;
-  background: #111820;
-  color: #e9f3ef;
+  border: 1px solid #d5dde5;
+  padding: 18px;
+  background: #f3f5f7;
+  color: #17212b;
+  font-size: 14px;
+  line-height: 1.6;
   white-space: pre-wrap;
+}
+
+.copy-button {
+  min-width: 180px;
+  min-height: 44px;
+  font-weight: 800;
 }
 
 .inline-pre {
@@ -659,9 +696,24 @@ tr:last-child td {
 
   .sidebar {
     position: static;
+    min-height: auto;
+  }
+
+  header,
+  .top-status {
+    align-items: flex-start;
+    justify-content: flex-start;
+    flex-direction: column;
   }
 
   .metrics {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+
+  .form-grid,
+  .plan-form,
+  .topology-grid,
+  .split-grid {
+    grid-template-columns: 1fr;
   }
 }

@@ -2,7 +2,7 @@
 
 Leikwan Toolkit Shell Core is frozen at `1.4.0 LTS`.
 
-Leikwan Toolkit is a TCP/UDP forwarding toolkit for an **A public entry + B relay host + C backend target** topology. The Shell Core remains responsible for real forwarding behavior: EasyTier, nftables, DDNS, PBR, snapshots and local maintenance.
+Leikwan Toolkit is a TCP/UDP forwarding toolkit for an **A public entry + B relay host + C backend target** topology. The Shell Core remains responsible for local forwarding behavior: EasyTier, nftables, DDNS, PBR, snapshots and maintenance.
 
 ## Core Quick Start
 
@@ -30,36 +30,36 @@ It supports Controller / Agent, node heartbeat, readonly status reports, readonl
 
 It does **not** execute write operations, create write tasks, accept command strings, add/delete/modify forwards, switch public entries, restart relay, create snapshots, run rollback, or modify nftables, systemd, EasyTier, DDNS, entries, forwards or PBR.
 
-## Leikwan Panel 3.0.0-alpha.2
+## Leikwan Panel 3.0.0-alpha.4
 
-`3.0.0-alpha.2` is the first **real apply alpha**. It can install/configure EasyTier, write Panel nftables/PBR/DDNS config, reload Panel firewall rules and queue fixed node actions when an operator explicitly enables `enable_write_actions=true` on that Agent.
+`3.0.0-alpha.4` is a real-apply alpha for lab testing. It can install/configure EasyTier, write Panel-managed nftables/PBR/DDNS config, reload Panel firewall rules and queue fixed node actions when an operator explicitly enables `enable_write_actions=true` on that Agent.
 
-The demo flow is intentionally small:
+This alpha is for testing the end-to-end Panel flow:
 
 1. Install Controller.
 2. Open Web Panel.
-3. Unlock with Operator token.
-4. Add Agent nodes from the Bootstrap page.
-5. Create a Network profile.
-6. Create an Entry.
-7. Create a Forward.
-8. Apply.
-9. Watch Tasks.
+3. Login / unlock with the Operator token.
+4. Open `添加节点` and copy the generated Agent install command.
+5. Run that command on A/B VPS nodes.
+6. Create a Network profile.
+7. Create an Entry.
+8. Create a Forward.
+9. Apply and watch Tasks.
 
 Controller one-click install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-controller.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-controller.sh | sudo bash
 ```
 
-If the GitHub Release asset has not been uploaded yet, the installer automatically falls back to building from the GitHub source tarball.
+Alpha 阶段默认使用 `panel-3-alpha` 分支。如果 GitHub Release 包已经上传，脚本会优先下载 release 包；如果 release 包不存在，脚本会 fallback 到同一 `source-ref` 的源码构建。源码构建会安装 `go`、`npm`、`nodejs`，耗时会更长；上传 release tarball 后安装会快很多。
 
 Agent one-click join:
 
-Open Web Panel -> Add Agent, choose the node role and copy the generated command. A full command looks like:
+Open Web Panel -> `添加节点`, choose the node role and copy the generated command. A full command looks like:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-agent.sh | sudo bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-agent.sh | sudo bash -s -- \
   --controller-url http://PANEL_HOST:18080 \
   --token AGENT_TOKEN \
   --node-name relay-1 \
@@ -68,29 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/s
   --enable-write-actions
 ```
 
-Alpha write actions are fixed allowlisted actions only:
-
-- `configure_node_role`
-- `apply_network_profile`
-- `apply_entry_config`
-- `apply_forward_config`
-- `reload_leikwan_core`
-- `verify_applied_config`
-- `install_easytier`
-- `configure_easytier_network`
-- `start_easytier`
-- `restart_easytier`
-- `stop_easytier`
-- `apply_entry_ports`
-- `apply_forward_rules`
-- `apply_pbr_rules`
-- `apply_ddns_config`
-- `ddns_sync_now`
-- `reload_firewall_rules`
-- `restart_agent`
-- `reboot_node`
-
-They do not accept command strings, do not run `shell -c`, do not run `bash -c`, do not run `eval`, and do not expose raw nft / iptables / ip route operations. Panel writes only under its own managed paths such as `/etc/leikwan-agent/`, `/etc/systemd/system/leikwan-easytier.service`, `/var/backups/leikwan-panel-agent/` and uses fixed argv for `systemctl`, `nft`, `ip` and `reboot`. The landing/backend machine does **not** need an Agent; it is configured as `target_host:target_port`.
+Alpha write actions are fixed allowlisted actions only. They do not accept command strings, do not run `shell -c`, do not run `bash -c`, do not run `eval`, and do not expose raw nft / iptables / ip route operations. The landing/backend machine does **not** need an Agent; it is configured as `target_host:target_port`.
 
 Still disabled or blocked:
 
@@ -114,6 +92,19 @@ Still disabled or blocked:
 - `LEIKWAN_OPERATOR_TOKEN` is for Web / Operator APIs.
 - Agent token and Operator token are intentionally not interchangeable.
 
+## Documentation
+
+Panel docs live under `panel/docs/`:
+
+- `quickstart.md`
+- `install-controller.md`
+- `install-agent.md`
+- `network-forwarding.md`
+- `pbr.md`
+- `ddns.md`
+- `security.md`
+- `release-3.0-alpha.md`
+
 ## Panel Local Development
 
 Controller:
@@ -121,7 +112,7 @@ Controller:
 ```bash
 cd panel/controller
 go test ./...
-go run ./cmd/leikwan-controller --listen 127.0.0.1:18080 --db ./data/controller.db
+go run ./cmd/leikwan-controller --listen 127.0.0.1:18080 --db ./data/controller.db --web-dir ./web/dist
 ```
 
 Agent:
@@ -139,36 +130,3 @@ cd panel/controller
 npm --prefix web install
 npm --prefix web run build
 ```
-
-Panel release package:
-
-```bash
-bash panel/scripts/build-release.sh
-```
-
-Output:
-
-```text
-panel/dist/leikwan-controller
-panel/dist/leikwan-agent
-panel/dist/web/
-panel/dist/docs/
-panel/dist/examples/
-panel/dist/scripts/
-panel/dist/SHA256SUMS
-```
-
-## Docs
-
-- [Panel 2.1.0 Release Notes](panel/docs/release-2.1.0.md)
-- [Panel 3.0 Alpha Notes](panel/docs/release-3.0-alpha.md)
-- [Quick Start](panel/docs/quickstart.md)
-- [One-click Install](panel/docs/one-click-install.md)
-- [Agent Join](panel/docs/agent-join.md)
-- [Network / Forwarding](panel/docs/network-forwarding.md)
-- [PBR](panel/docs/pbr.md)
-- [DDNS](panel/docs/ddns.md)
-- [Security](panel/docs/security.md)
-- [Operator Auth](panel/docs/operator-auth.md)
-- [Action Catalog](panel/docs/action-catalog.md)
-- [Safety Model](panel/docs/safety-model.md)

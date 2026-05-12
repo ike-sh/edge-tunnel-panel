@@ -118,7 +118,29 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": RedactString(message)})
+	writeJSON(w, status, map[string]string{"error": RedactString(message), "message": localizedErrorMessage(message)})
+}
+
+func localizedErrorMessage(message string) string {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "operator token required"):
+		return "需要登录或提供 Operator Token。"
+	case strings.Contains(lower, "unauthorized"):
+		return "Token 无效或未授权。"
+	case strings.Contains(lower, "controller token"):
+		return "Agent Token 无效或未配置。"
+	case strings.Contains(lower, "offline"):
+		return "节点离线，无法执行该操作。"
+	case strings.Contains(lower, "write actions"):
+		return "目标节点未启用写操作。"
+	case strings.Contains(lower, "invalid json"), strings.Contains(lower, "payload"):
+		return "请求参数无效，请检查必填项。"
+	case strings.Contains(lower, "command"), strings.Contains(lower, "cmd"), strings.Contains(lower, "shell"):
+		return "请求中不允许包含 command/cmd/shell 字段。"
+	default:
+		return RedactString(message)
+	}
 }
 
 func (s *Server) requirePOST(w http.ResponseWriter, r *http.Request) bool {
@@ -290,7 +312,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			{Command: "lq forward list", Class: "readonly", Note: "Forward inventory"},
 			{Command: "lq ddns overview", Class: "readonly", Note: "DDNS overview"},
 			{Command: "manual TODO steps", Class: "manual", Note: "Operator performs interactive Core menu work"},
-			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "3.0.0-alpha.2 Agent tasks map actions to fixed argv only"},
+			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "3.0.0-alpha.4 Agent tasks map actions to fixed argv only"},
 			{Command: "alpha demo write actions", Class: "manual", Note: "Only fixed Agent handlers can stage Panel-managed JSON when enable_write_actions=true"},
 			{Command: "manual snapshot record", Class: "manual", Note: "Controller records operator-provided snapshot metadata only"},
 			{Command: "manual rollback record", Class: "manual", Note: "Controller records rollback metadata and instructions only"},
@@ -299,7 +321,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		Blocked:            []string{"rm", "systemctl restart", "systemctl stop", "nft", "iptables", "ip route", "curl | bash", "bash -c", "eval", "write into /etc"},
 		Future:             []string{"write allowlist", "dry-run", "snapshot", "rollback", "operator approval"},
 		SafetyLevels:       []string{"safe", "caution", "dangerous"},
-		TaskSupport:        "3.0.0-alpha.2 supports readonly tasks and demo alpha write actions gated by enable_write_actions=true; no command strings are accepted",
+		TaskSupport:        "3.0.0-alpha.4 supports readonly tasks and demo alpha write actions gated by enable_write_actions=true; no command strings are accepted",
 		AllowedTaskActions: allowedTaskActions(),
 	})
 }
@@ -344,7 +366,7 @@ func (s *Server) handleBootstrapControllerInfo(w http.ResponseWriter, r *http.Re
 		InstallScriptURL:        installScriptURL(),
 		SupportedRoles:          []string{"entry", "relay", "mixed", "unknown"},
 		SupportedInstallMethods: []string{"curl", "wget"},
-		Note:                    "3.0.0-alpha.2 demo apply can stage Panel-managed config files on write-enabled Agent nodes; backend targets are target_host:target_port and do not need an Agent.",
+		Note:                    "3.0.0-alpha.4 demo apply can stage Panel-managed config files on write-enabled Agent nodes; backend targets are target_host:target_port and do not need an Agent.",
 	})
 }
 
@@ -367,7 +389,7 @@ func (s *Server) handleBootstrapAgentToken(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, AgentTokenResponse{
 		Token:     RedactString(s.agentToken),
 		TokenMode: "controller-agent-token",
-		Warnings:  []string{"3.0.0-alpha.2 reuses the Controller Agent token; one-time join tokens are planned for a later release."},
+		Warnings:  []string{"3.0.0-alpha.4 reuses the Controller Agent token; one-time join tokens are planned for a later release."},
 	})
 }
 
@@ -443,7 +465,7 @@ func normalizeInstallMethod(method string) string {
 }
 
 func installScriptURL() string {
-	return "https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-agent.sh"
+	return "https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-agent.sh"
 }
 
 func buildAgentInstallCommand(method, scriptURL, controllerURL, token, nodeName, role string, enableTasks, enableWriteActions bool) string {

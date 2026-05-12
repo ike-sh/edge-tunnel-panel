@@ -9,7 +9,7 @@ else
 fi
 PANEL_DIR="${ROOT_DIR}/panel"
 DIST_DIR="${PANEL_DIR}/dist"
-PANEL_VERSION="${PANEL_VERSION:-3.0.0-alpha.2}"
+PANEL_VERSION="${PANEL_VERSION:-3.0.0-alpha.4}"
 CONTROLLER_GOCACHE="${PANEL_DIR}/controller/.gocache"
 AGENT_GOCACHE="${PANEL_DIR}/agent/.gocache"
 
@@ -79,7 +79,7 @@ cp -R "${PANEL_DIR}/examples/." "${DIST_DIR}/examples/"
 cp -R "${PANEL_DIR}/docs/." "${DIST_DIR}/docs/"
 install -m 0755 "${PANEL_DIR}/scripts/install-controller.sh" "${DIST_DIR}/scripts/install-controller.sh"
 install -m 0755 "${PANEL_DIR}/scripts/install-agent.sh" "${DIST_DIR}/scripts/install-agent.sh"
-printf 'LEIKWAN_PANEL_VERSION=%s\n' "${PANEL_VERSION}" >"${DIST_DIR}/VERSION"
+printf '%s\n' "${PANEL_VERSION}" >"${DIST_DIR}/VERSION"
 
 rm -f "${DIST_DIR}"/*.tar.gz "${DIST_DIR}/SHA256SUMS"
 echo "[INFO] Creating ${TARBALL}"

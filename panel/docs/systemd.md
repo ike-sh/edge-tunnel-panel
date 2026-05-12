@@ -1,35 +1,31 @@
-# Leikwan Panel systemd 示例
+# systemd 示例
 
-��ҳ�ṩ Leikwan Panel 3.0.0-alpha.2 �� systemd �ݰ���3.0.0-alpha.2 �����Զ�ִ�����ñ���������޸�?Leikwan Core �� nftables��systemd��EasyTier��DDNS �� TSV ���á�
-## Controller 配置路径
+本文档说明 Leikwan Panel `3.0.0-alpha.4` 的 systemd 部署方式。
 
-建议路径�?
-```text
-/usr/local/bin/leikwan-controller
-/var/lib/leikwan-panel/controller.db
-/etc/leikwan-panel/controller.yml
-```
+## Controller
 
-`controller.yml` 示例�?
-```yaml
-token: change-me
-```
-
-也可以使用环境变量：
+安装脚本会生成：
 
 ```text
-LEIKWAN_CONTROLLER_TOKEN=change-me
+/etc/leikwan-panel/controller.env
+/etc/systemd/system/leikwan-controller.service
 ```
 
-## leikwan-controller.service
-
-示例文件见：
+`controller.env` 至少包含：
 
 ```text
-panel/examples/leikwan-controller.service
+LEIKWAN_LISTEN=0.0.0.0:18080
+LEIKWAN_DATA_DIR=/var/lib/leikwan-panel
+LEIKWAN_WEB_DIR=/var/lib/leikwan-panel/web
+LEIKWAN_CONTROLLER_TOKEN=...
+LEIKWAN_OPERATOR_TOKEN=...
+LEIKWAN_ADMIN_USER=admin
+LEIKWAN_ADMIN_PASSWORD_HASH=...
+LEIKWAN_SESSION_SECRET=...
 ```
 
-内容�?
+service 示例：
+
 ```ini
 [Unit]
 Description=Leikwan Panel Controller
@@ -38,8 +34,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/leikwan-panel/controller.env
-ExecStart=/usr/local/bin/leikwan-controller --listen 0.0.0.0:18080 --db /var/lib/leikwan-panel/controller.db
+EnvironmentFile=/etc/leikwan-panel/controller.env
+ExecStart=/usr/local/bin/leikwan-controller --listen ${LEIKWAN_LISTEN} --db ${LEIKWAN_DATA_DIR}/controller.db --web-dir ${LEIKWAN_WEB_DIR} --strict-auth=${LEIKWAN_STRICT_AUTH}
 Restart=on-failure
 RestartSec=5s
 User=root
@@ -48,29 +44,12 @@ User=root
 WantedBy=multi-user.target
 ```
 
-## Agent 配置路径
+安装脚本会先确认 binary 支持 `--web-dir`，避免旧 binary 和新 service 参数不匹配。
 
-建议路径�?
-```text
-/usr/local/bin/leikwan-agent
-/etc/leikwan-agent/config.yml
-```
+## Agent
 
-`config.yml` 示例见：
+Agent service 示例：
 
-```text
-panel/examples/agent.yml
-```
-
-## leikwan-agent.service
-
-示例文件见：
-
-```text
-panel/examples/leikwan-agent.service
-```
-
-内容�?
 ```ini
 [Unit]
 Description=Leikwan Panel Agent
@@ -88,29 +67,13 @@ User=root
 WantedBy=multi-user.target
 ```
 
-## 启用服务
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now leikwan-controller.service
-sudo systemctl enable --now leikwan-agent.service
-```
-
 ## 查看日志
 
 ```bash
-journalctl -u leikwan-controller.service -n 100 --no-pager
-journalctl -u leikwan-agent.service -n 100 --no-pager
+systemctl status leikwan-controller --no-pager
+journalctl -u leikwan-controller -n 100 --no-pager
+systemctl status leikwan-agent --no-pager
+journalctl -u leikwan-agent -n 100 --no-pager
 ```
 
-日志中不应出�?token、secret、password、privateKey、custom_url、custom_cmd �?Authorization 明文�?
-## 3.0.0-alpha.2 Operator Token Example
-
-`/etc/leikwan-panel/controller.env` can contain both tokens:
-
-```text
-LEIKWAN_CONTROLLER_TOKEN=agent-token
-LEIKWAN_OPERATOR_TOKEN=operator-token
-```
-
-`LEIKWAN_CONTROLLER_TOKEN` is used only by Agents. `LEIKWAN_OPERATOR_TOKEN` is used by the Web UI and operator APIs. To require the Operator token for all non-health Web APIs, add `--strict-auth` to the Controller `ExecStart`.
+日志中不应出现 token、secret、password、privateKey、custom_url、custom_cmd 或 Authorization 明文。

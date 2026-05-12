@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="3.0.0-alpha.2"
+VERSION="3.0.0-alpha.4"
 LISTEN="0.0.0.0:18080"
 DATA_DIR="/var/lib/leikwan-panel"
 CONFIG_DIR="/etc/leikwan-panel"
@@ -17,6 +17,8 @@ ADMIN_PASSWORD=""
 STRICT_AUTH="false"
 PUBLIC_URL=""
 RELEASE_URL=""
+REPO="ike-sh/leikwan-toolkit"
+SOURCE_REF="panel-3-alpha"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +31,8 @@ while [[ $# -gt 0 ]]; do
     --strict-auth) STRICT_AUTH="true"; shift ;;
     --public-url) PUBLIC_URL="${2:-}"; shift 2 ;;
     --release-url|--install-url) RELEASE_URL="${2:-}"; shift 2 ;;
+    --repo) REPO="${2:-}"; shift 2 ;;
+    --source-ref) SOURCE_REF="${2:-}"; shift 2 ;;
     *) echo "[FAIL] Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -124,6 +128,15 @@ install_from_dist_dir() {
   fi
 }
 
+ensure_controller_supports_web_dir() {
+  if ! "${BIN_DST}" -h 2>&1 | grep -q -- "-web-dir"; then
+    echo "[FAIL] controller binary does not support --web-dir; source/ref mismatch" >&2
+    echo "[INFO] Installed binary: ${BIN_DST}" >&2
+    echo "[INFO] Requested source ref: ${SOURCE_REF}" >&2
+    exit 1
+  fi
+}
+
 try_local_dist() {
   if [[ -z "${SCRIPT_DIR}" ]]; then
     return 1
@@ -167,7 +180,7 @@ try_release_download() {
     )
     for tag in "${tags[@]}"; do
       for asset in "${assets[@]}"; do
-        urls+=("https://github.com/ike-sh/leikwan-toolkit/releases/download/${tag}/${asset}")
+        urls+=("https://github.com/${REPO}/releases/download/${tag}/${asset}")
       done
     done
   fi
@@ -189,8 +202,14 @@ try_release_download() {
 source_build_fallback() {
   local tmp="$1"
   install_deps_for_source_build
-  echo "[INFO] Falling back to source build from GitHub main branch."
-  download_file "https://github.com/ike-sh/leikwan-toolkit/archive/refs/heads/main.tar.gz" "${tmp}/source.tar.gz"
+  echo "[INFO] Falling back to source build from GitHub ref: ${SOURCE_REF}"
+  local source_url
+  if [[ "${SOURCE_REF}" == v* ]]; then
+    source_url="https://github.com/${REPO}/archive/refs/tags/${SOURCE_REF}.tar.gz"
+  else
+    source_url="https://github.com/${REPO}/archive/refs/heads/${SOURCE_REF}.tar.gz"
+  fi
+  download_file "${source_url}" "${tmp}/source.tar.gz"
   rm -rf "${tmp}/source"
   mkdir -p "${tmp}/source"
   tar -xzf "${tmp}/source.tar.gz" -C "${tmp}/source" --strip-components=1
@@ -238,6 +257,8 @@ if ! try_local_dist; then
   fi
 fi
 
+ensure_controller_supports_web_dir
+
 ADMIN_PASSWORD_HASH="$(password_hash "${ADMIN_PASSWORD}")"
 umask 077
 cat >"${ENV_FILE}" <<EOF
@@ -270,12 +291,14 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-if ! systemctl enable --now leikwan-controller.service; then
+systemctl enable leikwan-controller.service
+if ! systemctl restart leikwan-controller.service; then
   echo "[FAIL] leikwan-controller.service failed to start." >&2
   systemctl status leikwan-controller --no-pager || true
   journalctl -u leikwan-controller -n 100 --no-pager || true
   exit 1
 fi
+systemctl status leikwan-controller --no-pager || true
 
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -z "${HOST_IP}" ]] && command -v curl >/dev/null 2>&1; then
@@ -289,7 +312,7 @@ if [[ -z "${PUBLIC_URL}" ]]; then
   PUBLIC_URL="http://${HOST_IP}:${PORT}"
 fi
 
-AGENT_CMD="curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-agent.sh | sudo bash -s -- --controller-url '${PUBLIC_URL}' --token '${AGENT_TOKEN}' --node-name 'relay-1' --role relay --enable-tasks"
+AGENT_CMD="curl -fsSL https://raw.githubusercontent.com/${REPO}/${SOURCE_REF}/panel/scripts/install-agent.sh | sudo bash -s -- --controller-url '${PUBLIC_URL}' --token '${AGENT_TOKEN}' --node-name 'relay-1' --role relay --enable-tasks"
 
 cat <<EOF
 

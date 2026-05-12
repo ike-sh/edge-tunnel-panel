@@ -1,15 +1,29 @@
-# PBR
+# PBR 出口策略
 
-PBR policies are Controller records applied to relay nodes through fixed Agent action `apply_pbr_rules`.
+Leikwan Panel `3.0.0-alpha.4` 提供简单 PBR 策略模型，用于测试 relay 节点上的出口路由配置。
 
-Supported fields:
+## 字段
 
-- source CIDR
-- target CIDR
-- output interface
+- name
+- relay_node_id
+- source_cidr
+- target_cidr
+- output_interface
 - gateway
-- table id
+- table_id
 - priority
+- mark
 
-The Agent validates CIDR, interface name, table id and priority. It writes `/etc/leikwan-agent/pbr/pbr.json` and uses fixed `ip rule` / `ip route` argv. Raw `ip route` payload is not accepted.
+## Apply
 
+点击 Apply 后，Controller 只会创建固定 action：
+
+```text
+apply_pbr_rules
+```
+
+Agent 会校验 CIDR、interface、table_id、priority 等字段。它不接受 raw `ip rule` 或 raw `ip route` 字符串。
+
+## 当前限制
+
+这是 alpha 测试实现，建议先在测试 VPS 上验证。修改出口策略可能影响现有连接。

@@ -1,39 +1,59 @@
-# Install Agent
+# 安装 Agent
 
-Leikwan Agent `3.0.0-alpha.2` reports local state to the Controller and can optionally run fixed allowlisted tasks.
+Leikwan Agent `3.0.0-alpha.4` 运行在 A 公网入口和 B 中转节点上。落地/后端机器不需要安装 Agent。
 
-## From Web Panel
+## 从 Web 复制命令
 
-Open `Bootstrap / Add Agent`, select node role, choose whether to enable readonly tasks and alpha write actions, then copy the install command.
-
-## Script Options
+进入 Web 面板 `添加节点` 页面，填写节点名称、角色和开关后复制命令。例如：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --controller-url http://controller:18080 \
-  --token <agent-token> \
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-agent.sh | sudo bash -s -- \
+  --controller-url http://1.2.3.4:18080 \
+  --token AGENT_TOKEN \
   --node-name relay-1 \
   --role relay \
-  --enable-tasks
+  --enable-tasks \
+  --enable-write-actions
 ```
 
-Optional:
+## 参数
 
 ```bash
+--controller-url http://1.2.3.4:18080
+--token <agent-token>
+--node-name relay-1
+--role relay
+--enable-tasks
 --enable-write-actions
---release-url <url>
+--version 3.0.0-alpha.4
+--source-ref panel-3-alpha
+--release-url https://example.com/leikwan-panel.tar.gz
 ```
 
-`--enable-write-actions` is off by default. It enables only fixed 3.0 alpha actions. It does not allow arbitrary commands.
+`--enable-write-actions` 默认关闭。开启后，Agent 只允许执行固定白名单 alpha action，不接受任意命令字符串。
 
-The script supports `curl | bash`, tries multiple GitHub Release asset names, and falls back to building the Agent from the GitHub source tarball if the release asset has not been uploaded yet.
-
-Installed files:
+## 安装路径
 
 ```text
-/etc/leikwan-agent/config.yml
 /usr/local/bin/leikwan-agent
+/etc/leikwan-agent/config.yml
+/var/lib/leikwan-agent
 /etc/systemd/system/leikwan-agent.service
 ```
 
-The installer starts `leikwan-agent.service`. It does not modify nftables, EasyTier, DDNS, entries.tsv, forwards.tsv, PBR or Shell Core.
+`config.yml` 权限为 `0600`。
+
+## 安装后检查
+
+```bash
+systemctl status leikwan-agent --no-pager
+journalctl -u leikwan-agent -n 100 --no-pager
+```
+
+安装脚本会执行一次：
+
+```bash
+leikwan-agent --config /etc/leikwan-agent/config.yml --once
+```
+
+如果这次上报失败，脚本会提示，但不会阻止 systemd service 启动。

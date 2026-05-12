@@ -1,17 +1,17 @@
 # One-click Install
 
-Leikwan Panel `3.0.0-alpha.2` includes conservative install scripts for demo deployment. They install Panel binaries and systemd units only. They do not modify Leikwan Shell Core, nftables, EasyTier, DDNS, entries, forwards or PBR.
+Leikwan Panel `3.0.0-alpha.4` includes conservative install scripts for demo deployment. They install Panel binaries and systemd units only. They do not modify Leikwan Shell Core, nftables, EasyTier, DDNS, entries, forwards or PBR.
 
 ## Controller
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-controller.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-controller.sh | sudo bash
 ```
 
 Supported options:
 
 ```bash
---version 3.0.0-alpha.2
+--version 3.0.0-alpha.4
 --listen 0.0.0.0:18080
 --data-dir /var/lib/leikwan-panel
 --agent-token <token>
@@ -31,7 +31,7 @@ Agents should normally be installed using the command copied from `Web Panel -> 
 Example:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-agent.sh | sudo bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-agent.sh | sudo bash -s -- \
   --controller-url http://PANEL_HOST:18080 \
   --token AGENT_TOKEN \
   --node-name relay-1 \

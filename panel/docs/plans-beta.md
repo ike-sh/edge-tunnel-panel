@@ -1,6 +1,6 @@
 # Plans
 
-Leikwan Panel Plans remain manual-only in `3.0.0-alpha.2`.
+Leikwan Panel Plans remain manual-only in `3.0.0-alpha.4`.
 
 Plans are still safe by design:
 
@@ -67,7 +67,7 @@ This plan is manual-only. The agent will not execute it.
 
 ## Write Action Review
 
-`3.0.0-alpha.2` adds review-only APIs for future write actions:
+`3.0.0-alpha.4` adds review-only APIs for future write actions:
 
 ```text
 GET  /api/v1/plans/:id/action-review
@@ -83,7 +83,7 @@ ready_for_future_execution=false
 The reason is always:
 
 ```text
-write execution is disabled in 3.0.0-alpha.2
+write execution is disabled in 3.0.0-alpha.4
 ```
 
 Action review does not create Agent tasks, does not modify nodes, and does not generate shell commands.
@@ -180,9 +180,9 @@ Authorization
 
 Automatic write execution needs a permission model, write allowlists, dry-run, snapshots, review, audit logs, rollback handling and explicit operator approval. These are still out of scope.
 
-## 3.0.0-alpha.2 Snapshot / Rollback Safety Framework
+## 3.0.0-alpha.4 Snapshot / Rollback Safety Framework
 
-Leikwan Panel 3.0.0-alpha.2 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
+Leikwan Panel 3.0.0-alpha.4 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
 
 New Plan APIs:
 
@@ -196,4 +196,4 @@ POST /api/v1/plans/:id/verify
 See `snapshot-rollback-beta.md` and `safety-gate.md`.
 ## Compatibility Note
 
-This document remains under its original filename for link compatibility. Plans are part of Leikwan Panel 3.0.0-alpha.2 and remain manual-only.
+This document remains under its original filename for link compatibility. Plans are part of Leikwan Panel 3.0.0-alpha.4 and remain manual-only.
