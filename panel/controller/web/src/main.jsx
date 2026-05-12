@@ -4,18 +4,18 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
+const DEFAULT_VERSION = 'v0.1.1-test';
 
 const tabs = [
-  ['login', 'Login / Token'],
-  ['dashboard', 'Dashboard'],
-  ['nodes', 'Nodes'],
-  ['add-agent', 'Add Agent'],
-  ['networks', 'Network Profiles'],
-  ['entries', 'Entries'],
-  ['forwards', 'Forwards'],
-  ['pbr', 'PBR'],
-  ['tasks', 'Tasks'],
-  ['settings', 'Settings']
+  ['dashboard', '总览'],
+  ['nodes', '节点'],
+  ['add-agent', '添加节点'],
+  ['networks', '组网配置'],
+  ['entries', '公网入口'],
+  ['forwards', '转发规则'],
+  ['pbr', '出口策略'],
+  ['tasks', '任务'],
+  ['settings', '设置']
 ];
 
 const readonlyActions = [
@@ -27,9 +27,32 @@ const readonlyActions = [
   'verify_ddns_status'
 ];
 
+const roleOptions = [
+  ['entry', '公网入口'],
+  ['relay', '中继'],
+  ['exit', '出口节点'],
+  ['backend', '后端节点']
+];
+
+const statusText = {
+  online: '在线',
+  stale: '可能离线',
+  offline: '离线',
+  pending: '等待中',
+  running: '执行中',
+  succeeded: '成功',
+  failed: '失败',
+  expired: '已过期',
+  cancelled: '已取消',
+  all: '全部'
+};
+
 const taskStatuses = ['all', 'pending', 'running', 'succeeded', 'failed', 'expired', 'cancelled'];
-const nodeRoles = ['entry', 'relay', 'exit', 'backend'];
-const protocols = ['tcp', 'udp'];
+
+function browserControllerURL() {
+  if (typeof window === 'undefined') return 'http://CONTROLLER_HOST:18080';
+  return `${window.location.protocol}//${window.location.host}`;
+}
 
 function normalizeBase(value) {
   return value.trim().replace(/\/+$/, '');
@@ -38,22 +61,25 @@ function normalizeBase(value) {
 function formatTime(value) {
   if (!value) return '-';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  return date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+}
+
+function safeList(value) {
+  return Array.isArray(value) ? value : [];
 }
 
 function summarize(value) {
   if (value === null || value === undefined || value === '') return '-';
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  return text.length > 360 ? `${text.slice(0, 360)}...` : text;
+  return text.length > 420 ? `${text.slice(0, 420)}...` : text;
 }
 
 function statusClass(status) {
   return `badge ${status || 'unknown'}`;
 }
 
-function safeList(value) {
-  return Array.isArray(value) ? value : [];
+function trStatus(status) {
+  return statusText[status] || status || '-';
 }
 
 function App() {
@@ -77,15 +103,16 @@ function App() {
   const [taskFilter, setTaskFilter] = useState('all');
 
   const [agentForm, setAgentForm] = useState({
-    controller_url: 'http://CONTROLLER_HOST:18080',
+    controller_url: browserControllerURL(),
     node_name: 'edge-node-1',
-    role: 'entry',
+    role: 'backend',
+    version: DEFAULT_VERSION,
     enable_tasks: true,
-    enable_write_actions: true
+    enable_write_actions: true,
+    show_full_token: false
   });
   const [maskedCommand, setMaskedCommand] = useState('');
   const [fullCommand, setFullCommand] = useState('');
-  const [showFullCommand, setShowFullCommand] = useState(false);
 
   const [networkForm, setNetworkForm] = useState({
     name: '',
@@ -166,12 +193,9 @@ function App() {
     } catch {
       payload = null;
     }
-    if (!response.ok) {
-      const message = payload?.error?.message || `${response.status} ${response.statusText}`;
-      throw new Error(message);
-    }
+    if (!response.ok) throw new Error(payload?.error?.message || `${response.status} ${response.statusText}`);
     if (payload && typeof payload.ok === 'boolean') {
-      if (!payload.ok) throw new Error(payload.error?.message || 'request failed');
+      if (!payload.ok) throw new Error(payload.error?.message || '请求失败');
       return payload.data;
     }
     return payload;
@@ -182,7 +206,7 @@ function App() {
     setAlert(null);
     try {
       const result = await fn();
-      setAlert({ type: 'success', message: `${label} completed` });
+      setAlert({ type: 'success', message: `${label}完成` });
       return result;
     } catch (error) {
       setAlert({ type: 'error', message: error.message || String(error) });
@@ -256,20 +280,20 @@ function App() {
   }
 
   useEffect(() => {
-    run('Refresh', refreshAll);
+    run('刷新', refreshAll);
   }, []);
 
   function saveToken() {
     localStorage.setItem(TOKEN_KEY, tokenDraft);
     setToken(tokenDraft);
-    setAlert({ type: 'success', message: 'Operator token saved' });
+    setAlert({ type: 'success', message: 'Operator Token 已保存' });
   }
 
   function clearToken() {
     localStorage.removeItem(TOKEN_KEY);
     setToken('');
     setTokenDraft('');
-    setAlert({ type: 'success', message: 'Operator token cleared' });
+    setAlert({ type: 'success', message: 'Operator Token 已清除' });
   }
 
   function saveApiBase() {
@@ -277,42 +301,37 @@ function App() {
     if (next) localStorage.setItem(API_BASE_KEY, next);
     else localStorage.removeItem(API_BASE_KEY);
     setApiBase(next);
-    setAlert({ type: 'success', message: 'API base saved' });
+    setAlert({ type: 'success', message: 'API 地址已保存' });
   }
 
   async function createTask(nodeId, action) {
-    await run('Task creation', async () => {
+    await run('创建任务', async () => {
       await api('/tasks', { body: { node_id: nodeId, action, payload: {} } });
       await refreshTasks();
     });
   }
 
-  async function generateAgentCommand(showFull) {
-    const data = await run('Agent command generation', async () =>
+  async function generateAgentCommand(showFull = agentForm.show_full_token) {
+    const data = await run('生成一键命令', async () =>
       api('/bootstrap/agent-install-command', {
         body: { ...agentForm, show_full_token: showFull }
       })
     );
-    if (!data?.command) return;
-    if (showFull) {
-      setFullCommand(data.command);
-      setShowFullCommand(true);
-    } else {
-      setMaskedCommand(data.command);
-      setShowFullCommand(false);
-      setFullCommand('');
-    }
+    if (!data?.masked_command && !data?.command) return;
+    setMaskedCommand(data.masked_command || data.command);
+    setFullCommand(data.full_command || '');
+    setAgentForm((current) => ({ ...current, show_full_token: showFull }));
   }
 
   async function copyText(text) {
     if (!text) return;
     await navigator.clipboard.writeText(text);
-    setAlert({ type: 'success', message: 'Copied to clipboard' });
+    setAlert({ type: 'success', message: '已复制，去被控服务器执行即可' });
   }
 
   async function createNetworkProfile(event) {
     event.preventDefault();
-    await run('Network Profile creation', async () => {
+    await run('创建组网配置', async () => {
       await api('/network-profiles', { body: networkForm });
       setNetworkForm({ ...networkForm, name: '', network_secret: '' });
       await refreshNetworkProfiles();
@@ -322,10 +341,10 @@ function App() {
   async function applyNetworkProfile(profile) {
     const nodeId = networkApplyNode[profile.id] || nodes[0]?.id || '';
     if (!nodeId) {
-      setAlert({ type: 'error', message: 'Select a target node first' });
+      setAlert({ type: 'error', message: '请先选择目标节点' });
       return;
     }
-    await run('Network apply task', async () => {
+    await run('应用组网配置', async () => {
       await api(`/network-profiles/${profile.id}/apply`, { body: { node_id: nodeId, profile_id: profile.id } });
       await refreshTasks();
     });
@@ -333,7 +352,7 @@ function App() {
 
   async function createEntry(event) {
     event.preventDefault();
-    await run('Entry creation', async () => {
+    await run('创建公网入口', async () => {
       await api('/entries', {
         body: {
           ...entryForm,
@@ -347,7 +366,7 @@ function App() {
   }
 
   async function applyEntry(entry) {
-    await run('Entry apply task', async () => {
+    await run('应用公网入口', async () => {
       await api(`/entries/${entry.id}/apply`, { body: { node_id: entry.node_id, entry_id: entry.id } });
       await refreshTasks();
     });
@@ -355,7 +374,7 @@ function App() {
 
   async function createForward(event) {
     event.preventDefault();
-    await run('Forward creation', async () => {
+    await run('创建转发规则', async () => {
       await api('/forwards', {
         body: {
           ...forwardForm,
@@ -369,7 +388,7 @@ function App() {
   }
 
   async function applyForward(forward) {
-    await run('Forward apply task', async () => {
+    await run('应用转发规则', async () => {
       await api(`/forwards/${forward.id}/apply`, {
         body: { entry_node_id: forward.entry_node_id, forward_id: forward.id }
       });
@@ -379,7 +398,7 @@ function App() {
 
   async function createPbrPolicy(event) {
     event.preventDefault();
-    await run('PBR policy creation', async () => {
+    await run('创建出口策略', async () => {
       await api('/pbr-policies', {
         body: {
           ...pbrForm,
@@ -393,59 +412,40 @@ function App() {
   }
 
   async function applyPbrPolicy(policy) {
-    await run('PBR apply task', async () => {
+    await run('应用出口策略', async () => {
       await api(`/pbr-policies/${policy.id}/apply`, { body: { node_id: policy.node_id, pbr_policy_id: policy.id } });
       await refreshTasks();
     });
-  }
-
-  function renderLogin() {
-    return (
-      <div className="grid two">
-        <Card title="Operator Token">
-          <label>Token</label>
-          <div className="inline">
-            <input
-              type={showToken ? 'text' : 'password'}
-              value={tokenDraft}
-              onChange={(event) => setTokenDraft(event.target.value)}
-              placeholder="Paste operator token"
-            />
-            <button type="button" onClick={() => setShowToken(!showToken)}>
-              {showToken ? 'Hide' : 'Show'}
-            </button>
-          </div>
-          <div className="actions">
-            <button onClick={saveToken}>Save Token</button>
-            <button className="secondary" onClick={clearToken}>Clear Token</button>
-            <button className="secondary" onClick={() => run('Connection test', refreshHealth)}>Test Connection</button>
-          </div>
-        </Card>
-        <Card title="Controller Health">
-          <KeyValues
-            rows={[
-              ['name', health?.name],
-              ['version', health?.version],
-              ['build commit', health?.build_commit],
-              ['build time', health?.build_time]
-            ]}
-          />
-        </Card>
-      </div>
-    );
   }
 
   function renderDashboard() {
     const recent = [...tasks].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 5);
     return (
       <>
-        <div className="grid four">
-          <Stat title="Controller" value={health?.name || 'unknown'} note={health?.version || '-'} />
-          <Stat title="Nodes" value={nodes.length} note={`online ${counts.nodeCounts.online} · stale ${counts.nodeCounts.stale} · offline ${counts.nodeCounts.offline}`} />
-          <Stat title="Active Tasks" value={counts.taskCounts.pending + counts.taskCounts.running} note={`pending ${counts.taskCounts.pending} · running ${counts.taskCounts.running}`} />
-          <Stat title="Completed Tasks" value={counts.taskCounts.succeeded + counts.taskCounts.failed} note={`succeeded ${counts.taskCounts.succeeded} · failed ${counts.taskCounts.failed}`} />
+        <div className="grid two">
+          <Card title="登录 / Token">
+            <label>Operator Token</label>
+            <div className="inline">
+              <input type={showToken ? 'text' : 'password'} value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="输入主控 Operator Token" />
+              <button type="button" onClick={() => setShowToken(!showToken)}>{showToken ? '隐藏' : '显示'}</button>
+            </div>
+            <div className="actions">
+              <button onClick={saveToken}>保存 Token</button>
+              <button className="secondary" onClick={clearToken}>清除 Token</button>
+              <button className="secondary" onClick={() => run('测试连接', refreshHealth)}>测试连接</button>
+            </div>
+          </Card>
+          <Card title="主控状态">
+            <KeyValues rows={[['名称', health?.name], ['版本', health?.version], ['提交', health?.build_commit], ['构建时间', health?.build_time]]} />
+          </Card>
         </div>
-        <Card title="Recent Tasks" action={<button onClick={() => run('Refresh', refreshAll)}>Refresh</button>}>
+        <div className="grid four">
+          <Stat title="节点" value={nodes.length} note={`在线 ${counts.nodeCounts.online} · 可能离线 ${counts.nodeCounts.stale} · 离线 ${counts.nodeCounts.offline}`} />
+          <Stat title="进行中任务" value={counts.taskCounts.pending + counts.taskCounts.running} note={`等待中 ${counts.taskCounts.pending} · 执行中 ${counts.taskCounts.running}`} />
+          <Stat title="已完成任务" value={counts.taskCounts.succeeded + counts.taskCounts.failed} note={`成功 ${counts.taskCounts.succeeded} · 失败 ${counts.taskCounts.failed}`} />
+          <Stat title="DDNS 配置" value={ddnsProfiles.length} note="作为节点/入口内置能力" />
+        </div>
+        <Card title="最近任务" action={<button onClick={() => run('刷新', refreshAll)}>刷新</button>}>
           <TaskTable tasks={recent} compact />
         </Card>
       </>
@@ -454,21 +454,21 @@ function App() {
 
   function renderNodes() {
     return (
-      <Card title="Nodes" action={<button onClick={() => run('Nodes refresh', refreshNodes)}>Refresh</button>}>
+      <Card title="节点" action={<button onClick={() => run('刷新节点', refreshNodes)}>刷新</button>}>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Host</th>
-                <th>Public IP</th>
-                <th>Private IP</th>
+                <th>名称</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th>主机名</th>
+                <th>公网 IP</th>
+                <th>内网 IP</th>
                 <th>EasyTier</th>
-                <th>Last Seen</th>
-                <th>Capabilities</th>
-                <th>Actions</th>
+                <th>最后上报</th>
+                <th>能力</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -476,7 +476,7 @@ function App() {
                 <tr key={node.id}>
                   <td>{node.name || node.id}</td>
                   <td>{node.role || '-'}</td>
-                  <td><span className={statusClass(node.status)}>{node.status || 'unknown'}</span></td>
+                  <td><span className={statusClass(node.status)}>{trStatus(node.status)}</span></td>
                   <td>{node.hostname || '-'}</td>
                   <td>{node.public_ip || '-'}</td>
                   <td>{node.private_ip || '-'}</td>
@@ -485,7 +485,7 @@ function App() {
                   <td><small>{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).join(', ') || '-'}</small></td>
                   <td>
                     <select onChange={(event) => event.target.value && createTask(node.id, event.target.value)} defaultValue="">
-                      <option value="">Create task</option>
+                      <option value="">创建任务</option>
                       {readonlyActions.map((action) => <option key={action} value={action}>{action}</option>)}
                     </select>
                   </td>
@@ -499,24 +499,27 @@ function App() {
   }
 
   function renderAddAgent() {
-    const visibleCommand = showFullCommand ? fullCommand : maskedCommand;
+    const visibleCommand = agentForm.show_full_token && fullCommand ? fullCommand : maskedCommand;
     return (
-      <Card title="Add Agent">
+      <Card title="添加节点">
+        <p className="muted">生成一键命令后，复制到被控服务器执行；执行完成后回到“节点”页面查看在线状态。</p>
         <div className="grid two form-grid">
-          <Field label="Controller URL" value={agentForm.controller_url} onChange={(value) => setAgentForm({ ...agentForm, controller_url: value })} />
-          <Field label="Node Name" value={agentForm.node_name} onChange={(value) => setAgentForm({ ...agentForm, node_name: value })} />
-          <Select label="Role" value={agentForm.role} options={nodeRoles} onChange={(value) => setAgentForm({ ...agentForm, role: value })} />
-          <div className="check-row">
-            <label><input type="checkbox" checked={agentForm.enable_tasks} onChange={(event) => setAgentForm({ ...agentForm, enable_tasks: event.target.checked })} /> Enable tasks</label>
-            <label><input type="checkbox" checked={agentForm.enable_write_actions} onChange={(event) => setAgentForm({ ...agentForm, enable_write_actions: event.target.checked })} /> Enable write actions</label>
-          </div>
+          <Field label="Controller 地址" value={agentForm.controller_url} onChange={(value) => setAgentForm({ ...agentForm, controller_url: value })} />
+          <Field label="节点名称" value={agentForm.node_name} onChange={(value) => setAgentForm({ ...agentForm, node_name: value })} />
+          <Field label="版本" value={agentForm.version} onChange={(value) => setAgentForm({ ...agentForm, version: value })} />
+          <Select label="节点角色" value={agentForm.role} options={roleOptions} onChange={(value) => setAgentForm({ ...agentForm, role: value })} />
+          <label className="check"><input type="checkbox" checked={agentForm.enable_tasks} onChange={(event) => setAgentForm({ ...agentForm, enable_tasks: event.target.checked })} /> 启用任务轮询</label>
+          <label className="check"><input type="checkbox" checked={agentForm.enable_write_actions} onChange={(event) => setAgentForm({ ...agentForm, enable_write_actions: event.target.checked })} /> 允许写入动作</label>
         </div>
+        {agentForm.enable_write_actions && <div className="alert warning">允许写入动作后，Agent 可以写入 EasyTier、转发、PBR、DDNS 配置，请只在可信服务器执行。</div>}
+        <label className="check"><input type="checkbox" checked={agentForm.show_full_token} onChange={(event) => setAgentForm({ ...agentForm, show_full_token: event.target.checked })} /> 显示完整 Token</label>
         <div className="actions">
-          <button onClick={() => generateAgentCommand(false)}>Generate Masked Command</button>
-          <button className="warning" onClick={() => generateAgentCommand(true)}>Show Full Token Command</button>
-          <button className="secondary" onClick={() => copyText(visibleCommand)}>Copy</button>
+          <button onClick={() => generateAgentCommand(false)}>生成一键命令</button>
+          <button className="warning" onClick={() => generateAgentCommand(true)}>显示完整 Token 并生成</button>
+          <button className="secondary" onClick={() => copyText(visibleCommand)}>复制</button>
         </div>
-        <pre>{visibleCommand || 'Generate an Agent install command to display it here.'}</pre>
+        <pre>{visibleCommand || '点击“生成一键命令”后，这里会显示可复制的 Agent 接入命令。'}</pre>
+        {visibleCommand && <p className="muted">下一步：复制后到被控服务器执行，然后回到“节点”页面刷新查看在线状态。</p>}
       </Card>
     );
   }
@@ -524,17 +527,17 @@ function App() {
   function renderNetworkProfiles() {
     return (
       <>
-        <Card title="Create Network Profile">
+        <Card title="创建组网配置">
           <form onSubmit={createNetworkProfile} className="grid five form-grid">
-            <Field label="Name" value={networkForm.name} onChange={(value) => setNetworkForm({ ...networkForm, name: value })} required />
-            <Field label="Network Name" value={networkForm.network_name} onChange={(value) => setNetworkForm({ ...networkForm, network_name: value })} />
-            <Field label="Network Secret" value={networkForm.network_secret} onChange={(value) => setNetworkForm({ ...networkForm, network_secret: value })} />
+            <Field label="名称" value={networkForm.name} onChange={(value) => setNetworkForm({ ...networkForm, name: value })} required />
+            <Field label="网络名" value={networkForm.network_name} onChange={(value) => setNetworkForm({ ...networkForm, network_name: value })} />
+            <Field label="网络密钥" value={networkForm.network_secret} onChange={(value) => setNetworkForm({ ...networkForm, network_secret: value })} />
             <Field label="CIDR" value={networkForm.cidr} onChange={(value) => setNetworkForm({ ...networkForm, cidr: value })} />
-            <Select label="Protocol" value={networkForm.protocol_preference} options={['auto', 'tcp', 'udp', 'wg', 'ws', 'wss']} onChange={(value) => setNetworkForm({ ...networkForm, protocol_preference: value })} />
-            <button type="submit">Create</button>
+            <Select label="协议偏好" value={networkForm.protocol_preference} options={['auto', 'tcp', 'udp', 'wg', 'ws', 'wss']} onChange={(value) => setNetworkForm({ ...networkForm, protocol_preference: value })} />
+            <button type="submit">创建</button>
           </form>
         </Card>
-        <Card title="Network Profiles" action={<button onClick={() => run('Network Profiles refresh', refreshNetworkProfiles)}>Refresh</button>}>
+        <Card title="组网配置" action={<button onClick={() => run('刷新组网配置', refreshNetworkProfiles)}>刷新</button>}>
           <div className="cards">
             {networkProfiles.map((profile) => (
               <div className="mini-card" key={profile.id}>
@@ -542,10 +545,10 @@ function App() {
                 <p>{profile.network_name} · {profile.cidr} · {profile.protocol_preference}</p>
                 <div className="inline">
                   <select value={networkApplyNode[profile.id] || ''} onChange={(event) => setNetworkApplyNode({ ...networkApplyNode, [profile.id]: event.target.value })}>
-                    <option value="">Target node</option>
+                    <option value="">选择目标节点</option>
                     {nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id}</option>)}
                   </select>
-                  <button onClick={() => applyNetworkProfile(profile)}>Apply</button>
+                  <button onClick={() => applyNetworkProfile(profile)}>应用</button>
                 </div>
               </div>
             ))}
@@ -558,21 +561,21 @@ function App() {
   function renderEntries() {
     return (
       <>
-        <Card title="Create Entry">
+        <Card title="创建公网入口">
           <form onSubmit={createEntry} className="grid four form-grid">
-            <Field label="Name" value={entryForm.name} onChange={(value) => setEntryForm({ ...entryForm, name: value })} required />
-            <NodeSelect label="Node" value={entryForm.node_id} nodes={nodes} onChange={(value) => setEntryForm({ ...entryForm, node_id: value })} />
-            <Field label="Listen IP" value={entryForm.listen_ip} onChange={(value) => setEntryForm({ ...entryForm, listen_ip: value })} />
-            <Field label="Port Start" type="number" value={entryForm.listen_port_start} onChange={(value) => setEntryForm({ ...entryForm, listen_port_start: value })} required />
-            <Field label="Port End" type="number" value={entryForm.listen_port_end} onChange={(value) => setEntryForm({ ...entryForm, listen_port_end: value })} required />
-            <Select label="Protocol" value={entryForm.protocol} options={['tcp', 'udp', 'both']} onChange={(value) => setEntryForm({ ...entryForm, protocol: value })} />
-            <Field label="Domain" value={entryForm.domain} onChange={(value) => setEntryForm({ ...entryForm, domain: value })} />
+            <Field label="名称" value={entryForm.name} onChange={(value) => setEntryForm({ ...entryForm, name: value })} required />
+            <NodeSelect label="节点" value={entryForm.node_id} nodes={nodes} onChange={(value) => setEntryForm({ ...entryForm, node_id: value })} />
+            <Field label="监听 IP" value={entryForm.listen_ip} onChange={(value) => setEntryForm({ ...entryForm, listen_ip: value })} />
+            <Field label="起始端口" type="number" value={entryForm.listen_port_start} onChange={(value) => setEntryForm({ ...entryForm, listen_port_start: value })} required />
+            <Field label="结束端口" type="number" value={entryForm.listen_port_end} onChange={(value) => setEntryForm({ ...entryForm, listen_port_end: value })} required />
+            <Select label="协议" value={entryForm.protocol} options={['tcp', 'udp', 'both']} onChange={(value) => setEntryForm({ ...entryForm, protocol: value })} />
+            <Field label="域名" value={entryForm.domain} onChange={(value) => setEntryForm({ ...entryForm, domain: value })} />
             <Field label="DDNS Provider" value={entryForm.ddns_provider} onChange={(value) => setEntryForm({ ...entryForm, ddns_provider: value })} />
-            <label className="check"><input type="checkbox" checked={entryForm.ddns_enabled} onChange={(event) => setEntryForm({ ...entryForm, ddns_enabled: event.target.checked })} /> DDNS enabled</label>
-            <button type="submit">Create</button>
+            <label className="check"><input type="checkbox" checked={entryForm.ddns_enabled} onChange={(event) => setEntryForm({ ...entryForm, ddns_enabled: event.target.checked })} /> 启用 DDNS</label>
+            <button type="submit">创建</button>
           </form>
         </Card>
-        <ListCard title="Entries" items={entries} refresh={() => run('Entries refresh', refreshEntries)} apply={applyEntry} fields={['name', 'node_id', 'listen_ip', 'listen_port_start', 'listen_port_end', 'protocol', 'domain', 'status']} />
+        <ListCard title="公网入口" items={entries} refresh={() => run('刷新公网入口', refreshEntries)} apply={applyEntry} fields={['name', 'node_id', 'listen_ip', 'listen_port_start', 'listen_port_end', 'protocol', 'domain', 'status']} />
       </>
     );
   }
@@ -580,23 +583,23 @@ function App() {
   function renderForwards() {
     return (
       <>
-        <Card title="Create Forward">
+        <Card title="创建转发规则">
           <form onSubmit={createForward} className="grid four form-grid">
-            <Field label="Name" value={forwardForm.name} onChange={(value) => setForwardForm({ ...forwardForm, name: value })} required />
-            <Field label="Entry ID" value={forwardForm.entry_id} onChange={(value) => setForwardForm({ ...forwardForm, entry_id: value })} />
-            <NodeSelect label="Entry Node" value={forwardForm.entry_node_id} nodes={nodes} onChange={(value) => setForwardForm({ ...forwardForm, entry_node_id: value })} />
-            <Select label="Protocol" value={forwardForm.protocol} options={protocols} onChange={(value) => setForwardForm({ ...forwardForm, protocol: value })} />
-            <Field label="Listen Port" type="number" value={forwardForm.listen_port} onChange={(value) => setForwardForm({ ...forwardForm, listen_port: value })} required />
-            <Select label="Target Mode" value={forwardForm.target_mode} options={['local', 'overlay']} onChange={(value) => setForwardForm({ ...forwardForm, target_mode: value })} />
-            <NodeSelect label="Target Node" value={forwardForm.target_node_id} nodes={nodes} onChange={(value) => setForwardForm({ ...forwardForm, target_node_id: value })} />
-            <Field label="Target Host" value={forwardForm.target_host} onChange={(value) => setForwardForm({ ...forwardForm, target_host: value })} required />
-            <Field label="Target Port" type="number" value={forwardForm.target_port} onChange={(value) => setForwardForm({ ...forwardForm, target_port: value })} required />
-            <Field label="Remark" value={forwardForm.remark} onChange={(value) => setForwardForm({ ...forwardForm, remark: value })} />
-            <label className="check"><input type="checkbox" checked={forwardForm.enabled} onChange={(event) => setForwardForm({ ...forwardForm, enabled: event.target.checked })} /> Enabled</label>
-            <button type="submit">Create</button>
+            <Field label="名称" value={forwardForm.name} onChange={(value) => setForwardForm({ ...forwardForm, name: value })} required />
+            <Field label="入口 ID" value={forwardForm.entry_id} onChange={(value) => setForwardForm({ ...forwardForm, entry_id: value })} />
+            <NodeSelect label="公网入口节点" value={forwardForm.entry_node_id} nodes={nodes} onChange={(value) => setForwardForm({ ...forwardForm, entry_node_id: value })} />
+            <Select label="协议" value={forwardForm.protocol} options={['tcp', 'udp']} onChange={(value) => setForwardForm({ ...forwardForm, protocol: value })} />
+            <Field label="监听端口" type="number" value={forwardForm.listen_port} onChange={(value) => setForwardForm({ ...forwardForm, listen_port: value })} required />
+            <Select label="目标模式" value={forwardForm.target_mode} options={['local', 'overlay']} onChange={(value) => setForwardForm({ ...forwardForm, target_mode: value })} />
+            <NodeSelect label="目标节点" value={forwardForm.target_node_id} nodes={nodes} onChange={(value) => setForwardForm({ ...forwardForm, target_node_id: value })} />
+            <Field label="目标地址" value={forwardForm.target_host} onChange={(value) => setForwardForm({ ...forwardForm, target_host: value })} required />
+            <Field label="目标端口" type="number" value={forwardForm.target_port} onChange={(value) => setForwardForm({ ...forwardForm, target_port: value })} required />
+            <Field label="备注" value={forwardForm.remark} onChange={(value) => setForwardForm({ ...forwardForm, remark: value })} />
+            <label className="check"><input type="checkbox" checked={forwardForm.enabled} onChange={(event) => setForwardForm({ ...forwardForm, enabled: event.target.checked })} /> 启用</label>
+            <button type="submit">创建</button>
           </form>
         </Card>
-        <ListCard title="Forwards" items={forwards} refresh={() => run('Forwards refresh', refreshForwards)} apply={applyForward} fields={['name', 'entry_node_id', 'protocol', 'listen_port', 'target_mode', 'target_host', 'target_port', 'enabled']} />
+        <ListCard title="转发规则" items={forwards} refresh={() => run('刷新转发规则', refreshForwards)} apply={applyForward} fields={['name', 'entry_node_id', 'protocol', 'listen_port', 'target_mode', 'target_host', 'target_port', 'enabled']} />
       </>
     );
   }
@@ -604,23 +607,23 @@ function App() {
   function renderPbr() {
     return (
       <>
-        <Card title="Create PBR Policy">
+        <Card title="创建出口策略">
           <form onSubmit={createPbrPolicy} className="grid four form-grid">
-            <NodeSelect label="Node" value={pbrForm.node_id} nodes={nodes} onChange={(value) => setPbrForm({ ...pbrForm, node_id: value })} />
-            <Field label="Name" value={pbrForm.name} onChange={(value) => setPbrForm({ ...pbrForm, name: value })} required />
-            <Field label="Match Source" value={pbrForm.match_source} onChange={(value) => setPbrForm({ ...pbrForm, match_source: value })} />
-            <Field label="Match Destination" value={pbrForm.match_dst} onChange={(value) => setPbrForm({ ...pbrForm, match_dst: value })} />
-            <Field label="Protocol" value={pbrForm.match_protocol} onChange={(value) => setPbrForm({ ...pbrForm, match_protocol: value })} />
-            <Field label="Mark" value={pbrForm.match_mark} onChange={(value) => setPbrForm({ ...pbrForm, match_mark: value })} />
-            <Field label="Table ID" type="number" value={pbrForm.table_id} onChange={(value) => setPbrForm({ ...pbrForm, table_id: value })} />
-            <Field label="Gateway" value={pbrForm.gateway} onChange={(value) => setPbrForm({ ...pbrForm, gateway: value })} />
-            <Field label="Out Interface" value={pbrForm.out_interface} onChange={(value) => setPbrForm({ ...pbrForm, out_interface: value })} />
-            <Field label="Priority" type="number" value={pbrForm.priority} onChange={(value) => setPbrForm({ ...pbrForm, priority: value })} />
-            <label className="check"><input type="checkbox" checked={pbrForm.enabled} onChange={(event) => setPbrForm({ ...pbrForm, enabled: event.target.checked })} /> Enabled</label>
-            <button type="submit">Create</button>
+            <NodeSelect label="节点" value={pbrForm.node_id} nodes={nodes} onChange={(value) => setPbrForm({ ...pbrForm, node_id: value })} />
+            <Field label="名称" value={pbrForm.name} onChange={(value) => setPbrForm({ ...pbrForm, name: value })} required />
+            <Field label="匹配源地址" value={pbrForm.match_source} onChange={(value) => setPbrForm({ ...pbrForm, match_source: value })} />
+            <Field label="匹配目标地址" value={pbrForm.match_dst} onChange={(value) => setPbrForm({ ...pbrForm, match_dst: value })} />
+            <Field label="协议" value={pbrForm.match_protocol} onChange={(value) => setPbrForm({ ...pbrForm, match_protocol: value })} />
+            <Field label="标记" value={pbrForm.match_mark} onChange={(value) => setPbrForm({ ...pbrForm, match_mark: value })} />
+            <Field label="路由表 ID" type="number" value={pbrForm.table_id} onChange={(value) => setPbrForm({ ...pbrForm, table_id: value })} />
+            <Field label="网关" value={pbrForm.gateway} onChange={(value) => setPbrForm({ ...pbrForm, gateway: value })} />
+            <Field label="出口网卡" value={pbrForm.out_interface} onChange={(value) => setPbrForm({ ...pbrForm, out_interface: value })} />
+            <Field label="优先级" type="number" value={pbrForm.priority} onChange={(value) => setPbrForm({ ...pbrForm, priority: value })} />
+            <label className="check"><input type="checkbox" checked={pbrForm.enabled} onChange={(event) => setPbrForm({ ...pbrForm, enabled: event.target.checked })} /> 启用</label>
+            <button type="submit">创建</button>
           </form>
         </Card>
-        <ListCard title="PBR Policies" items={pbrPolicies} refresh={() => run('PBR refresh', refreshPbrPolicies)} apply={applyPbrPolicy} fields={['name', 'node_id', 'match_source', 'match_dst', 'table_id', 'gateway', 'out_interface', 'priority', 'enabled']} />
+        <ListCard title="出口策略" items={pbrPolicies} refresh={() => run('刷新出口策略', refreshPbrPolicies)} apply={applyPbrPolicy} fields={['name', 'node_id', 'match_source', 'match_dst', 'table_id', 'gateway', 'out_interface', 'priority', 'enabled']} />
       </>
     );
   }
@@ -628,17 +631,7 @@ function App() {
   function renderTasks() {
     const visibleTasks = taskFilter === 'all' ? tasks : tasks.filter((task) => task.status === taskFilter);
     return (
-      <Card
-        title="Tasks"
-        action={
-          <div className="inline">
-            <select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>
-              {taskStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
-            </select>
-            <button onClick={() => run('Tasks refresh', refreshTasks)}>Refresh</button>
-          </div>
-        }
-      >
+      <Card title="任务" action={<div className="inline"><select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>{taskStatuses.map((status) => <option key={status} value={status}>{trStatus(status)}</option>)}</select><button onClick={() => run('刷新任务', refreshTasks)}>刷新</button></div>}>
         <TaskTable tasks={visibleTasks} />
       </Card>
     );
@@ -647,33 +640,29 @@ function App() {
   function renderSettings() {
     return (
       <div className="grid two">
-        <Card title="API Base">
-          <label>Controller URL</label>
+        <Card title="API 地址">
+          <label>主控地址</label>
           <div className="inline">
-            <input value={apiBaseDraft} onChange={(event) => setApiBaseDraft(event.target.value)} placeholder="Same origin by default" />
-            <button onClick={saveApiBase}>Save</button>
+            <input value={apiBaseDraft} onChange={(event) => setApiBaseDraft(event.target.value)} placeholder="默认同源" />
+            <button onClick={saveApiBase}>保存</button>
           </div>
-          <p className="muted">Current: {apiBase || 'same origin'}</p>
-          <p className="muted">Token set: {token ? 'yes' : 'no'}</p>
+          <p className="muted">当前：{apiBase || '同源'}</p>
+          <p className="muted">Token：{token ? '已设置' : '未设置'}</p>
         </Card>
-        <Card title="Default Paths">
-          <KeyValues
-            rows={[
-              ['Agent config', '/etc/edge-tunnel/agent'],
-              ['Controller data', '/var/lib/edge-tunnel/controller'],
-              ['Controller service', 'edge-tunnel-controller.service'],
-              ['Agent service', 'edge-tunnel-agent.service'],
-              ['EasyTier service', 'edge-tunnel-easytier.service'],
-              ['DDNS profiles', `${ddnsProfiles.length} loaded`]
-            ]}
-          />
+        <Card title="默认路径">
+          <KeyValues rows={[
+            ['Agent 配置', '/etc/edge-tunnel/agent'],
+            ['Controller 数据', '/var/lib/edge-tunnel/controller'],
+            ['主控服务', 'edge-tunnel-controller.service'],
+            ['节点服务', 'edge-tunnel-agent.service'],
+            ['EasyTier 服务', 'edge-tunnel-easytier.service']
+          ]} />
         </Card>
       </div>
     );
   }
 
   const page = {
-    login: renderLogin,
     dashboard: renderDashboard,
     nodes: renderNodes,
     'add-agent': renderAddAgent,
@@ -690,17 +679,11 @@ function App() {
       <header>
         <div>
           <h1>Edge Tunnel Panel</h1>
-          <p>Controller, Agent, Entry, Forward, Network Profile, PBR, DDNS and Task management.</p>
+          <p>基于 EasyTier 的 TCP/UDP 隧道组网面板，用于管理主控、被控节点、公网入口、转发规则、出口策略、DDNS 与任务。</p>
         </div>
-        <button onClick={() => run('Refresh', refreshAll)} disabled={loading}>{loading ? 'Working...' : 'Refresh All'}</button>
+        <button onClick={() => run('刷新', refreshAll)} disabled={loading}>{loading ? '处理中...' : '刷新全部'}</button>
       </header>
-      <nav>
-        {tabs.map(([id, label]) => (
-          <button key={id} className={activeTab === id ? 'active' : ''} onClick={() => setActiveTab(id)}>
-            {label}
-          </button>
-        ))}
-      </nav>
+      <nav>{tabs.map(([id, label]) => <button key={id} className={activeTab === id ? 'active' : ''} onClick={() => setActiveTab(id)}>{label}</button>)}</nav>
       {alert && <div className={`alert ${alert.type}`}>{alert.message}</div>}
       <section>{page?.()}</section>
     </main>
@@ -708,128 +691,50 @@ function App() {
 }
 
 function Card({ title, action, children }) {
-  return (
-    <article className="card">
-      <div className="card-head">
-        <h2>{title}</h2>
-        {action}
-      </div>
-      {children}
-    </article>
-  );
+  return <article className="card"><div className="card-head"><h2>{title}</h2>{action}</div>{children}</article>;
 }
 
 function Stat({ title, value, note }) {
-  return (
-    <div className="stat">
-      <span>{title}</span>
-      <strong>{value}</strong>
-      <small>{note}</small>
-    </div>
-  );
+  return <div className="stat"><span>{title}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
 function Field({ label, value, onChange, type = 'text', required = false }) {
-  return (
-    <label>
-      {label}
-      <input type={type} value={value} required={required} onChange={(event) => onChange(event.target.value)} />
-    </label>
-  );
+  return <label>{label}<input type={type} value={value} required={required} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
 function Select({ label, value, options, onChange }) {
   return (
-    <label>
-      {label}
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
-    </label>
+    <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}>
+      {options.map((option) => Array.isArray(option) ? <option key={option[0]} value={option[0]}>{option[1]}</option> : <option key={option} value={option}>{option}</option>)}
+    </select></label>
   );
 }
 
 function NodeSelect({ label, value, nodes, onChange }) {
-  return (
-    <label>
-      {label}
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="">Select node</option>
-        {nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id}</option>)}
-      </select>
-    </label>
-  );
+  return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}><option value="">选择节点</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id}</option>)}</select></label>;
 }
 
 function KeyValues({ rows }) {
-  return (
-    <dl className="kv">
-      {rows.map(([key, value]) => (
-        <React.Fragment key={key}>
-          <dt>{key}</dt>
-          <dd>{value || '-'}</dd>
-        </React.Fragment>
-      ))}
-    </dl>
-  );
+  return <dl className="kv">{rows.map(([key, value]) => <React.Fragment key={key}><dt>{key}</dt><dd>{value || '-'}</dd></React.Fragment>)}</dl>;
 }
 
 function ListCard({ title, items, fields, refresh, apply }) {
   return (
-    <Card title={title} action={<button onClick={refresh}>Refresh</button>}>
+    <Card title={title} action={<button onClick={refresh}>刷新</button>}>
       <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              {fields.map((field) => <th key={field}>{field}</th>)}
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item) => (
-              <tr key={item.id}>
-                {fields.map((field) => <td key={field}>{String(item[field] ?? '-')}</td>)}
-                <td><button onClick={() => apply(item)}>Apply</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <table><thead><tr>{fields.map((field) => <th key={field}>{field}</th>)}<th>操作</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}>{fields.map((field) => <td key={field}>{String(item[field] ?? '-')}</td>)}<td><button onClick={() => apply(item)}>应用</button></td></tr>)}</tbody></table>
       </div>
     </Card>
   );
 }
 
 function TaskTable({ tasks, compact = false }) {
-  if (!tasks.length) return <p className="muted">No tasks yet.</p>;
+  if (!tasks.length) return <p className="muted">暂无任务。</p>;
   return (
     <div className="table-wrap">
       <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Node</th>
-            <th>Action</th>
-            <th>Status</th>
-            <th>Created</th>
-            {!compact && <th>Started</th>}
-            {!compact && <th>Finished</th>}
-            {!compact && <th>Output</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {tasks.map((task) => (
-            <tr key={task.id}>
-              <td><code>{task.id}</code></td>
-              <td>{task.node_id || '-'}</td>
-              <td>{task.action}</td>
-              <td><span className={statusClass(task.status)}>{task.status}</span></td>
-              <td>{formatTime(task.created_at)}</td>
-              {!compact && <td>{formatTime(task.started_at)}</td>}
-              {!compact && <td>{formatTime(task.finished_at)}</td>}
-              {!compact && <td><pre className="small">{summarize(task.error || task.stdout || task.stderr || task.result)}</pre></td>}
-            </tr>
-          ))}
-        </tbody>
+        <thead><tr><th>ID</th><th>节点</th><th>action</th><th>状态</th><th>创建时间</th>{!compact && <th>开始</th>}{!compact && <th>完成</th>}{!compact && <th>输出</th>}</tr></thead>
+        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{task.node_id || '-'}</td><td>{task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><pre className="small">{summarize(task.error || task.stdout || task.stderr || task.result)}</pre></td>}</tr>)}</tbody>
       </table>
     </div>
   );

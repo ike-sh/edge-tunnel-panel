@@ -11,7 +11,7 @@ import (
 	"github.com/ike-sh/edge-tunnel-panel/panel/controller/internal/controller"
 )
 
-var version = "v0.1.0-mvp"
+var version = "v0.1.1-test"
 
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

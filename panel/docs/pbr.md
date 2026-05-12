@@ -1,32 +1,25 @@
-# PBR
+# 出口策略 PBR
 
-Policy Based Routing lets a node steer selected traffic through a specific routing table, gateway, or interface.
+PBR 用于让指定流量走特定路由表、网关或网卡。
 
-## Model
+## 配置字段
 
-A PBR policy can match:
-
-- source CIDR
-- destination CIDR
-- protocol
+- 匹配源地址
+- 匹配目标地址
+- 协议
 - mark
+- 路由表 ID
+- 网关
+- 出口网卡
+- 优先级
 
-And can apply:
-
-- table id
-- gateway
-- output interface
-- priority
-
-## Files
-
-Agent writes:
+## 落地文件
 
 - `/etc/edge-tunnel/agent/pbr.json`
 - `/etc/edge-tunnel/agent/pbr-apply.sh`
 
-The script is generated from structured policy fields. Raw routing payloads are rejected.
+脚本由结构化字段生成，不接受 raw ip route payload。
 
-## Requirements
+## 风险
 
-PBR requires root privileges and Linux `iproute2`. Test rules carefully on remote hosts to avoid locking yourself out.
+PBR 会影响服务器路由，请先在测试节点验证，避免远程失联。

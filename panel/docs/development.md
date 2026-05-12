@@ -1,4 +1,4 @@
-# Development
+# 开发验证
 
 ## Controller
 
@@ -27,5 +27,5 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-bash panel/scripts/build-release.sh
+VERSION=v0.1.1-test bash panel/scripts/build-release.sh
 ```

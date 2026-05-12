@@ -1,28 +1,24 @@
-# Topology
+# 拓扑说明
 
-## Direct Forwarding
-
-Client traffic reaches a public Entry node. The Entry node forwards TCP/UDP traffic to a target on the same host or a directly reachable LAN address.
+## 单节点直接转发
 
 ```text
-Client -> Public Entry Node -> Local target service
+客户端 -> 公网入口节点 -> 本机或局域网目标服务
 ```
 
-Use `target_mode=local` for this mode.
+适合目标服务就在入口节点上，或入口节点能直接访问目标地址。
 
-## Overlay Forwarding
-
-Client traffic reaches a public Entry node. The Entry node forwards traffic through EasyTier to a backend node or overlay address.
+## 多节点隧道转发
 
 ```text
-Client -> Public Entry Node -> EasyTier overlay -> Backend Node -> Target service
+客户端 -> 公网入口节点 -> EasyTier overlay -> 后端节点 -> 目标服务
 ```
 
-Use `target_mode=overlay` for this mode.
+适合后端节点没有公网 IPv4，只能主动接入主控和 overlay 网络。
 
-## Node Roles
+## 角色
 
-- `entry`: public ingress node that listens for client traffic.
-- `relay`: overlay helper node for connectivity.
-- `exit`: node that can route selected traffic out.
-- `backend`: private service node behind NAT.
+- `entry`：公网入口节点。
+- `relay`：中继节点。
+- `exit`：出口节点。
+- `backend`：后端节点。

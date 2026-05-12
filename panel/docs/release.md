@@ -1,18 +1,18 @@
 # Release
 
-Build release archives from the repository root:
+构建测试版 release：
 
 ```bash
-VERSION=0.1.0 bash panel/scripts/build-release.sh
+VERSION=v0.1.1-test bash panel/scripts/build-release.sh
 ```
 
-Generated files:
+输出：
 
-- `panel/dist/edge-tunnel-panel-0.1.0-linux-amd64.tar.gz`
-- `panel/dist/edge-tunnel-panel-0.1.0-linux-arm64.tar.gz`
+- `panel/dist/edge-tunnel-panel-v0.1.1-test-linux-amd64.tar.gz`
+- `panel/dist/edge-tunnel-panel-v0.1.1-test-linux-arm64.tar.gz`
 - `panel/dist/SHA256SUMS`
 
-Each archive contains:
+每个包根目录包含：
 
 - `edge-tunnel-controller`
 - `edge-tunnel-agent`

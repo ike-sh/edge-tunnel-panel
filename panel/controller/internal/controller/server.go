@@ -182,15 +182,36 @@ func (s *Server) handleBootstrapInfo(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
 		return
 	}
-	writeOK(w, 200, map[string]any{"install_script_url": installScriptURL(), "default_node_name": "edge-node", "repo": "ike-sh/edge-tunnel-panel"})
+	writeOK(w, 200, map[string]any{"install_script_url": installScriptURL(), "default_node_name": "edge-node-1", "default_version": defaultAgentInstallVersion, "repo": "ike-sh/edge-tunnel-panel"})
 }
 func (s *Server) handleBootstrapAgentInstall(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
 		return
 	}
-	req, _ := decodeBody(w, r)
-	cmd := buildAgentInstallCommand(stringValue(req["controller_url"], "http://127.0.0.1:18080"), redactToken(s.agentToken), stringValue(req["node_name"], "edge-node"), stringValue(req["role"], "relay"), true, false)
-	writeOK(w, 200, map[string]any{"command": cmd})
+	req, ok := decodeBody(w, r)
+	if !ok {
+		return
+	}
+	version := stringValue(req["version"], defaultAgentInstallVersion)
+	controllerURL := stringValue(req["controller_url"], "http://127.0.0.1:18080")
+	nodeName := stringValue(req["node_name"], "edge-node-1")
+	role := stringValue(req["role"], "backend")
+	enableTasks := boolRequestValue(req, "enable_tasks", true)
+	enableWrites := boolRequestValue(req, "enable_write_actions", true)
+	maskedCommand := buildAgentInstallCommand(version, controllerURL, redactToken(s.agentToken), nodeName, role, enableTasks, enableWrites)
+	data := map[string]any{
+		"masked_command":       maskedCommand,
+		"command":              maskedCommand,
+		"version":              version,
+		"role":                 role,
+		"node_name":            nodeName,
+		"enable_tasks":         enableTasks,
+		"enable_write_actions": enableWrites,
+	}
+	if boolRequestValue(req, "show_full_token", false) {
+		data["full_command"] = buildAgentInstallCommand(version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites)
+	}
+	writeOK(w, 200, data)
 }
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {

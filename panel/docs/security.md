@@ -1,14 +1,15 @@
-# Security
+# 安全说明
 
-## Tokens
+## Token
 
-- `EDGE_OPERATOR_TOKEN` is used by Web and operator APIs.
-- `EDGE_CONTROLLER_TOKEN` is used by Agents.
-- Keep both tokens secret and rotate them if exposed.
+- `EDGE_OPERATOR_TOKEN`：Web/API 操作员 Token。
+- `EDGE_CONTROLLER_TOKEN`：Agent 接入主控使用的 Token。
 
-## Agent Action Boundary
+两类 Token 不应混用，也不要写入公开日志。
 
-Agent tasks are fixed actions only. Dangerous payload keys are rejected:
+## Agent 边界
+
+Agent 只接受固定 action，不接受任意命令字符串。危险字段会被拒绝：
 
 - `command`
 - `cmd`
@@ -18,12 +19,10 @@ Agent tasks are fixed actions only. Dangerous payload keys are rejected:
 - `raw_iptables`
 - `raw_ip_route`
 
-Write actions require `EDGE_ENABLE_WRITE_ACTIONS=true`.
+## 写入动作
 
-## Redaction
+启用 `EDGE_ENABLE_WRITE_ACTIONS=true` 后，Agent 可以写入 EasyTier、转发、PBR、DDNS 配置。只应在可信服务器启用。
 
-The Agent redacts controller tokens, bearer headers, token query values, and token-like JSON fields from results, stdout, stderr, and errors.
+## 权限
 
-## Root Privileges
-
-Controller and Agent examples run as root because systemd management, nftables, routing policy, and service files require privileged operations on Linux.
+安装脚本和 systemd 示例默认使用 root，因为 nftables、路由策略和服务管理都需要系统权限。

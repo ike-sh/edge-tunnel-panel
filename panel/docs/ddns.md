@@ -1,24 +1,15 @@
 # DDNS
 
-DDNS is an integrated Entry/Node capability rather than a top-level primary workflow.
+DDNS 不是一级主流程，而是节点或公网入口的内置能力。
 
-## Usage
+## 当前能力
 
-Entries can enable DDNS fields:
+测试版主要完成配置落地和安全 redaction，provider 同步逻辑后续增强。
 
-- provider
-- domain
-- record type
-- token reference
+## 配置路径
 
-Agent writes DDNS config to:
+Agent 写入：
 
 - `/etc/edge-tunnel/agent/ddns.json`
 
-## Provider Strategy
-
-The first MVP focuses on safe config landing and webhook-style integration points. Provider-specific sync behavior can be expanded after real deployment feedback.
-
-## Secret Handling
-
-DDNS tokens should be stored as references whenever possible. Task outputs and errors redact token-like values.
+Token 建议使用引用方式保存，任务输出会隐藏敏感值。

@@ -1,39 +1,35 @@
-# Quick Start
+# 快速开始
 
-## Install Controller
+## 安装主控
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
+  --version v0.1.1-test
 ```
 
-The installer creates:
+打开 `http://服务器IP:18080`，保存安装输出中的 Operator Token。
 
-- `/usr/local/bin/edge-tunnel-controller`
-- `/etc/edge-tunnel/controller/controller.env`
-- `/var/lib/edge-tunnel/controller`
-- `/var/lib/edge-tunnel/controller/web`
-- `edge-tunnel-controller.service`
+## 添加节点
 
-## Join an Agent
-
-Use the Web **Add Agent** page or run:
+进入 Web 的“添加节点”，生成一键 Agent 命令，复制到被控服务器执行。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
+  --version v0.1.1-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
-  --role entry \
+  --role backend \
   --enable-tasks \
   --enable-write-actions
 ```
 
-## First Web Flow
+执行后回到“节点”页面刷新，确认节点在线。
 
-1. Save the Operator Token in **Login / Token**.
-2. Confirm the Agent in **Nodes**.
-3. Create a **Network Profile** with a CIDR such as `10.144.0.0/16`.
-4. Apply the Network Profile to the Agent node.
-5. Create an **Entry** on a public node.
-6. Create a **Forward** for TCP or UDP.
-7. Apply the Forward and watch **Tasks**.
+## 第一次配置
+
+1. 创建“组网配置”。
+2. 应用到目标节点。
+3. 创建“公网入口”。
+4. 创建“转发规则”。
+5. 在“任务”页面查看执行结果。

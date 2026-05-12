@@ -1,41 +1,21 @@
-# Network Forwarding
+# 网络转发
 
-## Entry
+## 公网入口
 
-An Entry represents a public listening range on a node:
+公网入口定义节点上的监听地址、端口范围、协议、域名和 DDNS 配置。
 
-- `node_id`
-- `listen_ip`
-- `listen_port_start`
-- `listen_port_end`
-- `protocol`
-- optional `domain`
-- optional DDNS config
+## 转发规则
 
-## Forward
+转发规则定义公网端口到目标服务的映射：
 
-A Forward maps one public port to a target:
+- `target_mode=local`：入口节点本地或可直连地址。
+- `target_mode=overlay`：通过 EasyTier overlay 到后端节点。
 
-- `entry_node_id`
-- `protocol`
-- `listen_port`
-- `target_mode`
-- `target_host`
-- `target_port`
+## 落地文件
 
-## Local Target
-
-Use `target_mode=local` when the target is reachable from the Entry node without the overlay.
-
-## Overlay Target
-
-Use `target_mode=overlay` when the target is reachable through EasyTier.
-
-## nftables Output
-
-Agent writes structured forwarding config to:
+Agent 写入：
 
 - `/etc/edge-tunnel/agent/forward.json`
 - `/etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft`
 
-The Agent never accepts raw nftables payloads from tasks.
+Agent 不接受 raw nftables payload，只根据结构化配置生成规则。

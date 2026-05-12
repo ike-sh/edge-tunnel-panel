@@ -11,6 +11,8 @@ WEB_DIR="${WEB_DIR:-/var/lib/edge-tunnel/controller/web}"
 LOG_DIR="${LOG_DIR:-/var/log/edge-tunnel}"
 SOURCE_BUILD=false
 NO_START=false
+UNINSTALL=false
+PURGE=false
 OPERATOR_TOKEN="${EDGE_OPERATOR_TOKEN:-}"
 AGENT_TOKEN="${EDGE_CONTROLLER_TOKEN:-}"
 
@@ -29,6 +31,8 @@ Options:
   --config-dir DIR          Controller config directory
   --source-build            Build from current source checkout
   --no-start                Do not start service after install
+  --uninstall               卸载主控服务和二进制，保留配置、数据和日志
+  --purge                   彻底删除主控服务、二进制、配置、数据和日志
   -h, --help                Show help
 USAGE
 }
@@ -53,6 +57,25 @@ find_file_cmd() {
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
     fail "please run as root"
+  fi
+}
+
+uninstall_controller() {
+  systemctl stop edge-tunnel-controller.service >/dev/null 2>&1 || true
+  log "已停止主控服务"
+  systemctl disable edge-tunnel-controller.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/edge-tunnel-controller.service
+  rm -f "$INSTALL_DIR/edge-tunnel-controller"
+  log "已删除主控二进制"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl reset-failed edge-tunnel-controller.service >/dev/null 2>&1 || true
+  if [ "$PURGE" = true ]; then
+    rm -rf "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
+    rmdir /etc/edge-tunnel >/dev/null 2>&1 || true
+    rmdir /var/lib/edge-tunnel >/dev/null 2>&1 || true
+    log "已彻底删除配置、数据和日志"
+  else
+    log "已保留配置和数据"
   fi
 }
 
@@ -190,12 +213,18 @@ while [ "$#" -gt 0 ]; do
     --config-dir) CONFIG_DIR="$2"; shift 2 ;;
     --source-build) SOURCE_BUILD=true; shift ;;
     --no-start) NO_START=true; shift ;;
+    --uninstall) UNINSTALL=true; shift ;;
+    --purge) PURGE=true; UNINSTALL=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown option: $1" ;;
   esac
 done
 
 require_root
+if [ "$UNINSTALL" = true ]; then
+  uninstall_controller
+  exit 0
+fi
 install -d -m 0755 "$INSTALL_DIR"
 if [ "$SOURCE_BUILD" = true ]; then
   install_from_source

@@ -1,106 +1,109 @@
 # Edge Tunnel Panel
 
-Edge Tunnel Panel is a Web controller and Agent system for building TCP/UDP tunnel networks with EasyTier. It is designed for hosts that do not have a public IPv4 address and need one or more public entry servers to expose services through direct forwarding or overlay forwarding.
+Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
 
-## Use Cases
+当前版本：`v0.1.1-test`
 
-- Backend servers behind NAT with only a mapped SSH port.
-- Public entry servers forwarding TCP/UDP traffic to local or overlay targets.
-- Multi-node EasyTier networks with entry, relay, exit, and backend roles.
-- Central Web management for nodes, network profiles, entries, forwards, PBR policies, DDNS settings, and tasks.
+## 典型场景
 
-## Architecture
+- 被控服务器没有公网 IPv4。
+- 服务器只有 SSH NAT 端口，无法直接暴露业务端口。
+- 需要一台公网服务器作为入口节点。
+- 需要单节点直接转发，或多节点通过 EasyTier 隧道转发。
 
-- **Controller**: Go HTTP API, JSON file storage, task scheduler, Agent bootstrap command generator, and static Web server.
-- **Agent**: Go daemon installed on entry, relay, exit, or backend nodes. It reports status, polls fixed tasks, and applies structured configs.
-- **Web**: React + Vite management UI for login, nodes, Add Agent, Network Profiles, Entries, Forwards, PBR, Tasks, and Settings.
-- **EasyTier**: Overlay network layer managed by Agent config.
-- **nftables**: Forwarding rule backend generated from structured Forward configs.
-- **PBR**: Linux routing policy generated from structured PBR configs.
-- **DDNS**: Entry/Node integrated config capability for dynamic address updates.
+## 架构
 
-## Quick Start
+- **Controller**：主控 API、JSON 存储、任务下发、Web 静态文件服务。
+- **Agent**：安装在被控节点，主动注册、上报状态、轮询固定任务。
+- **Web**：浏览器面板，默认中文，提供“添加节点”一键命令入口。
+- **EasyTier**：节点间 overlay 组网。
+- **nftables**：结构化生成 TCP/UDP 转发规则。
+- **PBR**：结构化生成 Linux 出口策略。
+- **DDNS**：作为节点/公网入口的内置配置能力。
 
-Install Controller:
+## 快速安装 Controller
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
+  --version v0.1.1-test
 ```
 
-Install an Agent:
+安装完成后打开：
+
+```text
+http://服务器IP:18080
+```
+
+## 添加节点
+
+1. 打开 Web，保存安装输出中的 Operator Token。
+2. 进入“添加节点”。
+3. 填写 Controller 地址、节点名称、角色和版本。
+4. 点击“生成一键命令”。
+5. 复制命令到被控服务器执行。
+6. 回到“节点”页面刷新，查看在线状态。
+
+示例命令：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
+  --version v0.1.1-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
-  --role entry \
+  --role backend \
   --enable-tasks \
   --enable-write-actions
 ```
 
-## Web Flow
+## 卸载
 
-1. Open the Controller URL and save the Operator Token.
-2. Use **Add Agent** to generate an Agent install command.
-3. Confirm new nodes in **Nodes**.
-4. Create a **Network Profile** and apply it to selected nodes.
-5. Create an **Entry** on a public node.
-6. Create a **Forward** for TCP or UDP traffic.
-7. Add **PBR** policies when traffic needs a specific routing table or gateway.
-8. Track task execution in **Tasks**.
-
-## Forwarding Modes
-
-- **Single-node direct forwarding**: the Entry node forwards traffic to a local target host and port.
-- **Multi-node tunnel forwarding**: the Entry node forwards traffic to a target node or overlay address through EasyTier.
-
-## Default Paths
-
-| Purpose | Path |
-| --- | --- |
-| Controller binary | `/usr/local/bin/edge-tunnel-controller` |
-| Agent binary | `/usr/local/bin/edge-tunnel-agent` |
-| Controller config | `/etc/edge-tunnel/controller` |
-| Agent config | `/etc/edge-tunnel/agent` |
-| Controller data | `/var/lib/edge-tunnel/controller` |
-| Agent state | `/var/lib/edge-tunnel/agent` |
-| Logs | `/var/log/edge-tunnel` |
-| Controller service | `edge-tunnel-controller.service` |
-| Agent service | `edge-tunnel-agent.service` |
-| EasyTier service | `edge-tunnel-easytier.service` |
-
-## Security Boundary
-
-- Agent does not accept arbitrary shell commands.
-- Agent only accepts fixed actions from an allowlist.
-- Dangerous payload keys are rejected: `command`, `cmd`, `shell`, `script`, `raw_nft`, `raw_iptables`, `raw_ip_route`.
-- Tokens are redacted from task output and error strings.
-- Task result size is limited by the Agent.
-- Write actions are disabled unless `EDGE_ENABLE_WRITE_ACTIONS=true`.
-
-## Development Validation
+Controller 保留数据卸载：
 
 ```bash
-cd panel/controller
-gofmt -w .
-go test ./... -v -count=1 -timeout=30s
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- --uninstall
+```
 
-cd ../agent
-gofmt -w .
-go test ./... -v -count=1 -timeout=30s
+Controller 彻底删除：
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- --purge
+```
+
+Agent 保留数据卸载：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- --uninstall
+```
+
+Agent 彻底删除：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- --purge
+```
+
+## 安全边界
+
+- Agent 不接受任意 shell 命令。
+- Agent 只执行固定 action。
+- 拒绝危险字段：`command`、`cmd`、`shell`、`script`、`raw_nft`、`raw_iptables`、`raw_ip_route`。
+- Token 会在任务输出和错误中 redaction。
+- 写入动作需要显式启用 `EDGE_ENABLE_WRITE_ACTIONS=true`。
+
+## 当前限制
+
+- `v0.1.1-test` 是测试版。
+- EasyTier 自动下载/安装后续增强。
+- DDNS provider 后续增强。
+- PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
+
+## 开发验证
+
+```bash
+cd panel/controller && go test ./... -v -count=1 -timeout=30s
+cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-
-bash -n panel/scripts/*.sh
-bash panel/scripts/build-release.sh
+VERSION=v0.1.1-test bash panel/scripts/build-release.sh
 ```
-
-## Current Limits
-
-- This is the first MVP for online testing.
-- EasyTier auto-download is intentionally conservative and can be enhanced later.
-- DDNS currently focuses on safe config landing and provider integration points.
-- PBR requires Linux root privileges plus `iproute2` and `nftables`.

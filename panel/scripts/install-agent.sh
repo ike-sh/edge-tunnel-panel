@@ -16,6 +16,8 @@ ENABLE_TASKS="${EDGE_ENABLE_TASKS:-false}"
 ENABLE_WRITE_ACTIONS="${EDGE_ENABLE_WRITE_ACTIONS:-false}"
 SOURCE_BUILD=false
 NO_START=false
+UNINSTALL=false
+PURGE=false
 
 usage() {
   cat <<'USAGE'
@@ -35,6 +37,8 @@ Options:
   --install-dir DIR             Binary install directory
   --source-build                Build from current source checkout
   --no-start                    Do not start service after install
+  --uninstall                   卸载 Agent 服务和二进制，保留配置、状态和日志
+  --purge                       彻底删除 Agent 服务、二进制、配置、状态和日志
   -h, --help                    Show help
 USAGE
 }
@@ -62,6 +66,25 @@ mask() {
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
     fail "please run as root"
+  fi
+}
+
+uninstall_agent() {
+  systemctl stop edge-tunnel-agent.service >/dev/null 2>&1 || true
+  log "已停止 Agent 服务"
+  systemctl disable edge-tunnel-agent.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/edge-tunnel-agent.service
+  rm -f "$INSTALL_DIR/edge-tunnel-agent"
+  log "已删除 Agent 二进制"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl reset-failed edge-tunnel-agent.service >/dev/null 2>&1 || true
+  if [ "$PURGE" = true ]; then
+    rm -rf "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
+    rmdir /etc/edge-tunnel >/dev/null 2>&1 || true
+    rmdir /var/lib/edge-tunnel >/dev/null 2>&1 || true
+    log "已彻底删除配置、状态和日志"
+  else
+    log "已保留配置和状态"
   fi
 }
 
@@ -183,12 +206,18 @@ while [ "$#" -gt 0 ]; do
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --source-build) SOURCE_BUILD=true; shift ;;
     --no-start) NO_START=true; shift ;;
+    --uninstall) UNINSTALL=true; shift ;;
+    --purge) PURGE=true; UNINSTALL=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown option: $1" ;;
   esac
 done
 
 require_root
+if [ "$UNINSTALL" = true ]; then
+  uninstall_agent
+  exit 0
+fi
 [ -n "$CONTROLLER_URL" ] || fail "--controller-url is required"
 [ -n "$CONTROLLER_TOKEN" ] || fail "--token is required"
 install -d -m 0755 "$INSTALL_DIR"
