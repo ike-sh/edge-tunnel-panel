@@ -1,6 +1,6 @@
 # Manual Execution
 
-Leikwan Panel `2.1.0-alpha.1` does not execute configuration changes. It creates an execution guide that an operator copies and runs manually on the target node.
+Leikwan Panel `2.1.0` does not execute configuration changes. It creates an execution guide that an operator copies and runs manually on the target node.
 
 ## Create a Plan
 
@@ -66,7 +66,7 @@ This only updates Controller audit state. It does not modify the node.
 
 ## Safety Boundary
 
-Panel 2.1-alpha.1 does not:
+Panel Leikwan Panel 2.1.0 does not:
 
 - push tasks to Agent
 - run remote commands

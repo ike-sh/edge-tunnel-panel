@@ -2,7 +2,7 @@ package agent
 
 import "encoding/json"
 
-const Version = "2.1.0-alpha.1"
+const Version = "2.1.0"
 
 type Config struct {
 	ControllerURL       string
@@ -14,6 +14,8 @@ type Config struct {
 	EnableTasks         bool
 	TaskIntervalSeconds int
 	TaskTimeoutSeconds  int
+	MaxConcurrentTasks  int
+	TaskResultLimitKB   int
 }
 
 type RegisterRequest struct {
@@ -49,14 +51,18 @@ type ReportRequest struct {
 }
 
 type Capabilities struct {
-	LQAvailable          bool     `json:"lq_available"`
-	CoreVersion          string   `json:"core_version"`
-	SupportsStatusJSON   bool     `json:"supports_status_json"`
-	SupportsDoctorJSON   bool     `json:"supports_doctor_json"`
-	SupportsForwardList  bool     `json:"supports_forward_list"`
-	SupportsDDNSOverview bool     `json:"supports_ddns_overview"`
-	EnableTasks          bool     `json:"enable_tasks"`
-	AllowedTaskActions   []string `json:"allowed_task_actions,omitempty"`
+	LQAvailable                  bool     `json:"lq_available"`
+	CoreVersion                  string   `json:"core_version"`
+	SupportsStatusJSON           bool     `json:"supports_status_json"`
+	SupportsDoctorJSON           bool     `json:"supports_doctor_json"`
+	SupportsForwardList          bool     `json:"supports_forward_list"`
+	SupportsDDNSOverview         bool     `json:"supports_ddns_overview"`
+	EnableTasks                  bool     `json:"enable_tasks"`
+	SupportsSnapshotManualRecord bool     `json:"supports_snapshot_manual_record"`
+	SupportsRollbackManualRecord bool     `json:"supports_rollback_manual_record"`
+	WriteActionsSupported        bool     `json:"write_actions_supported"`
+	SupportedWriteActions        []string `json:"supported_write_actions,omitempty"`
+	AllowedTaskActions           []string `json:"allowed_task_actions,omitempty"`
 }
 
 type EntryPayload struct {

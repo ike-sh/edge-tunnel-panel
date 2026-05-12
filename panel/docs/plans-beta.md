@@ -1,6 +1,6 @@
-# Plans Beta
+# Plans
 
-Leikwan Panel Plans remain manual-only in `2.1.0-alpha.1`.
+Leikwan Panel Plans remain manual-only in `2.1.0`.
 
 Plans are still safe by design:
 
@@ -65,6 +65,29 @@ The Markdown guide always states:
 This plan is manual-only. The agent will not execute it.
 ```
 
+## Write Action Review
+
+`2.1.0` adds review-only APIs for future write actions:
+
+```text
+GET  /api/v1/plans/:id/action-review
+POST /api/v1/plans/:id/action-review
+```
+
+The review maps the Plan type to a future action such as `create_forward` or `switch_entry`, shows its risk level, required gates and missing gates, then returns:
+
+```text
+ready_for_future_execution=false
+```
+
+The reason is always:
+
+```text
+write execution is disabled in 2.1.0
+```
+
+Action review does not create Agent tasks, does not modify nodes, and does not generate shell commands.
+
 ## Allowed Commands
 
 Generated command text may include read-only checks:
@@ -94,6 +117,32 @@ If Leikwan Core does not expose a stable non-interactive CLI for an operation, P
 - warnings present
 
 Preflight never SSHs into a node and never asks Agent to run anything.
+
+## Readonly Dry-run
+
+`POST /api/v1/plans/:id/dry-run` creates linked readonly tasks for the target node. It is still a preflight, not execution.
+
+`GET /api/v1/plans/:id/dry-run` refreshes the aggregate report from task results.
+
+Dry-run fields:
+
+```text
+dry_run_status
+dry_run_task_ids
+dry_run_report
+last_dry_run_at
+```
+
+Dry-run uses only the built-in allowlist tasks:
+
+```text
+run_status_json
+run_doctor_json
+list_forwards
+ddns_overview
+```
+
+It never runs Plan generated command text and never modifies a node.
 
 ## Forbidden Commands
 
@@ -130,3 +179,21 @@ Authorization
 ## Why Not Automatic Execution Yet
 
 Automatic write execution needs a permission model, write allowlists, dry-run, snapshots, review, audit logs, rollback handling and explicit operator approval. These are still out of scope.
+
+## 2.1.0 Snapshot / Rollback Safety Framework
+
+Leikwan Panel 2.1.0 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
+
+New Plan APIs:
+
+```text
+POST /api/v1/plans/:id/snapshot
+POST /api/v1/plans/:id/rollback-info
+GET  /api/v1/plans/:id/safety-gate
+POST /api/v1/plans/:id/verify
+```
+
+See `snapshot-rollback-beta.md` and `safety-gate.md`.
+## Stable Note
+
+This document remains under its original filename for link compatibility. Plans are part of Leikwan Panel 2.1.0 stable and remain manual-only.

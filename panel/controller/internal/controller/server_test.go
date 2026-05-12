@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,7 +20,7 @@ func testServer(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return NewServer(store, "test-token", nil)
+	return NewServerWithAuth(store, ServerOptions{AgentToken: "test-token", OperatorToken: "operator-token"}, nil)
 }
 
 func postJSON(t *testing.T, h http.Handler, path, token string, body any) *httptest.ResponseRecorder {
@@ -30,6 +31,9 @@ func postJSON(t *testing.T, h http.Handler, path, token string, body any) *httpt
 	}
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
+	if token == "" && !strings.HasPrefix(path, "/api/v1/agent/") {
+		token = "operator-token"
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -38,11 +42,121 @@ func postJSON(t *testing.T, h http.Handler, path, token string, body any) *httpt
 	return rr
 }
 
+func withOperator(req *http.Request) *http.Request {
+	req.Header.Set("Authorization", "Bearer operator-token")
+	return req
+}
+
 func TestAgentReportRequiresToken(t *testing.T) {
 	h := testServer(t)
 	rr := postJSON(t, h, "/api/v1/agent/report", "", ReportRequest{NodeID: "node-a"})
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestOperatorAuthBoundaries(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "controller.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	noOperator := NewServerWithAuth(store, ServerOptions{AgentToken: "agent-token"}, nil)
+	mutating := postJSON(t, noOperator, "/api/v1/plans", "agent-token", map[string]any{"type": "ddns_check", "title": "x"})
+	if mutating.Code != http.StatusForbidden || !strings.Contains(mutating.Body.String(), "operator token required") {
+		t.Fatalf("expected missing operator token to return 403, got %d %s", mutating.Code, mutating.Body.String())
+	}
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	statusOut := httptest.NewRecorder()
+	noOperator.ServeHTTP(statusOut, statusReq)
+	if statusOut.Code != http.StatusOK || !strings.Contains(statusOut.Body.String(), `"operator_auth_configured":false`) || !strings.Contains(statusOut.Body.String(), `"agent_auth_configured":true`) {
+		t.Fatalf("auth status unexpected: %d %s", statusOut.Code, statusOut.Body.String())
+	}
+
+	authStore, err := OpenStore(filepath.Join(t.TempDir(), "controller-auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authStore.Close()
+	h := NewServerWithAuth(authStore, ServerOptions{AgentToken: "agent-token", OperatorToken: "operator-secret", StrictAuth: true}, nil)
+	healthOut := httptest.NewRecorder()
+	h.ServeHTTP(healthOut, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+	if healthOut.Code != http.StatusOK {
+		t.Fatalf("health should not require auth, got %d", healthOut.Code)
+	}
+	nodesOut := httptest.NewRecorder()
+	h.ServeHTTP(nodesOut, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
+	if nodesOut.Code != http.StatusUnauthorized {
+		t.Fatalf("strict nodes should require operator token, got %d %s", nodesOut.Code, nodesOut.Body.String())
+	}
+	strictStatusOut := httptest.NewRecorder()
+	h.ServeHTTP(strictStatusOut, httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil))
+	if strictStatusOut.Code != http.StatusUnauthorized {
+		t.Fatalf("strict auth/status should require operator token, got %d %s", strictStatusOut.Code, strictStatusOut.Body.String())
+	}
+	nodesReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+	nodesReq.Header.Set("Authorization", "Bearer operator-secret")
+	nodesOK := httptest.NewRecorder()
+	h.ServeHTTP(nodesOK, nodesReq)
+	if nodesOK.Code != http.StatusOK {
+		t.Fatalf("strict nodes with operator token failed: %d %s", nodesOK.Code, nodesOK.Body.String())
+	}
+	statusReqStrict := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	statusReqStrict.Header.Set("Authorization", "Bearer operator-secret")
+	statusOK := httptest.NewRecorder()
+	h.ServeHTTP(statusOK, statusReqStrict)
+	if statusOK.Code != http.StatusOK || !strings.Contains(statusOK.Body.String(), `"strict_auth":true`) {
+		t.Fatalf("strict auth/status with operator token failed: %d %s", statusOK.Code, statusOK.Body.String())
+	}
+	wrong := postJSON(t, h, "/api/v1/plans", "wrong-token", map[string]any{"type": "ddns_check", "title": "x"})
+	if wrong.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong operator token should fail, got %d %s", wrong.Code, wrong.Body.String())
+	}
+	agentCannotOperate := postJSON(t, h, "/api/v1/plans", "agent-token", map[string]any{"type": "ddns_check", "title": "x"})
+	if agentCannotOperate.Code != http.StatusUnauthorized {
+		t.Fatalf("agent token must not call operator API, got %d %s", agentCannotOperate.Code, agentCannotOperate.Body.String())
+	}
+	operatorCannotAgent := postJSON(t, h, "/api/v1/agent/report", "operator-secret", ReportRequest{NodeID: "node-a"})
+	if operatorCannotAgent.Code != http.StatusUnauthorized {
+		t.Fatalf("operator token must not call agent API, got %d %s", operatorCannotAgent.Code, operatorCannotAgent.Body.String())
+	}
+	ok := postJSON(t, h, "/api/v1/plans", "operator-secret", map[string]any{"type": "ddns_check", "title": "x"})
+	if ok.Code != http.StatusCreated {
+		t.Fatalf("operator token should create plan, got %d %s", ok.Code, ok.Body.String())
+	}
+	var plan Plan
+	if err := json.Unmarshal(ok.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	review := postJSON(t, h, fmt.Sprintf("/api/v1/plans/%d/action-review", plan.ID), "operator-secret", nil)
+	if review.Code != http.StatusOK || !strings.Contains(review.Body.String(), "operator:") || strings.Contains(review.Body.String(), "operator-secret") {
+		t.Fatalf("review should include fingerprint only: %d %s", review.Code, review.Body.String())
+	}
+	task := postJSON(t, h, "/api/v1/tasks", "operator-secret", CreateTaskRequest{NodeID: "node-a", Action: "run_status"})
+	if task.Code != http.StatusCreated || strings.Contains(task.Body.String(), "operator-secret") || !strings.Contains(task.Body.String(), "operator:") {
+		t.Fatalf("task should store fingerprint requested_by only: %d %s", task.Code, task.Body.String())
+	}
+	var createdTask Task
+	if err := json.Unmarshal(task.Body.Bytes(), &createdTask); err != nil {
+		t.Fatal(err)
+	}
+	approve := postJSON(t, h, fmt.Sprintf("/api/v1/tasks/%d/approve", createdTask.ID), "operator-secret", TaskApprovalRequest{Note: "operator_token=operator-secret"})
+	if approve.Code != http.StatusOK || strings.Contains(approve.Body.String(), "operator-secret") || !strings.Contains(approve.Body.String(), "operator:") {
+		t.Fatalf("approval should store fingerprint and redact note: %d %s", approve.Code, approve.Body.String())
+	}
+	timelineReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/tasks/%d/timeline", createdTask.ID), nil)
+	timelineReq.Header.Set("Authorization", "Bearer operator-secret")
+	timelineOut := httptest.NewRecorder()
+	h.ServeHTTP(timelineOut, timelineReq)
+	if timelineOut.Code != http.StatusOK || strings.Contains(timelineOut.Body.String(), "operator-secret") || !strings.Contains(timelineOut.Body.String(), "operator:") {
+		t.Fatalf("timeline should include fingerprint only: %d %s", timelineOut.Code, timelineOut.Body.String())
+	}
+	eventsReq := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	eventsReq.Header.Set("Authorization", "Bearer operator-secret")
+	eventsOut := httptest.NewRecorder()
+	h.ServeHTTP(eventsOut, eventsReq)
+	if eventsOut.Code != http.StatusOK || strings.Contains(eventsOut.Body.String(), "operator-secret") {
+		t.Fatalf("events must not contain full operator token: %d %s", eventsOut.Code, eventsOut.Body.String())
 	}
 }
 
@@ -127,9 +241,9 @@ func TestTopologyAndBootstrapCommand(t *testing.T) {
 }
 
 func TestRedactCleansSecrets(t *testing.T) {
-	raw := []byte(`{"token":"abc","secret":"s","password":"p","privateKey":"k","custom_url":"https://example.com?token=abc","custom_cmd":"cmd --token abc","nested":{"Authorization":"Bearer abc"}}`)
+	raw := []byte(`{"token":"abc","operator_token":"operator-secret","controller_token":"agent-secret","secret":"s","password":"p","privateKey":"k","custom_url":"https://example.com?token=abc","custom_cmd":"cmd --token abc","nested":{"Authorization":"Bearer abc"}}`)
 	redacted := string(RedactJSONBytes(raw))
-	for _, leak := range []string{"abc", "Bearer abc", "--token abc", "https://example.com?token=abc"} {
+	for _, leak := range []string{"abc", "operator-secret", "agent-secret", "Bearer abc", "--token abc", "https://example.com?token=abc"} {
 		if strings.Contains(redacted, leak) {
 			t.Fatalf("redaction leaked %q in %s", leak, redacted)
 		}
@@ -145,7 +259,7 @@ func TestOfflineAndEmptyCollections(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	h := NewServer(store, "test-token", nil)
+	h := NewServerWithAuth(store, ServerOptions{AgentToken: "test-token", OperatorToken: "operator-token"}, nil)
 	rr := postJSON(t, h, "/api/v1/agent/report", "test-token", ReportRequest{NodeID: "old-node", NodeName: "old", Role: "relay", Status: "online", IntervalSeconds: 1})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
@@ -244,7 +358,7 @@ func TestPlansLifecycleAndRedaction(t *testing.T) {
 	h.ServeHTTP(entriesBefore, httptest.NewRequest(http.MethodGet, "/api/v1/entries", nil))
 	forwardsBefore := httptest.NewRecorder()
 	h.ServeHTTP(forwardsBefore, httptest.NewRequest(http.MethodGet, "/api/v1/forwards", nil))
-	generateReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/generate", plan.ID), nil)
+	generateReq := withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/generate", plan.ID), nil))
 	generateOut := httptest.NewRecorder()
 	h.ServeHTTP(generateOut, generateReq)
 	if generateOut.Code != http.StatusOK {
@@ -282,7 +396,7 @@ func TestPlansLifecycleAndRedaction(t *testing.T) {
 			t.Fatalf("markdown leaked %q: %s", leak, markdownOut.Body.String())
 		}
 	}
-	regenerateReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/regenerate", plan.ID), nil)
+	regenerateReq := withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/regenerate", plan.ID), nil))
 	regenerateOut := httptest.NewRecorder()
 	h.ServeHTTP(regenerateOut, regenerateReq)
 	if regenerateOut.Code != http.StatusOK || !strings.Contains(regenerateOut.Body.String(), "command_groups") {
@@ -303,7 +417,7 @@ func TestPlansLifecycleAndRedaction(t *testing.T) {
 	if forwardsBefore.Body.String() != forwardsAfter.Body.String() {
 		t.Fatalf("plan mark/regenerate changed forwards: before=%s after=%s", forwardsBefore.Body.String(), forwardsAfter.Body.String())
 	}
-	archiveReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/archive", plan.ID), nil)
+	archiveReq := withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/archive", plan.ID), nil))
 	archiveOut := httptest.NewRecorder()
 	h.ServeHTTP(archiveOut, archiveReq)
 	if archiveOut.Code != http.StatusOK || !strings.Contains(archiveOut.Body.String(), `"status":"archived"`) {
@@ -327,7 +441,7 @@ func TestSwitchEntryPlanWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := httptest.NewRecorder()
-	h.ServeHTTP(out, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/generate", plan.ID), nil))
+	h.ServeHTTP(out, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/generate", plan.ID), nil)))
 	for _, want := range []string{"Confirm snapshots", "Do not stop or remove the old entry first", "low-traffic maintenance window"} {
 		if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), want) {
 			t.Fatalf("switch checklist/warnings missing %q: %d %s", want, out.Code, out.Body.String())
@@ -364,7 +478,7 @@ func TestCapabilitiesAPIAndSafetyClassification(t *testing.T) {
 
 func TestReadonlyTaskLifecycleAndSecurity(t *testing.T) {
 	h := testServer(t)
-	create := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "run_status_json"})
+	create := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "run_status_json", RequestedBy: "operator", TTLSeconds: 300})
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create task failed: %d %s", create.Code, create.Body.String())
 	}
@@ -372,7 +486,7 @@ func TestReadonlyTaskLifecycleAndSecurity(t *testing.T) {
 	if err := json.Unmarshal(create.Body.Bytes(), &task); err != nil {
 		t.Fatal(err)
 	}
-	if task.Status != "queued" || task.Action != "run_status_json" {
+	if task.Status != "queued" || task.Action != "run_status_json" || task.ApprovalStatus != "not_required" || task.TTLSeconds == 0 || task.ExpiresAt == "" || task.Attempt != 1 {
 		t.Fatalf("unexpected created task: %+v", task)
 	}
 	bad := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "systemctl restart"})
@@ -418,12 +532,470 @@ func TestReadonlyTaskLifecycleAndSecurity(t *testing.T) {
 	if !strings.Contains(body, "[TRUNCATED]") || !strings.Contains(body, `"status":"succeeded"`) {
 		t.Fatalf("task result should be truncated and succeeded: %s", body)
 	}
+	timelineReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/tasks/%d/timeline", task.ID), nil)
+	timelineOut := httptest.NewRecorder()
+	h.ServeHTTP(timelineOut, timelineReq)
+	if timelineOut.Code != http.StatusOK || !strings.Contains(timelineOut.Body.String(), "created") || !strings.Contains(timelineOut.Body.String(), "picked") || !strings.Contains(timelineOut.Body.String(), "result") || !strings.Contains(timelineOut.Body.String(), "succeeded") {
+		t.Fatalf("timeline missing lifecycle events: %d %s", timelineOut.Code, timelineOut.Body.String())
+	}
 	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
 	listOut := httptest.NewRecorder()
 	h.ServeHTTP(listOut, listReq)
 	if listOut.Code != http.StatusOK || !strings.Contains(listOut.Body.String(), `"status":"succeeded"`) {
 		t.Fatalf("list tasks unexpected: %d %s", listOut.Code, listOut.Body.String())
 	}
+}
+
+func TestTaskCancelRetryApprovalExpiryAndTimeline(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "controller.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h := NewServerWithAuth(store, ServerOptions{AgentToken: "test-token", OperatorToken: "operator-token"}, nil)
+
+	cancelCreate := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "run_status"})
+	var cancelTask Task
+	if err := json.Unmarshal(cancelCreate.Body.Bytes(), &cancelTask); err != nil {
+		t.Fatal(err)
+	}
+	cancelOut := httptest.NewRecorder()
+	h.ServeHTTP(cancelOut, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/tasks/%d/cancel", cancelTask.ID), nil)))
+	if cancelOut.Code != http.StatusOK || !strings.Contains(cancelOut.Body.String(), `"status":"canceled"`) {
+		t.Fatalf("cancel failed: %d %s", cancelOut.Code, cancelOut.Body.String())
+	}
+
+	approveCreate := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "run_doctor"})
+	var approvalTask Task
+	if err := json.Unmarshal(approveCreate.Body.Bytes(), &approvalTask); err != nil {
+		t.Fatal(err)
+	}
+	approveOut := postJSON(t, h, fmt.Sprintf("/api/v1/tasks/%d/approve", approvalTask.ID), "", TaskApprovalRequest{Actor: "alice", Note: "token=abc"})
+	if approveOut.Code != http.StatusOK || !strings.Contains(approveOut.Body.String(), `"approval_status":"approved"`) || strings.Contains(approveOut.Body.String(), "token=abc") {
+		t.Fatalf("approve failed or leaked: %d %s", approveOut.Code, approveOut.Body.String())
+	}
+	rejectOut := postJSON(t, h, fmt.Sprintf("/api/v1/tasks/%d/reject", approvalTask.ID), "", TaskApprovalRequest{Actor: "bob"})
+	if rejectOut.Code != http.StatusOK || !strings.Contains(rejectOut.Body.String(), `"approval_status":"rejected"`) {
+		t.Fatalf("reject failed: %d %s", rejectOut.Code, rejectOut.Body.String())
+	}
+	approvalTimeline, err := store.TaskTimeline(context.Background(), approvalTask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvalActions := []string{}
+	for _, item := range approvalTimeline {
+		approvalActions = append(approvalActions, item.Action)
+	}
+	if !strings.Contains(strings.Join(approvalActions, ","), "approve") || !strings.Contains(strings.Join(approvalActions, ","), "reject") {
+		t.Fatalf("approval timeline missing approve/reject actions: %+v", approvalTimeline)
+	}
+
+	failedCreate := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "ddns_overview"})
+	var failedTask Task
+	if err := json.Unmarshal(failedCreate.Body.Bytes(), &failedTask); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE tasks SET status='failed', finished_at=? WHERE id=?`, nowString(), failedTask.ID); err != nil {
+		t.Fatal(err)
+	}
+	retryOut := httptest.NewRecorder()
+	h.ServeHTTP(retryOut, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/tasks/%d/retry", failedTask.ID), nil)))
+	if retryOut.Code != http.StatusCreated || !strings.Contains(retryOut.Body.String(), `"retry_of_task_id":`) || !strings.Contains(retryOut.Body.String(), `"attempt":2`) {
+		t.Fatalf("retry failed: %d %s", retryOut.Code, retryOut.Body.String())
+	}
+
+	expiredCreate := postJSON(t, h, "/api/v1/tasks", "", CreateTaskRequest{NodeID: "node-a", Action: "list_forwards", TTLSeconds: 1})
+	var expiredTask Task
+	if err := json.Unmarshal(expiredCreate.Body.Bytes(), &expiredTask); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE tasks SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), expiredTask.ID); err != nil {
+		t.Fatal(err)
+	}
+	pickReq := httptest.NewRequest(http.MethodGet, "/api/v1/agent/tasks?node_id=node-a", nil)
+	pickReq.Header.Set("Authorization", "Bearer test-token")
+	pickOut := httptest.NewRecorder()
+	h.ServeHTTP(pickOut, pickReq)
+	if pickOut.Code != http.StatusOK || strings.Contains(pickOut.Body.String(), fmt.Sprintf(`"id":%d`, expiredTask.ID)) || strings.Contains(pickOut.Body.String(), `"status":"canceled"`) {
+		t.Fatalf("agent pull returned expired/canceled task: %d %s", pickOut.Code, pickOut.Body.String())
+	}
+	gotExpired, err := store.GetTask(context.Background(), expiredTask.ID)
+	if err != nil || gotExpired.Status != "expired" {
+		t.Fatalf("expired task not marked: %+v err=%v", gotExpired, err)
+	}
+	timeline, err := store.TaskTimeline(context.Background(), cancelTask.ID)
+	if err != nil || len(timeline) < 2 {
+		t.Fatalf("cancel timeline missing: %+v err=%v", timeline, err)
+	}
+}
+
+func TestPlanDryRunCreatesReadonlyTasksAndAggregates(t *testing.T) {
+	h := testServer(t)
+	report := ReportRequest{
+		NodeID: "relay-1", NodeName: "relay", Role: "relay", Status: "online", IntervalSeconds: 30,
+		Capabilities: AgentCapabilities{
+			LQAvailable: true, SupportsStatusJSON: true, SupportsDoctorJSON: true,
+			SupportsForwardList: true, SupportsDDNSOverview: true, EnableTasks: true,
+		},
+	}
+	if rr := postJSON(t, h, "/api/v1/agent/report", "test-token", report); rr.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+	created := postJSON(t, h, "/api/v1/plans", "", map[string]any{
+		"type":           "create_forward",
+		"title":          "dry run forward",
+		"target_node_id": "relay-1",
+		"payload_json":   map[string]any{"token": "abc", "target_host": "10.0.0.8"},
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create plan failed: %d %s", created.Code, created.Body.String())
+	}
+	var plan Plan
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	start := httptest.NewRecorder()
+	h.ServeHTTP(start, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/dry-run", plan.ID), nil)))
+	if start.Code != http.StatusCreated {
+		t.Fatalf("dry-run start failed: %d %s", start.Code, start.Body.String())
+	}
+	var running Plan
+	if err := json.Unmarshal(start.Body.Bytes(), &running); err != nil {
+		t.Fatal(err)
+	}
+	if running.DryRunStatus != "running" || len(running.DryRunTaskIDs) != 3 {
+		t.Fatalf("dry-run did not queue expected tasks: %+v body=%s", running, start.Body.String())
+	}
+	for _, action := range []string{"run_status_json", "run_doctor_json", "list_forwards"} {
+		if !strings.Contains(start.Body.String(), action) {
+			t.Fatalf("dry-run missing readonly action %s: %s", action, start.Body.String())
+		}
+	}
+	for _, forbidden := range []string{"systemctl", "restart", "nft", "iptables", "curl | bash", "token=abc"} {
+		if strings.Contains(start.Body.String(), forbidden) {
+			t.Fatalf("dry-run leaked or queued forbidden text %q: %s", forbidden, start.Body.String())
+		}
+	}
+	for _, id := range running.DryRunTaskIDs {
+		status := "succeeded"
+		stdout := `{"overall":"OK","warnings":[]}`
+		if id == running.DryRunTaskIDs[2] {
+			stdout = "hk 10001 10.0.0.8 443 tcp,udp"
+		}
+		rr := postJSON(t, h, fmt.Sprintf("/api/v1/agent/tasks/%d/result", id), "test-token", TaskResultRequest{
+			Status:       status,
+			ResultStdout: stdout,
+			ExitCode:     0,
+		})
+		if rr.Code != http.StatusOK {
+			t.Fatalf("task result failed: %d %s", rr.Code, rr.Body.String())
+		}
+	}
+	refresh := httptest.NewRecorder()
+	h.ServeHTTP(refresh, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/plans/%d/dry-run", plan.ID), nil))
+	if refresh.Code != http.StatusOK || !strings.Contains(refresh.Body.String(), `"dry_run_status":"passed"`) {
+		t.Fatalf("dry-run aggregate should pass: %d %s", refresh.Code, refresh.Body.String())
+	}
+	if strings.Contains(refresh.Body.String(), "token=abc") {
+		t.Fatalf("dry-run report leaked token: %s", refresh.Body.String())
+	}
+}
+
+func TestPlanDryRunWarningFailedAndInvalidPlan(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "controller.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h := NewServerWithAuth(store, ServerOptions{AgentToken: "test-token", OperatorToken: "operator-token"}, nil)
+	missingReq := withOperator(httptest.NewRequest(http.MethodPost, "/api/v1/plans/999/dry-run", nil))
+	missingOut := httptest.NewRecorder()
+	h.ServeHTTP(missingOut, missingReq)
+	if missingOut.Code != http.StatusNotFound {
+		t.Fatalf("expected invalid plan id to return 404, got %d %s", missingOut.Code, missingOut.Body.String())
+	}
+	noTarget := postJSON(t, h, "/api/v1/plans", "", map[string]any{"type": "ddns_check", "title": "no target"})
+	var noTargetPlan Plan
+	if err := json.Unmarshal(noTarget.Body.Bytes(), &noTargetPlan); err != nil {
+		t.Fatal(err)
+	}
+	noTargetOut := httptest.NewRecorder()
+	h.ServeHTTP(noTargetOut, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/dry-run", noTargetPlan.ID), nil)))
+	if noTargetOut.Code != http.StatusOK && noTargetOut.Code != http.StatusCreated {
+		t.Fatalf("no target dry-run should produce failed plan report: %d %s", noTargetOut.Code, noTargetOut.Body.String())
+	}
+	if !strings.Contains(noTargetOut.Body.String(), `"dry_run_status":"failed"`) || !strings.Contains(noTargetOut.Body.String(), "target node is required") {
+		t.Fatalf("no target dry-run missing failed report: %s", noTargetOut.Body.String())
+	}
+
+	report := ReportRequest{
+		NodeID: "relay-2", NodeName: "relay2", Role: "relay", Status: "online", IntervalSeconds: 30,
+		Capabilities: AgentCapabilities{LQAvailable: true, SupportsStatusJSON: true, SupportsDoctorJSON: true, SupportsDDNSOverview: true, EnableTasks: true},
+	}
+	if rr := postJSON(t, h, "/api/v1/agent/report", "test-token", report); rr.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+	warnCreated := postJSON(t, h, "/api/v1/plans", "", map[string]any{"type": "ddns_check", "title": "warn", "target_node_id": "relay-2"})
+	var warnPlan Plan
+	if err := json.Unmarshal(warnCreated.Body.Bytes(), &warnPlan); err != nil {
+		t.Fatal(err)
+	}
+	warnStart := httptest.NewRecorder()
+	h.ServeHTTP(warnStart, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/dry-run", warnPlan.ID), nil)))
+	var warnRunning Plan
+	if err := json.Unmarshal(warnStart.Body.Bytes(), &warnRunning); err != nil {
+		t.Fatal(err)
+	}
+	if len(warnRunning.DryRunTaskIDs) != 2 {
+		t.Fatalf("ddns_check should queue 2 tasks: %+v", warnRunning.DryRunTaskIDs)
+	}
+	_ = postJSON(t, h, fmt.Sprintf("/api/v1/agent/tasks/%d/result", warnRunning.DryRunTaskIDs[0]), "test-token", TaskResultRequest{Status: "succeeded", ResultStdout: "DDNS WARN token=abc", ExitCode: 0})
+	_ = postJSON(t, h, fmt.Sprintf("/api/v1/agent/tasks/%d/result", warnRunning.DryRunTaskIDs[1]), "test-token", TaskResultRequest{Status: "succeeded", ResultStdout: `{"overall":"WARN","warnings":["token=abc stale ddns"]}`, ExitCode: 0})
+	warnRefresh := httptest.NewRecorder()
+	h.ServeHTTP(warnRefresh, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/plans/%d/dry-run", warnPlan.ID), nil))
+	if warnRefresh.Code != http.StatusOK || !strings.Contains(warnRefresh.Body.String(), `"dry_run_status":"warning"`) {
+		t.Fatalf("dry-run should warn: %d %s", warnRefresh.Code, warnRefresh.Body.String())
+	}
+	if strings.Contains(warnRefresh.Body.String(), "token=abc") {
+		t.Fatalf("warning dry-run report leaked token: %s", warnRefresh.Body.String())
+	}
+
+	failCreated := postJSON(t, h, "/api/v1/plans", "", map[string]any{"type": "ddns_check", "title": "fail", "target_node_id": "relay-2"})
+	var failPlan Plan
+	if err := json.Unmarshal(failCreated.Body.Bytes(), &failPlan); err != nil {
+		t.Fatal(err)
+	}
+	failStart := httptest.NewRecorder()
+	h.ServeHTTP(failStart, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/dry-run", failPlan.ID), nil)))
+	var failRunning Plan
+	if err := json.Unmarshal(failStart.Body.Bytes(), &failRunning); err != nil {
+		t.Fatal(err)
+	}
+	_ = postJSON(t, h, fmt.Sprintf("/api/v1/agent/tasks/%d/result", failRunning.DryRunTaskIDs[0]), "test-token", TaskResultRequest{Status: "failed", Error: "password=abc failed", ExitCode: 1})
+	_ = postJSON(t, h, fmt.Sprintf("/api/v1/agent/tasks/%d/result", failRunning.DryRunTaskIDs[1]), "test-token", TaskResultRequest{Status: "succeeded", ResultStdout: `{"overall":"OK"}`, ExitCode: 0})
+	failRefresh := httptest.NewRecorder()
+	h.ServeHTTP(failRefresh, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/plans/%d/dry-run", failPlan.ID), nil))
+	if failRefresh.Code != http.StatusOK || !strings.Contains(failRefresh.Body.String(), `"dry_run_status":"failed"`) {
+		t.Fatalf("dry-run should fail: %d %s", failRefresh.Code, failRefresh.Body.String())
+	}
+	if strings.Contains(failRefresh.Body.String(), "password=abc") {
+		t.Fatalf("failed dry-run report leaked password: %s", failRefresh.Body.String())
+	}
+}
+
+func TestPlanSnapshotRollbackSafetyGateAndVerify(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "controller.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h := NewServerWithAuth(store, ServerOptions{AgentToken: "test-token", OperatorToken: "operator-token"}, nil)
+
+	forwardCreated := postJSON(t, h, "/api/v1/plans", "", map[string]any{
+		"type":           "create_forward",
+		"title":          "forward with snapshot",
+		"target_node_id": "relay-1",
+	})
+	if forwardCreated.Code != http.StatusCreated {
+		t.Fatalf("create forward plan failed: %d %s", forwardCreated.Code, forwardCreated.Body.String())
+	}
+	var forwardPlan Plan
+	if err := json.Unmarshal(forwardCreated.Body.Bytes(), &forwardPlan); err != nil {
+		t.Fatal(err)
+	}
+	if forwardPlan.SnapshotPolicy != "required" || !forwardPlan.SnapshotRequired || forwardPlan.SnapshotStatus != "missing" {
+		t.Fatalf("create_forward snapshot defaults wrong: %+v", forwardPlan)
+	}
+
+	switchCreated := postJSON(t, h, "/api/v1/plans", "", map[string]any{"type": "switch_entry", "title": "switch", "target_node_id": "relay-1"})
+	var switchPlan Plan
+	if err := json.Unmarshal(switchCreated.Body.Bytes(), &switchPlan); err != nil {
+		t.Fatal(err)
+	}
+	if switchPlan.SnapshotPolicy != "required" {
+		t.Fatalf("switch_entry snapshot policy should be required: %+v", switchPlan)
+	}
+	ddnsCreated := postJSON(t, h, "/api/v1/plans", "", map[string]any{"type": "ddns_check", "title": "ddns", "target_node_id": "relay-1"})
+	var ddnsPlan Plan
+	if err := json.Unmarshal(ddnsCreated.Body.Bytes(), &ddnsPlan); err != nil {
+		t.Fatal(err)
+	}
+	if ddnsPlan.SnapshotPolicy != "recommended" || ddnsPlan.SnapshotRequired {
+		t.Fatalf("ddns_check snapshot policy should be recommended: %+v", ddnsPlan)
+	}
+
+	generateOut := httptest.NewRecorder()
+	h.ServeHTTP(generateOut, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/generate", forwardPlan.ID), nil)))
+	if generateOut.Code != http.StatusOK || !strings.Contains(generateOut.Body.String(), "rollback_instructions") {
+		t.Fatalf("generate should include rollback instructions: %d %s", generateOut.Code, generateOut.Body.String())
+	}
+	for _, dangerous := range []string{"systemctl restart", "nft ", "iptables", "rm -", "curl | bash", "bash -c", "eval "} {
+		if strings.Contains(generateOut.Body.String(), dangerous) {
+			t.Fatalf("rollback instructions contain dangerous command %q: %s", dangerous, generateOut.Body.String())
+		}
+	}
+
+	gateOut := httptest.NewRecorder()
+	h.ServeHTTP(gateOut, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/plans/%d/safety-gate", forwardPlan.ID), nil))
+	if gateOut.Code != http.StatusOK || !strings.Contains(gateOut.Body.String(), "dry-run has not passed") || !strings.Contains(gateOut.Body.String(), "required snapshot metadata is missing") {
+		t.Fatalf("safety gate should block missing dry-run and snapshot: %d %s", gateOut.Code, gateOut.Body.String())
+	}
+
+	beforeTasks := countTasks(t, store)
+	snapshotOut := postJSON(t, h, fmt.Sprintf("/api/v1/plans/%d/snapshot", forwardPlan.ID), "", PlanSnapshotRequest{
+		SnapshotRef:  "snapshot token=abc",
+		SnapshotNote: "privateKey=key",
+	})
+	if snapshotOut.Code != http.StatusOK || !strings.Contains(snapshotOut.Body.String(), `"snapshot_status":"recorded"`) {
+		t.Fatalf("snapshot metadata failed: %d %s", snapshotOut.Code, snapshotOut.Body.String())
+	}
+	if strings.Contains(snapshotOut.Body.String(), "token=abc") || strings.Contains(snapshotOut.Body.String(), "privateKey=key") {
+		t.Fatalf("snapshot metadata leaked secret: %s", snapshotOut.Body.String())
+	}
+	if countTasks(t, store) != beforeTasks {
+		t.Fatalf("snapshot metadata should not create tasks")
+	}
+
+	rollbackOut := postJSON(t, h, fmt.Sprintf("/api/v1/plans/%d/rollback-info", forwardPlan.ID), "", PlanRollbackInfoRequest{
+		RollbackRef:  "rollback token=abc",
+		RollbackNote: "password=abc",
+	})
+	if rollbackOut.Code != http.StatusOK || !strings.Contains(rollbackOut.Body.String(), `"rollback_available":true`) {
+		t.Fatalf("rollback metadata failed: %d %s", rollbackOut.Code, rollbackOut.Body.String())
+	}
+	if strings.Contains(rollbackOut.Body.String(), "token=abc") || strings.Contains(rollbackOut.Body.String(), "password=abc") {
+		t.Fatalf("rollback metadata leaked secret: %s", rollbackOut.Body.String())
+	}
+	if countTasks(t, store) != beforeTasks {
+		t.Fatalf("rollback metadata should not create tasks")
+	}
+
+	if _, err := store.db.Exec(`UPDATE plans SET dry_run_status='passed' WHERE id=?`, forwardPlan.ID); err != nil {
+		t.Fatal(err)
+	}
+	verifyOut := httptest.NewRecorder()
+	h.ServeHTTP(verifyOut, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/verify", forwardPlan.ID), nil)))
+	if verifyOut.Code != http.StatusOK || !strings.Contains(verifyOut.Body.String(), `"verification_status":"passed"`) {
+		t.Fatalf("verify should pass after dry-run/snapshot/rollback metadata: %d %s", verifyOut.Code, verifyOut.Body.String())
+	}
+	if countTasks(t, store) != beforeTasks {
+		t.Fatalf("verify should not create tasks")
+	}
+
+	missingOut := postJSON(t, h, "/api/v1/plans/999/snapshot", "", PlanSnapshotRequest{SnapshotRef: "x"})
+	if missingOut.Code != http.StatusNotFound {
+		t.Fatalf("missing plan snapshot should 404, got %d %s", missingOut.Code, missingOut.Body.String())
+	}
+}
+
+func TestActionCatalogAndReviewSafetyBoundary(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "controller.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h := NewServerWithAuth(store, ServerOptions{AgentToken: "test-token", OperatorToken: "operator-token"}, nil)
+	report := ReportRequest{
+		NodeID: "relay-1", NodeName: "relay", Role: "relay", Status: "online", IntervalSeconds: 30,
+		Entries:  []EntryPayload{{Name: "public1", ListenPort: 8301, Protocol: "tcp,udp", PublicHost: "home.example.com", Status: "ok"}},
+		Forwards: []ForwardPayload{{Name: "hk", EntryName: "public1", TargetHost: "10.0.0.8", TargetPort: 443, Protocol: "tcp,udp", Status: "ok"}},
+	}
+	if rr := postJSON(t, h, "/api/v1/agent/report", "test-token", report); rr.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+
+	catalogOut := httptest.NewRecorder()
+	h.ServeHTTP(catalogOut, httptest.NewRequest(http.MethodGet, "/api/v1/action-catalog", nil))
+	if catalogOut.Code != http.StatusOK {
+		t.Fatalf("catalog failed: %d %s", catalogOut.Code, catalogOut.Body.String())
+	}
+	body := catalogOut.Body.String()
+	for _, want := range []string{"readonly", "future_write_low", "future_write_guarded", "future_write_dangerous", "blocked", "arbitrary_command", `"enabled":false`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("catalog missing %q: %s", want, body)
+		}
+	}
+	blockedOut := httptest.NewRecorder()
+	h.ServeHTTP(blockedOut, httptest.NewRequest(http.MethodGet, "/api/v1/action-catalog/arbitrary_command", nil))
+	if blockedOut.Code != http.StatusOK || !strings.Contains(blockedOut.Body.String(), `"category":"blocked"`) || !strings.Contains(blockedOut.Body.String(), `"enabled":false`) {
+		t.Fatalf("blocked action detail unexpected: %d %s", blockedOut.Code, blockedOut.Body.String())
+	}
+
+	createBody := map[string]any{
+		"type":           "create_forward",
+		"title":          "review forward",
+		"target_node_id": "relay-1",
+		"payload_json": map[string]any{
+			"target_host": "10.0.0.8",
+			"token":       "abc",
+			"custom_cmd":  "cmd --token abc",
+			"privateKey":  "key",
+		},
+	}
+	created := postJSON(t, h, "/api/v1/plans", "", createBody)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create plan failed: %d %s", created.Code, created.Body.String())
+	}
+	var plan Plan
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	nodesBefore := httptest.NewRecorder()
+	h.ServeHTTP(nodesBefore, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
+	entriesBefore := httptest.NewRecorder()
+	h.ServeHTTP(entriesBefore, httptest.NewRequest(http.MethodGet, "/api/v1/entries", nil))
+	forwardsBefore := httptest.NewRecorder()
+	h.ServeHTTP(forwardsBefore, httptest.NewRequest(http.MethodGet, "/api/v1/forwards", nil))
+	beforeTasks := countTasks(t, store)
+
+	reviewOut := httptest.NewRecorder()
+	h.ServeHTTP(reviewOut, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/action-review", plan.ID), nil)))
+	if reviewOut.Code != http.StatusOK {
+		t.Fatalf("action review failed: %d %s", reviewOut.Code, reviewOut.Body.String())
+	}
+	reviewBody := reviewOut.Body.String()
+	for _, want := range []string{`"matched_action":"create_forward"`, `"ready_for_future_execution":false`, writeExecutionDisabledReason, "dry-run", "snapshot", "approval", "rollback"} {
+		if !strings.Contains(reviewBody, want) {
+			t.Fatalf("action review missing %q: %s", want, reviewBody)
+		}
+	}
+	for _, leak := range []string{"token=abc", "--token abc", "privateKey", "custom_cmd"} {
+		if strings.Contains(reviewBody, leak) {
+			t.Fatalf("action review leaked %q: %s", leak, reviewBody)
+		}
+	}
+	if countTasks(t, store) != beforeTasks {
+		t.Fatalf("action review must not create tasks")
+	}
+	nodesAfter := httptest.NewRecorder()
+	h.ServeHTTP(nodesAfter, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
+	entriesAfter := httptest.NewRecorder()
+	h.ServeHTTP(entriesAfter, httptest.NewRequest(http.MethodGet, "/api/v1/entries", nil))
+	forwardsAfter := httptest.NewRecorder()
+	h.ServeHTTP(forwardsAfter, httptest.NewRequest(http.MethodGet, "/api/v1/forwards", nil))
+	if nodesBefore.Body.String() != nodesAfter.Body.String() || entriesBefore.Body.String() != entriesAfter.Body.String() || forwardsBefore.Body.String() != forwardsAfter.Body.String() {
+		t.Fatalf("action review must not modify node/entry/forward data")
+	}
+
+	switchCreated := postJSON(t, h, "/api/v1/plans", "", map[string]any{"type": "switch_entry", "title": "switch", "target_node_id": "relay-1"})
+	var switchPlan Plan
+	if err := json.Unmarshal(switchCreated.Body.Bytes(), &switchPlan); err != nil {
+		t.Fatal(err)
+	}
+	switchReview := httptest.NewRecorder()
+	h.ServeHTTP(switchReview, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/plans/%d/action-review", switchPlan.ID), nil))
+	if switchReview.Code != http.StatusOK || !(strings.Contains(switchReview.Body.String(), `"risk_level":"critical"`) || strings.Contains(switchReview.Body.String(), `"risk_level":"high"`)) {
+		t.Fatalf("switch action review should be high/critical risk: %d %s", switchReview.Code, switchReview.Body.String())
+	}
+}
+
+func countTasks(t *testing.T, store *Store) int {
+	t.Helper()
+	var n int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func TestPlanPreflightAndBlockedCommandSanitization(t *testing.T) {
@@ -440,7 +1012,7 @@ func TestPlanPreflightAndBlockedCommandSanitization(t *testing.T) {
 		t.Fatal(err)
 	}
 	preflightMissing := httptest.NewRecorder()
-	h.ServeHTTP(preflightMissing, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", missingPlan.ID), nil))
+	h.ServeHTTP(preflightMissing, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", missingPlan.ID), nil)))
 	if preflightMissing.Code != http.StatusOK || !strings.Contains(preflightMissing.Body.String(), "target node is required") {
 		t.Fatalf("missing target preflight unexpected: %d %s", preflightMissing.Code, preflightMissing.Body.String())
 	}
@@ -458,7 +1030,7 @@ func TestPlanPreflightAndBlockedCommandSanitization(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := httptest.NewRecorder()
-	h.ServeHTTP(out, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", plan.ID), nil))
+	h.ServeHTTP(out, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", plan.ID), nil)))
 	if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), "target node has not reported yet") {
 		t.Fatalf("unknown target preflight missing warning: %d %s", out.Code, out.Body.String())
 	}
@@ -468,7 +1040,7 @@ func TestPlanPreflightAndBlockedCommandSanitization(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	h2 := NewServer(store, "test-token", nil)
+	h2 := NewServerWithAuth(store, ServerOptions{AgentToken: "test-token", OperatorToken: "operator-token"}, nil)
 	report := ReportRequest{NodeID: "offline-relay", NodeName: "offline", Role: "relay", Status: "online", IntervalSeconds: 1}
 	if rr := postJSON(t, h2, "/api/v1/agent/report", "test-token", report); rr.Code != http.StatusOK {
 		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
@@ -486,7 +1058,7 @@ func TestPlanPreflightAndBlockedCommandSanitization(t *testing.T) {
 		t.Fatal(err)
 	}
 	offlineOut := httptest.NewRecorder()
-	h2.ServeHTTP(offlineOut, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", offline.ID), nil))
+	h2.ServeHTTP(offlineOut, withOperator(httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/plans/%d/preflight", offline.ID), nil)))
 	if offlineOut.Code != http.StatusOK || !strings.Contains(offlineOut.Body.String(), "status=offline") {
 		t.Fatalf("offline preflight missing status warning: %d %s", offlineOut.Code, offlineOut.Body.String())
 	}
@@ -503,7 +1075,7 @@ func TestPlanPreflightAndBlockedCommandSanitization(t *testing.T) {
 			t.Fatalf("sanitized commands still contain %q: %+v", forbidden, clean)
 		}
 	}
-	md := buildPlanMarkdown(bad, []string{"warn token=abc"}, sanitizeCommandGroups(groups), baseChecklist(), json.RawMessage(`{"Authorization":"Bearer abc"}`), []string{"lq status"}, "dangerous", "blocked")
+	md := buildPlanMarkdown(bad, []string{"warn token=abc"}, sanitizeCommandGroups(groups), baseChecklist(), json.RawMessage(`{"Authorization":"Bearer abc"}`), []string{"lq status"}, rollbackInstructionsForPlan("create_forward"), "dangerous", "blocked")
 	for _, leak := range []string{"token=abc", "Bearer abc", "systemctl restart", "nft "} {
 		if strings.Contains(md, leak) {
 			t.Fatalf("markdown leaked blocked/secret %q: %s", leak, md)

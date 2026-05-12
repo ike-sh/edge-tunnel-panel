@@ -35,8 +35,16 @@ func (c Collector) Collect(ctx context.Context, cfg Config) ReportRequest {
 	report := ReportRequest{
 		NodeID: cfg.NodeID, NodeName: cfg.NodeName, Role: normalizeRole(cfg.Role), Hostname: hostname,
 		AgentVersion: Version, CoreVersion: "missing", Status: "online", HealthScore: 100, IntervalSeconds: cfg.IntervalSeconds,
-		Services:     map[string]string{},
-		Capabilities: Capabilities{CoreVersion: "missing", EnableTasks: cfg.EnableTasks, AllowedTaskActions: AllowedTaskActions()},
+		Services: map[string]string{},
+		Capabilities: Capabilities{
+			CoreVersion:                  "missing",
+			EnableTasks:                  cfg.EnableTasks,
+			SupportsSnapshotManualRecord: true,
+			SupportsRollbackManualRecord: true,
+			WriteActionsSupported:        false,
+			SupportedWriteActions:        []string{},
+			AllowedTaskActions:           AllowedTaskActions(),
+		},
 	}
 	if report.IntervalSeconds <= 0 {
 		report.IntervalSeconds = 60

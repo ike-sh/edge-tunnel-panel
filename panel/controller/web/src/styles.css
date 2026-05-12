@@ -108,6 +108,27 @@ nav button:hover {
   margin-bottom: 24px;
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.button-row.compact {
+  min-width: 240px;
+  margin-top: 0;
+}
+
+.button-row button {
+  border: 1px solid #ccd6df;
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: #18202a;
+  background: #fff;
+  cursor: pointer;
+}
+
 .link-button {
   width: auto;
   padding: 0;
@@ -157,13 +178,23 @@ h3 {
 }
 
 .tag.online,
-.tag.info {
+.tag.info,
+.tag.passed,
+.tag.recorded,
+.tag.verified,
+.tag.ready,
+.tag.low {
   background: #daf3e9;
   color: #126346;
 }
 
 .tag.degraded,
-.tag.warn {
+.tag.warn,
+.tag.warning,
+.tag.missing,
+.tag.medium,
+.tag.future_write_low,
+.tag.future_write_guarded {
   background: #fff0ca;
   color: #7a5500;
 }
@@ -182,7 +213,11 @@ h3 {
 .tag.failed,
 .tag.rolled_back,
 .tag.dangerous,
-.tag.blocked {
+.tag.blocked,
+.tag.canceled,
+.tag.high,
+.tag.critical,
+.tag.future_write_dangerous {
   background: #ffdede;
   color: #8b1d1d;
 }
@@ -201,10 +236,14 @@ h3 {
 .tag.draft,
 .tag.generated,
 .tag.archived,
-.tag.rejected,
 .tag.expired,
 .tag.safe,
-.tag.readonly {
+.tag.readonly,
+.tag.disabled,
+.tag.not_required,
+.tag.approved,
+.tag.rejected,
+.tag.not_required {
   background: #e8eef2;
   color: #33414f;
 }
@@ -279,7 +318,8 @@ h3 {
 .bootstrap-page,
 .plans-page,
 .tasks-page,
-.capabilities-page {
+.capabilities-page,
+.action-catalog-page {
   display: grid;
   gap: 18px;
 }
@@ -373,7 +413,9 @@ button:disabled {
 }
 
 .form-grid input,
-.form-grid select {
+.form-grid select,
+.mini-form input,
+.mini-form textarea {
   width: 100%;
   border: 1px solid #ccd6df;
   border-radius: 8px;
@@ -381,6 +423,27 @@ button:disabled {
   color: #18202a;
   background: #fff;
   font: inherit;
+}
+
+.mini-form {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e1e7ed;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.mini-form label {
+  display: grid;
+  gap: 6px;
+  color: #536273;
+  font-weight: 700;
+}
+
+.mini-form textarea {
+  min-height: 84px;
+  resize: vertical;
 }
 
 .muted {
@@ -513,6 +576,23 @@ button:disabled {
   overflow: auto;
   border-radius: 8px;
   padding: 10px;
+  color: #e9f3ef;
+  background: #111820;
+  white-space: pre-wrap;
+}
+
+.split-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.split-grid pre,
+.task-detail pre {
+  max-height: 360px;
+  overflow: auto;
+  border-radius: 8px;
+  padding: 12px;
   color: #e9f3ef;
   background: #111820;
   white-space: pre-wrap;

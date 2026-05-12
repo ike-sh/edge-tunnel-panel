@@ -1,6 +1,6 @@
 # 安装 Leikwan Controller
 
-Leikwan Controller 2.1.0-alpha.1 是面板服务端。它保存 Agent 上报的节点、历史、入口、转发、事件和 Plans，不会修改任何节点系统�?
+Leikwan Controller 2.1.0 是面板服务端。它保存 Agent 上报的节点、历史、入口、转发、事件和 Plans，不会修改任何节点系统�?
 ## 手动构建
 
 ```bash
@@ -9,19 +9,19 @@ go build -o leikwan-controller ./cmd/leikwan-controller
 sudo install -m 0755 leikwan-controller /usr/local/bin/leikwan-controller
 ```
 
-创建目录�?
+创建目录�?
 ```bash
 sudo mkdir -p /etc/leikwan-panel /var/lib/leikwan-panel
 sudo chmod 0750 /etc/leikwan-panel /var/lib/leikwan-panel
 ```
 
-配置 token�?
+配置 token�?
 ```bash
 sudo install -m 0600 /dev/null /etc/leikwan-panel/controller.env
 sudo sh -c 'echo LEIKWAN_CONTROLLER_TOKEN=your-strong-token > /etc/leikwan-panel/controller.env'
 ```
 
-不要使用�?token。安装脚本不会自动生�?token�?
+不要使用�?token。安装脚本不会自动生�?token�?
 ## 使用安装脚本
 
 ```bash
@@ -37,7 +37,7 @@ sudo -E bash panel/scripts/install-controller.sh
 - 安装 `leikwan-controller.service`
 - 在提供环境变量时写入 `/etc/leikwan-panel/controller.env`
 
-脚本不会启动一个没�?token �?Controller�?
+脚本不会启动一个没�?token �?Controller�?
 ## 启动
 
 ```bash
@@ -52,11 +52,28 @@ curl http://127.0.0.1:18080/api/v1/health
 
 ## 安全边界
 
-Controller 不会�?
+Controller 不会�?
 - 远程执行命令
 - 下发配置
 - 修改 nftables / systemd / EasyTier / DDNS
 - 修改 entries / forwards / PBR
-- 返回真实 token �?Web API
+- 返回真实 token �?Web API
 
-`/api/v1/bootstrap/agent-command` 只返�?`REDACTED` token 模板�?
+`/api/v1/bootstrap/agent-command` 只返�?`REDACTED` token 模板�?
+## Operator Auth in 2.1.0
+
+Configure both tokens for production:
+
+```bash
+sudo install -m 0600 /dev/null /etc/leikwan-panel/controller.env
+sudo sh -c '{
+  echo LEIKWAN_CONTROLLER_TOKEN=agent-token
+  echo LEIKWAN_OPERATOR_TOKEN=operator-token
+} > /etc/leikwan-panel/controller.env'
+```
+
+- `LEIKWAN_CONTROLLER_TOKEN` is only for Agent register/report/tasks/result APIs.
+- `LEIKWAN_OPERATOR_TOKEN` is for Web and operator APIs such as Plans, readonly Tasks, approvals, snapshot metadata and action review.
+- `--strict-auth` makes every non-health Web API require the Operator token.
+
+Do not reuse the Agent token as the Operator token.

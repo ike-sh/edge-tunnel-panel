@@ -1,16 +1,16 @@
 # Leikwan Panel systemd ç¤ºä¾‹
 
-±¾Ò³Ìá¹© Leikwan Panel 2.1.0-alpha.1 µÄ systemd ²İ°¸¡£2.1-alpha.1 ²»»á×Ô¶¯Ö´ĞĞÅäÖÃ±ä¸ü£¬²»»áĞŞ¸Ä Leikwan Core µÄ nftables¡¢systemd¡¢EasyTier¡¢DDNS »ò TSV ÅäÖÃ¡£
+ï¿½ï¿½Ò³ï¿½á¹© Leikwan Panel 2.1.0 ï¿½ï¿½ systemd ï¿½İ°ï¿½ï¿½ï¿½2.1.0 ï¿½ï¿½ï¿½ï¿½ï¿½Ô¶ï¿½Ö´ï¿½ï¿½ï¿½ï¿½ï¿½Ã±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ş¸ï¿½?Leikwan Core ï¿½ï¿½ nftablesï¿½ï¿½systemdï¿½ï¿½EasyTierï¿½ï¿½DDNS ï¿½ï¿½ TSV ï¿½ï¿½ï¿½Ã¡ï¿½
 ## Controller é…ç½®è·¯å¾„
 
-å»ºè®®è·¯å¾„ï¼?
+å»ºè®®è·¯å¾„ï¿½?
 ```text
 /usr/local/bin/leikwan-controller
 /var/lib/leikwan-panel/controller.db
 /etc/leikwan-panel/controller.yml
 ```
 
-`controller.yml` ç¤ºä¾‹ï¼?
+`controller.yml` ç¤ºä¾‹ï¿½?
 ```yaml
 token: change-me
 ```
@@ -29,7 +29,7 @@ LEIKWAN_CONTROLLER_TOKEN=change-me
 panel/examples/leikwan-controller.service
 ```
 
-å†…å®¹ï¼?
+å†…å®¹ï¿½?
 ```ini
 [Unit]
 Description=Leikwan Panel Controller
@@ -50,7 +50,7 @@ WantedBy=multi-user.target
 
 ## Agent é…ç½®è·¯å¾„
 
-å»ºè®®è·¯å¾„ï¼?
+å»ºè®®è·¯å¾„ï¿½?
 ```text
 /usr/local/bin/leikwan-agent
 /etc/leikwan-agent/config.yml
@@ -70,7 +70,7 @@ panel/examples/agent.yml
 panel/examples/leikwan-agent.service
 ```
 
-å†…å®¹ï¼?
+å†…å®¹ï¿½?
 ```ini
 [Unit]
 Description=Leikwan Panel Agent
@@ -103,4 +103,14 @@ journalctl -u leikwan-controller.service -n 100 --no-pager
 journalctl -u leikwan-agent.service -n 100 --no-pager
 ```
 
-æ—¥å¿—ä¸­ä¸åº”å‡ºç?tokenã€secretã€passwordã€privateKeyã€custom_urlã€custom_cmd æˆ?Authorization æ˜æ–‡ã€?
+æ—¥å¿—ä¸­ä¸åº”å‡ºï¿½?tokenã€secretã€passwordã€privateKeyã€custom_urlã€custom_cmd ï¿½?Authorization æ˜æ–‡ï¿½?
+## 2.1.0 Operator Token Example
+
+`/etc/leikwan-panel/controller.env` can contain both tokens:
+
+```text
+LEIKWAN_CONTROLLER_TOKEN=agent-token
+LEIKWAN_OPERATOR_TOKEN=operator-token
+```
+
+`LEIKWAN_CONTROLLER_TOKEN` is used only by Agents. `LEIKWAN_OPERATOR_TOKEN` is used by the Web UI and operator APIs. To require the Operator token for all non-health Web APIs, add `--strict-auth` to the Controller `ExecStart`.

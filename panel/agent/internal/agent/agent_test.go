@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRedactCleansSecrets(t *testing.T) {
@@ -41,6 +43,9 @@ func TestCollectorDoesNotCrashWhenLQMissing(t *testing.T) {
 	if report.Capabilities.LQAvailable {
 		t.Fatalf("expected lq unavailable capabilities: %+v", report.Capabilities)
 	}
+	if report.Capabilities.WriteActionsSupported || len(report.Capabilities.SupportedWriteActions) != 0 {
+		t.Fatalf("agent must not advertise write actions: %+v", report.Capabilities)
+	}
 	if report.NodeID != "node-a" {
 		t.Fatalf("node id not preserved: %q", report.NodeID)
 	}
@@ -48,7 +53,7 @@ func TestCollectorDoesNotCrashWhenLQMissing(t *testing.T) {
 
 func TestConfigParser(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.yml")
-	content := "controller_url: http://127.0.0.1:18080\nnode_id: n1\nnode_name: test\nrole: relay\ninterval_seconds: 5\ntoken: secret\nenable_tasks: true\ntask_interval_seconds: 3\ntask_timeout_seconds: 4\n"
+	content := "controller_url: http://127.0.0.1:18080\nnode_id: n1\nnode_name: test\nrole: relay\ninterval_seconds: 5\ntoken: secret\nenable_tasks: true\ntask_interval_seconds: 3\ntask_timeout_seconds: 4\nmax_concurrent_tasks: 3\ntask_result_limit_kb: 12\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -56,14 +61,14 @@ func TestConfigParser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ControllerURL != "http://127.0.0.1:18080" || cfg.Role != "relay" || cfg.IntervalSeconds != 5 || !cfg.EnableTasks || cfg.TaskIntervalSeconds != 3 || cfg.TaskTimeoutSeconds != 4 {
+	if cfg.ControllerURL != "http://127.0.0.1:18080" || cfg.Role != "relay" || cfg.IntervalSeconds != 5 || !cfg.EnableTasks || cfg.TaskIntervalSeconds != 3 || cfg.TaskTimeoutSeconds != 4 || cfg.MaxConcurrentTasks != 1 || cfg.TaskResultLimitKB != 12 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
 
 func TestWriteConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.yml")
-	err := WriteConfig(path, Config{ControllerURL: "http://127.0.0.1:18080", Token: "secret-token", NodeName: "node-a", Role: "entry", IntervalSeconds: 7, EnableTasks: true, TaskIntervalSeconds: 8, TaskTimeoutSeconds: 9})
+	err := WriteConfig(path, Config{ControllerURL: "http://127.0.0.1:18080", Token: "secret-token", NodeName: "node-a", Role: "entry", IntervalSeconds: 7, EnableTasks: true, TaskIntervalSeconds: 8, TaskTimeoutSeconds: 9, TaskResultLimitKB: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +76,7 @@ func TestWriteConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Token != "secret-token" || cfg.Role != "entry" || cfg.NodeName != "node-a" || cfg.IntervalSeconds != 7 || !cfg.EnableTasks || cfg.TaskIntervalSeconds != 8 || cfg.TaskTimeoutSeconds != 9 {
+	if cfg.Token != "secret-token" || cfg.Role != "entry" || cfg.NodeName != "node-a" || cfg.IntervalSeconds != 7 || !cfg.EnableTasks || cfg.TaskIntervalSeconds != 8 || cfg.TaskTimeoutSeconds != 9 || cfg.MaxConcurrentTasks != 1 || cfg.TaskResultLimitKB != 16 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	if runtime.GOOS != "windows" {
@@ -155,6 +160,12 @@ func TestCollectorParsesStatusAndDoctorJSON(t *testing.T) {
 	if !report.Capabilities.LQAvailable || !report.Capabilities.SupportsStatusJSON || !report.Capabilities.SupportsDoctorJSON || !report.Capabilities.SupportsForwardList || !report.Capabilities.SupportsDDNSOverview {
 		t.Fatalf("capabilities not detected: %+v", report.Capabilities)
 	}
+	if !report.Capabilities.SupportsSnapshotManualRecord || !report.Capabilities.SupportsRollbackManualRecord {
+		t.Fatalf("manual snapshot/rollback record capabilities should be advertised: %+v", report.Capabilities)
+	}
+	if report.Capabilities.WriteActionsSupported || len(report.Capabilities.SupportedWriteActions) != 0 {
+		t.Fatalf("write actions must remain unsupported: %+v", report.Capabilities)
+	}
 	var doc map[string]any
 	if err := json.Unmarshal(report.Doctor, &doc); err != nil || doc["overall"] != "OK" {
 		t.Fatalf("doctor not parsed: %s err=%v", report.Doctor, err)
@@ -165,6 +176,23 @@ func TestReadonlyTaskActionMappingAndRejection(t *testing.T) {
 	args, ok := TaskActionArgs("list_forwards")
 	if !ok || strings.Join(args, " ") != "forward list" {
 		t.Fatalf("unexpected list_forwards mapping: %v %v", args, ok)
+	}
+	for _, action := range AllowedTaskActions() {
+		args, ok := TaskActionArgs(action)
+		if !ok {
+			t.Fatalf("allowed action missing argv mapping: %s", action)
+		}
+		joined := strings.Join(args, " ")
+		for _, forbidden := range []string{"sh -c", "bash -c", "eval", "systemctl", "nft", "iptables", "snapshot", "rollback"} {
+			if strings.Contains(joined, forbidden) {
+				t.Fatalf("readonly action %s contains forbidden argv text %q: %v", action, forbidden, args)
+			}
+		}
+	}
+	for _, forbidden := range []string{"create_snapshot", "rollback", "restart_relay", "systemctl_restart"} {
+		if _, ok := TaskActionArgs(forbidden); ok {
+			t.Fatalf("forbidden action must not be allowed: %s", forbidden)
+		}
 	}
 	lqPath := filepath.Join(t.TempDir(), "lq")
 	if err := os.WriteFile(lqPath, []byte("placeholder"), 0o700); err != nil {
@@ -237,6 +265,90 @@ func TestRunDoesNotPollTasksWhenDisabled(t *testing.T) {
 	}
 	if taskPolls != 0 {
 		t.Fatalf("expected no task polls when disabled, got %d", taskPolls)
+	}
+}
+
+func TestTaskLockPreventsConcurrentExecution(t *testing.T) {
+	taskExecutionLock.Lock()
+	defer taskExecutionLock.Unlock()
+	var polls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agent/tasks":
+			atomic.AddInt32(&polls, 1)
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}
+	}))
+	defer server.Close()
+	cfg := Config{ControllerURL: server.URL, Token: "test-token", NodeID: "node-a", EnableTasks: true}
+	processTasks(context.Background(), cfg, NewClient(cfg), Collector{}, false)
+	if atomic.LoadInt32(&polls) != 0 {
+		t.Fatalf("task poll should be skipped while lock is held")
+	}
+}
+
+func TestTaskResultLimitKB(t *testing.T) {
+	lqPath := filepath.Join(t.TempDir(), "lq")
+	if err := os.WriteFile(lqPath, []byte("placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c := Collector{
+		LQPath: lqPath,
+		TaskCommandFunc: func(_ context.Context, _ string, _ ...string) (string, string, int, error) {
+			return strings.Repeat("x", 3*1024), "", 0, nil
+		},
+	}
+	result := ExecuteTask(context.Background(), c, Config{TaskTimeoutSeconds: 5, TaskResultLimitKB: 1}, Task{Action: "run_status"})
+	if !strings.Contains(result.ResultStdout, "[TRUNCATED]") || len(result.ResultStdout) > 1200 {
+		t.Fatalf("expected 1KB truncation, got len=%d body=%q", len(result.ResultStdout), result.ResultStdout)
+	}
+}
+
+func TestProcessTasksSerializesLongTask(t *testing.T) {
+	lqPath := filepath.Join(t.TempDir(), "lq")
+	if err := os.WriteFile(lqPath, []byte("placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var maxRunning int32
+	var running int32
+	c := Collector{
+		LQPath: lqPath,
+		TaskCommandFunc: func(_ context.Context, _ string, _ ...string) (string, string, int, error) {
+			cur := atomic.AddInt32(&running, 1)
+			if cur > atomic.LoadInt32(&maxRunning) {
+				atomic.StoreInt32(&maxRunning, cur)
+			}
+			time.Sleep(30 * time.Millisecond)
+			atomic.AddInt32(&running, -1)
+			return "ok", "", 0, nil
+		},
+	}
+	var resultCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agent/tasks":
+			_ = json.NewEncoder(w).Encode([]Task{{ID: 1, NodeID: "node-a", Action: "run_status", Status: "queued"}})
+		case "/api/v1/agent/tasks/1/result":
+			atomic.AddInt32(&resultCount, 1)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}
+	}))
+	defer server.Close()
+	cfg := Config{ControllerURL: server.URL, Token: "test-token", NodeID: "node-a", EnableTasks: true, TaskTimeoutSeconds: 2}
+	done := make(chan struct{})
+	go func() {
+		processTasks(context.Background(), cfg, NewClient(cfg), c, false)
+		close(done)
+	}()
+	time.Sleep(5 * time.Millisecond)
+	processTasks(context.Background(), cfg, NewClient(cfg), c, false)
+	<-done
+	if maxRunning != 1 || resultCount != 1 {
+		t.Fatalf("expected serialized task execution, maxRunning=%d results=%d", maxRunning, resultCount)
 	}
 }
 

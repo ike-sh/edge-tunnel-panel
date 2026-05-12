@@ -27,7 +27,7 @@ func LoadConfig(path string) (Config, error) {
 			}
 		}
 	}
-	cfg := Config{Role: "unknown", IntervalSeconds: 60, TaskIntervalSeconds: 10, TaskTimeoutSeconds: 20}
+	cfg := Config{Role: "unknown", IntervalSeconds: 60, TaskIntervalSeconds: 10, TaskTimeoutSeconds: 20, MaxConcurrentTasks: 1, TaskResultLimitKB: 64}
 	if path == "" {
 		return cfg, nil
 	}
@@ -77,6 +77,16 @@ func LoadConfig(path string) (Config, error) {
 			if err == nil && n > 0 {
 				cfg.TaskTimeoutSeconds = n
 			}
+		case "max_concurrent_tasks":
+			n, err := strconv.Atoi(value)
+			if err == nil && n > 0 {
+				cfg.MaxConcurrentTasks = n
+			}
+		case "task_result_limit_kb":
+			n, err := strconv.Atoi(value)
+			if err == nil && n > 0 {
+				cfg.TaskResultLimitKB = n
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -90,6 +100,10 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if cfg.TaskTimeoutSeconds <= 0 {
 		cfg.TaskTimeoutSeconds = 20
+	}
+	cfg.MaxConcurrentTasks = 1
+	if cfg.TaskResultLimitKB <= 0 {
+		cfg.TaskResultLimitKB = 64
 	}
 	if cfg.NodeID == "" {
 		host, _ := os.Hostname()
@@ -128,13 +142,17 @@ func WriteConfig(path string, cfg Config) error {
 	if cfg.TaskTimeoutSeconds <= 0 {
 		cfg.TaskTimeoutSeconds = 20
 	}
+	cfg.MaxConcurrentTasks = 1
+	if cfg.TaskResultLimitKB <= 0 {
+		cfg.TaskResultLimitKB = 64
+	}
 	if dir := filepath.Dir(path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	content := fmt.Sprintf("controller_url: %s\ntoken: %s\nnode_id: %s\nnode_name: %s\nrole: %s\ninterval_seconds: %d\nenable_tasks: %t\ntask_interval_seconds: %d\ntask_timeout_seconds: %d\n",
-		cfg.ControllerURL, cfg.Token, cfg.NodeID, cfg.NodeName, cfg.Role, cfg.IntervalSeconds, cfg.EnableTasks, cfg.TaskIntervalSeconds, cfg.TaskTimeoutSeconds)
+	content := fmt.Sprintf("controller_url: %s\ntoken: %s\nnode_id: %s\nnode_name: %s\nrole: %s\ninterval_seconds: %d\nenable_tasks: %t\ntask_interval_seconds: %d\ntask_timeout_seconds: %d\nmax_concurrent_tasks: 1\ntask_result_limit_kb: %d\n",
+		cfg.ControllerURL, cfg.Token, cfg.NodeID, cfg.NodeName, cfg.Role, cfg.IntervalSeconds, cfg.EnableTasks, cfg.TaskIntervalSeconds, cfg.TaskTimeoutSeconds, cfg.TaskResultLimitKB)
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 

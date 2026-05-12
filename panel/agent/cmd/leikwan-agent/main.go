@@ -33,6 +33,8 @@ func main() {
 			EnableTasks:         false,
 			TaskIntervalSeconds: 10,
 			TaskTimeoutSeconds:  20,
+			MaxConcurrentTasks:  1,
+			TaskResultLimitKB:   64,
 		}
 		if err := agent.WriteConfig(*configPath, cfg); err != nil {
 			log.Fatal(agent.RedactString(err.Error()))

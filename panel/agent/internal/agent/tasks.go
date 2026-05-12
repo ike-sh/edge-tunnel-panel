@@ -65,13 +65,13 @@ func ExecuteTask(ctx context.Context, collector Collector, cfg Config, task Task
 	stdout, stderr, exitCode, err := collector.runTaskCommand(runCtx, lqPath, args...)
 	result := TaskResultRequest{
 		Status:       "succeeded",
-		ResultStdout: truncateTaskOutput(stdout),
-		ResultStderr: truncateTaskOutput(stderr),
+		ResultStdout: truncateTaskOutput(stdout, cfg.TaskResultLimitKB),
+		ResultStderr: truncateTaskOutput(stderr, cfg.TaskResultLimitKB),
 		ExitCode:     exitCode,
 	}
 	if err != nil {
 		result.Status = "failed"
-		result.Error = truncateTaskOutput(err.Error())
+		result.Error = truncateTaskOutput(err.Error(), cfg.TaskResultLimitKB)
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			result.Error = "task timeout"
 		}
@@ -105,9 +105,15 @@ func (c Collector) runTaskCommand(ctx context.Context, name string, args ...stri
 	return stdout.String(), stderr.String(), exitCode, err
 }
 
-func truncateTaskOutput(s string) string {
+func truncateTaskOutput(s string, limitKB int) string {
 	s = RedactString(s)
-	const maxBytes = 64 * 1024
+	if limitKB <= 0 {
+		limitKB = 64
+	}
+	if limitKB > 64 {
+		limitKB = 64
+	}
+	maxBytes := limitKB * 1024
 	if len(s) <= maxBytes {
 		return s
 	}

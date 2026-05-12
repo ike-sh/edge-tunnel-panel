@@ -112,6 +112,21 @@ func (s *Store) migrate(ctx context.Context) error {
 			execution_status TEXT,
 			execution_note TEXT,
 			manual_result TEXT,
+			dry_run_status TEXT,
+			dry_run_task_ids TEXT,
+			dry_run_report TEXT,
+			last_dry_run_at TEXT,
+			snapshot_policy TEXT,
+			snapshot_required INTEGER DEFAULT 0,
+			snapshot_status TEXT,
+			snapshot_ref TEXT,
+			snapshot_note TEXT,
+			rollback_available INTEGER DEFAULT 0,
+			rollback_ref TEXT,
+			rollback_note TEXT,
+			rollback_instructions TEXT,
+			verification_status TEXT,
+			verification_report TEXT,
 			safety_level TEXT,
 			command_classification TEXT,
 			target_node_id TEXT,
@@ -131,6 +146,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			node_id TEXT NOT NULL,
 			action TEXT NOT NULL,
 			status TEXT NOT NULL,
+			approval_status TEXT,
+			approved_by TEXT,
+			approved_at TEXT,
+			requested_by TEXT,
+			ttl_seconds INTEGER DEFAULT 300,
+			expires_at TEXT,
+			retry_of_task_id INTEGER DEFAULT 0,
+			attempt INTEGER DEFAULT 1,
+			max_attempts INTEGER DEFAULT 3,
+			task_group_id TEXT,
+			timeline_json TEXT,
 			result_stdout TEXT,
 			result_stderr TEXT,
 			exit_code INTEGER DEFAULT 0,
@@ -162,6 +188,21 @@ func (s *Store) migrate(ctx context.Context) error {
 		"execution_status":        "TEXT",
 		"execution_note":          "TEXT",
 		"manual_result":           "TEXT",
+		"dry_run_status":          "TEXT",
+		"dry_run_task_ids":        "TEXT",
+		"dry_run_report":          "TEXT",
+		"last_dry_run_at":         "TEXT",
+		"snapshot_policy":         "TEXT",
+		"snapshot_required":       "INTEGER DEFAULT 0",
+		"snapshot_status":         "TEXT",
+		"snapshot_ref":            "TEXT",
+		"snapshot_note":           "TEXT",
+		"rollback_available":      "INTEGER DEFAULT 0",
+		"rollback_ref":            "TEXT",
+		"rollback_note":           "TEXT",
+		"rollback_instructions":   "TEXT",
+		"verification_status":     "TEXT",
+		"verification_report":     "TEXT",
 		"safety_level":            "TEXT",
 		"command_classification":  "TEXT",
 		"command_groups":          "TEXT",
@@ -177,6 +218,24 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	for name, typ := range map[string]string{"capabilities_json": "TEXT"} {
 		if err := s.addColumnIfMissing(ctx, "node_reports", name, typ); err != nil {
+			return err
+		}
+	}
+	taskColumns := map[string]string{
+		"approval_status":  "TEXT",
+		"approved_by":      "TEXT",
+		"approved_at":      "TEXT",
+		"requested_by":     "TEXT",
+		"ttl_seconds":      "INTEGER DEFAULT 300",
+		"expires_at":       "TEXT",
+		"retry_of_task_id": "INTEGER DEFAULT 0",
+		"attempt":          "INTEGER DEFAULT 1",
+		"max_attempts":     "INTEGER DEFAULT 3",
+		"task_group_id":    "TEXT",
+		"timeline_json":    "TEXT",
+	}
+	for name, typ := range taskColumns {
+		if err := s.addColumnIfMissing(ctx, "tasks", name, typ); err != nil {
 			return err
 		}
 	}
@@ -261,6 +320,53 @@ func normalizeExecutionStatus(status string) string {
 	}
 }
 
+func normalizeDryRunStatus(status string) string {
+	switch status {
+	case "not_run", "running", "passed", "warning", "failed":
+		return status
+	default:
+		return "not_run"
+	}
+}
+
+func normalizeSnapshotPolicy(policy string) string {
+	switch policy {
+	case "not_required", "recommended", "required":
+		return policy
+	default:
+		return "recommended"
+	}
+}
+
+func defaultSnapshotPolicy(planType string) string {
+	switch planType {
+	case "ddns_check":
+		return "recommended"
+	case "create_entry", "create_forward", "switch_entry":
+		return "required"
+	default:
+		return "recommended"
+	}
+}
+
+func normalizeSnapshotStatus(status string) string {
+	switch status {
+	case "not_required", "missing", "recorded", "verified":
+		return status
+	default:
+		return "missing"
+	}
+}
+
+func normalizeVerificationStatus(status string) string {
+	switch status {
+	case "not_run", "passed", "warning", "failed":
+		return status
+	default:
+		return "not_run"
+	}
+}
+
 func normalizeSafetyLevel(level string) string {
 	switch level {
 	case "safe", "caution", "dangerous":
@@ -294,11 +400,40 @@ func allowedTaskActions() []string {
 
 func normalizeTaskStatus(status string) string {
 	switch status {
-	case "queued", "picked", "succeeded", "failed", "expired", "rejected":
+	case "queued", "picked", "succeeded", "failed", "expired", "rejected", "canceled":
 		return status
 	default:
 		return "failed"
 	}
+}
+
+func normalizeApprovalStatus(status string) string {
+	switch status {
+	case "not_required", "pending", "approved", "rejected":
+		return status
+	default:
+		return "not_required"
+	}
+}
+
+func normalizeTTLSeconds(ttl int) int {
+	if ttl <= 0 {
+		return 300
+	}
+	if ttl > 86400 {
+		return 86400
+	}
+	return ttl
+}
+
+func normalizeAttempts(maxAttempts int) int {
+	if maxAttempts <= 0 {
+		return 3
+	}
+	if maxAttempts > 10 {
+		return 10
+	}
+	return maxAttempts
 }
 
 func truncateTaskResult(s string) string {
@@ -308,6 +443,41 @@ func truncateTaskResult(s string) string {
 		return s
 	}
 	return s[:maxBytes] + "\n[TRUNCATED]"
+}
+
+func newTaskTimeline(action, level, message string) string {
+	items := []TaskTimelineItem{{
+		Time:    nowString(),
+		Action:  RedactString(action),
+		Level:   RedactString(level),
+		Message: RedactString(message),
+	}}
+	raw, _ := json.Marshal(items)
+	return string(RedactJSONBytes(raw))
+}
+
+func appendTaskTimeline(timeline string, action, level, message string) string {
+	items := []TaskTimelineItem{}
+	if strings.TrimSpace(timeline) != "" {
+		_ = json.Unmarshal([]byte(timeline), &items)
+	}
+	items = append(items, TaskTimelineItem{
+		Time:    nowString(),
+		Action:  RedactString(action),
+		Level:   RedactString(level),
+		Message: RedactString(message),
+	})
+	raw, _ := json.Marshal(items)
+	return string(RedactJSONBytes(raw))
+}
+
+func (s *Store) appendTaskTimeline(ctx context.Context, id int64, action, level, message string) error {
+	var timeline string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(timeline_json, '[]') FROM tasks WHERE id=?`, id).Scan(&timeline); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET timeline_json=? WHERE id=?`, appendTaskTimeline(timeline, action, level, message), id)
+	return err
 }
 
 func jsonText(v any) string {
@@ -356,6 +526,15 @@ func scanCapabilities(text string) AgentCapabilities {
 
 func scanStringSlice(text string) []string {
 	out := []string{}
+	if text == "" || text == "null" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(text), &out)
+	return out
+}
+
+func scanInt64Slice(text string) []int64 {
+	out := []int64{}
 	if text == "" || text == "null" {
 		return out
 	}
@@ -687,9 +866,15 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, er
 		return Task{}, fmt.Errorf("unsupported task action: %s", RedactString(action))
 	}
 	now := nowString()
+	ttl := normalizeTTLSeconds(req.TTLSeconds)
+	expiresAt := time.Now().UTC().Add(time.Duration(ttl) * time.Second).Format(time.RFC3339)
+	maxAttempts := normalizeAttempts(req.MaxAttempts)
+	requestedBy := RedactString(strings.TrimSpace(req.RequestedBy))
+	taskGroupID := RedactString(strings.TrimSpace(req.TaskGroupID))
+	timeline := newTaskTimeline("created", "info", fmt.Sprintf("readonly task queued: %s", action))
 	result, err := s.db.ExecContext(ctx, `INSERT INTO tasks
-		(node_id, action, status, result_stdout, result_stderr, exit_code, error, created_at, picked_at, finished_at)
-		VALUES (?, ?, 'queued', '', '', 0, '', ?, '', '')`, nodeID, action, now)
+		(node_id, action, status, approval_status, requested_by, ttl_seconds, expires_at, retry_of_task_id, attempt, max_attempts, task_group_id, timeline_json, result_stdout, result_stderr, exit_code, error, created_at, picked_at, finished_at)
+		VALUES (?, ?, 'queued', 'not_required', ?, ?, ?, 0, 1, ?, ?, ?, '', '', 0, '', ?, '', '')`, nodeID, action, requestedBy, ttl, expiresAt, maxAttempts, taskGroupID, timeline, now)
 	if err != nil {
 		return Task{}, err
 	}
@@ -702,7 +887,8 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, er
 }
 
 func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, node_id, action, status, COALESCE(result_stdout, ''), COALESCE(result_stderr, ''), COALESCE(exit_code, 0), COALESCE(error, ''), COALESCE(created_at, ''), COALESCE(picked_at, ''), COALESCE(finished_at, '') FROM tasks ORDER BY id DESC LIMIT 200`)
+	s.ExpireTasks(ctx)
+	rows, err := s.db.QueryContext(ctx, taskSelectSQL+` ORDER BY id DESC LIMIT 200`)
 	if err != nil {
 		return nil, err
 	}
@@ -711,7 +897,8 @@ func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
 }
 
 func (s *Store) GetTask(ctx context.Context, id int64) (Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, node_id, action, status, COALESCE(result_stdout, ''), COALESCE(result_stderr, ''), COALESCE(exit_code, 0), COALESCE(error, ''), COALESCE(created_at, ''), COALESCE(picked_at, ''), COALESCE(finished_at, '') FROM tasks WHERE id=?`, id)
+	s.ExpireTasks(ctx)
+	rows, err := s.db.QueryContext(ctx, taskSelectSQL+` WHERE id=?`, id)
 	if err != nil {
 		return Task{}, err
 	}
@@ -726,19 +913,45 @@ func (s *Store) GetTask(ctx context.Context, id int64) (Task, error) {
 	return tasks[0], nil
 }
 
+func (s *Store) GetTasksByIDs(ctx context.Context, ids []int64) ([]Task, error) {
+	s.ExpireTasks(ctx)
+	if len(ids) == 0 {
+		return []Task{}, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, taskSelectSQL+` WHERE id IN (`+placeholders+`) ORDER BY id ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+const taskSelectSQL = `SELECT id, node_id, action, status, COALESCE(approval_status, 'not_required'), COALESCE(approved_by, ''), COALESCE(approved_at, ''), COALESCE(requested_by, ''), COALESCE(ttl_seconds, 0), COALESCE(expires_at, ''), COALESCE(retry_of_task_id, 0), COALESCE(attempt, 1), COALESCE(max_attempts, 3), COALESCE(task_group_id, ''), COALESCE(timeline_json, '[]'), COALESCE(result_stdout, ''), COALESCE(result_stderr, ''), COALESCE(exit_code, 0), COALESCE(error, ''), COALESCE(created_at, ''), COALESCE(picked_at, ''), COALESCE(finished_at, '') FROM tasks`
+
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	out := []Task{}
 	for rows.Next() {
 		var task Task
-		if err := rows.Scan(&task.ID, &task.NodeID, &task.Action, &task.Status, &task.ResultStdout, &task.ResultStderr, &task.ExitCode, &task.Error, &task.CreatedAt, &task.PickedAt, &task.FinishedAt); err != nil {
+		var timeline string
+		if err := rows.Scan(&task.ID, &task.NodeID, &task.Action, &task.Status, &task.ApprovalStatus, &task.ApprovedBy, &task.ApprovedAt, &task.RequestedBy, &task.TTLSeconds, &task.ExpiresAt, &task.RetryOfTaskID, &task.Attempt, &task.MaxAttempts, &task.TaskGroupID, &timeline, &task.ResultStdout, &task.ResultStderr, &task.ExitCode, &task.Error, &task.CreatedAt, &task.PickedAt, &task.FinishedAt); err != nil {
 			return nil, err
 		}
 		task.NodeID = RedactString(task.NodeID)
 		task.Action = RedactString(task.Action)
 		task.Status = normalizeTaskStatus(task.Status)
+		task.ApprovalStatus = normalizeApprovalStatus(task.ApprovalStatus)
+		task.ApprovedBy = RedactString(task.ApprovedBy)
+		task.RequestedBy = RedactString(task.RequestedBy)
+		task.TaskGroupID = RedactString(task.TaskGroupID)
 		task.ResultStdout = truncateTaskResult(task.ResultStdout)
 		task.ResultStderr = truncateTaskResult(task.ResultStderr)
 		task.Error = truncateTaskResult(task.Error)
+		task.Timeline = json.RawMessage(RedactJSONBytes([]byte(timeline)))
 		out = append(out, task)
 	}
 	return out, rows.Err()
@@ -753,12 +966,13 @@ func (s *Store) PickTasks(ctx context.Context, nodeID string, limit int) ([]Task
 		limit = 5
 	}
 	now := nowString()
+	s.ExpireTasks(ctx)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks WHERE node_id=? AND status='queued' ORDER BY id ASC LIMIT ?`, nodeID, limit)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks WHERE node_id=? AND status='queued' AND COALESCE(approval_status, 'not_required') IN ('not_required', 'approved') AND action IN ('probe_core_version', 'run_status', 'run_status_json', 'run_doctor', 'run_doctor_json', 'list_forwards', 'ddns_overview') ORDER BY id ASC LIMIT ?`, nodeID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -787,6 +1001,7 @@ func (s *Store) PickTasks(ctx context.Context, nodeID string, limit int) ([]Task
 	}
 	for _, id := range ids {
 		_ = s.AddEvent(ctx, nodeID, "info", fmt.Sprintf("readonly task picked: %d", id))
+		_ = s.appendTaskTimeline(ctx, id, "picked", "info", "agent picked readonly task")
 	}
 	if len(ids) == 0 {
 		return []Task{}, nil
@@ -796,7 +1011,7 @@ func (s *Store) PickTasks(ctx context.Context, nodeID string, limit int) ([]Task
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	taskRows, err := s.db.QueryContext(ctx, `SELECT id, node_id, action, status, COALESCE(result_stdout, ''), COALESCE(result_stderr, ''), COALESCE(exit_code, 0), COALESCE(error, ''), COALESCE(created_at, ''), COALESCE(picked_at, ''), COALESCE(finished_at, '') FROM tasks WHERE id IN (`+placeholders+`) ORDER BY id ASC`, args...)
+	taskRows, err := s.db.QueryContext(ctx, taskSelectSQL+` WHERE id IN (`+placeholders+`) ORDER BY id ASC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -821,6 +1036,7 @@ func (s *Store) FinishTask(ctx context.Context, id int64, req TaskResultRequest)
 	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
 		return Task{}, fmt.Errorf("task is not pending")
 	}
+	_ = s.appendTaskTimeline(ctx, id, "result", mapTaskLevel(status), fmt.Sprintf("readonly task finished with status=%s exit_code=%d", status, req.ExitCode))
 	task, err := s.GetTask(ctx, id)
 	if err != nil {
 		return Task{}, err
@@ -831,6 +1047,131 @@ func (s *Store) FinishTask(ctx context.Context, id int64, req TaskResultRequest)
 	}
 	_ = s.AddEvent(ctx, task.NodeID, level, fmt.Sprintf("readonly task %s: %s", task.Status, task.Action))
 	return task, nil
+}
+
+func mapTaskLevel(status string) string {
+	if status == "succeeded" {
+		return "info"
+	}
+	return "warn"
+}
+
+func (s *Store) ExpireTasks(ctx context.Context) {
+	now := time.Now().UTC()
+	rows, err := s.db.QueryContext(ctx, `SELECT id, node_id, action, COALESCE(timeline_json, '[]') FROM tasks WHERE status='queued' AND COALESCE(expires_at, '') <> '' AND expires_at <= ?`, now.Format(time.RFC3339))
+	if err != nil {
+		return
+	}
+	type expiredTask struct {
+		id       int64
+		nodeID   string
+		action   string
+		timeline string
+	}
+	expired := []expiredTask{}
+	for rows.Next() {
+		var item expiredTask
+		if err := rows.Scan(&item.id, &item.nodeID, &item.action, &item.timeline); err == nil {
+			expired = append(expired, item)
+		}
+	}
+	_ = rows.Close()
+	for _, item := range expired {
+		timeline := appendTaskTimeline(item.timeline, "expired", "warn", "task expired before agent pickup")
+		if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET status='expired', finished_at=?, timeline_json=? WHERE id=? AND status='queued'`, nowString(), timeline, item.id); err == nil {
+			_ = s.AddEvent(ctx, item.nodeID, "warn", fmt.Sprintf("readonly task expired: %s", item.action))
+		}
+	}
+}
+
+func (s *Store) CancelTask(ctx context.Context, id int64) (Task, error) {
+	task, err := s.GetTask(ctx, id)
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Status != "queued" && task.Status != "picked" {
+		return Task{}, fmt.Errorf("task cannot be canceled from status=%s", task.Status)
+	}
+	now := nowString()
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET status='canceled', finished_at=? WHERE id=? AND status IN ('queued', 'picked')`, now, id); err != nil {
+		return Task{}, err
+	}
+	_ = s.appendTaskTimeline(ctx, id, "canceled", "warn", "task canceled by operator")
+	_ = s.AddEvent(ctx, task.NodeID, "warn", fmt.Sprintf("readonly task canceled: %s", task.Action))
+	return s.GetTask(ctx, id)
+}
+
+func (s *Store) RetryTask(ctx context.Context, id int64) (Task, error) {
+	task, err := s.GetTask(ctx, id)
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Status != "failed" && task.Status != "expired" && task.Status != "canceled" {
+		return Task{}, fmt.Errorf("task cannot be retried from status=%s", task.Status)
+	}
+	if task.Attempt >= task.MaxAttempts {
+		return Task{}, fmt.Errorf("task max attempts reached")
+	}
+	now := nowString()
+	ttl := normalizeTTLSeconds(task.TTLSeconds)
+	expiresAt := time.Now().UTC().Add(time.Duration(ttl) * time.Second).Format(time.RFC3339)
+	timeline := newTaskTimeline("created", "info", fmt.Sprintf("retry of task %d", id))
+	result, err := s.db.ExecContext(ctx, `INSERT INTO tasks
+		(node_id, action, status, approval_status, requested_by, ttl_seconds, expires_at, retry_of_task_id, attempt, max_attempts, task_group_id, timeline_json, result_stdout, result_stderr, exit_code, error, created_at, picked_at, finished_at)
+		VALUES (?, ?, 'queued', 'not_required', ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, '', ?, '', '')`,
+		task.NodeID, task.Action, task.RequestedBy, ttl, expiresAt, task.ID, task.Attempt+1, task.MaxAttempts, task.TaskGroupID, timeline, now)
+	if err != nil {
+		return Task{}, err
+	}
+	newID, err := result.LastInsertId()
+	if err != nil {
+		return Task{}, err
+	}
+	_ = s.appendTaskTimeline(ctx, id, "retry", "info", fmt.Sprintf("created retry task %d", newID))
+	_ = s.AddEvent(ctx, task.NodeID, "info", fmt.Sprintf("readonly task retry queued: %d -> %d", id, newID))
+	return s.GetTask(ctx, newID)
+}
+
+func (s *Store) ApproveTask(ctx context.Context, id int64, req TaskApprovalRequest) (Task, error) {
+	return s.setTaskApproval(ctx, id, "approved", "approve", req)
+}
+
+func (s *Store) RejectTask(ctx context.Context, id int64, req TaskApprovalRequest) (Task, error) {
+	return s.setTaskApproval(ctx, id, "rejected", "reject", req)
+}
+
+func (s *Store) setTaskApproval(ctx context.Context, id int64, status, timelineAction string, req TaskApprovalRequest) (Task, error) {
+	task, err := s.GetTask(ctx, id)
+	if err != nil {
+		return Task{}, err
+	}
+	actor := RedactString(strings.TrimSpace(req.Actor))
+	if actor == "" {
+		actor = "operator"
+	}
+	now := nowString()
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET approval_status=?, approved_by=?, approved_at=? WHERE id=?`, status, actor, now, id); err != nil {
+		return Task{}, err
+	}
+	message := fmt.Sprintf("approval %s by %s", status, actor)
+	if strings.TrimSpace(req.Note) != "" {
+		message += ": " + RedactString(req.Note)
+	}
+	_ = s.appendTaskTimeline(ctx, id, timelineAction, "info", message)
+	_ = s.AddEvent(ctx, task.NodeID, "info", fmt.Sprintf("readonly task approval %s: %s", status, task.Action))
+	return s.GetTask(ctx, id)
+}
+
+func (s *Store) TaskTimeline(ctx context.Context, id int64) ([]TaskTimelineItem, error) {
+	task, err := s.GetTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	items := []TaskTimelineItem{}
+	if len(task.Timeline) > 0 {
+		_ = json.Unmarshal(task.Timeline, &items)
+	}
+	return items, nil
 }
 
 func (s *Store) ListNodeReports(ctx context.Context, nodeID string, limit int) ([]NodeReport, error) {
@@ -891,10 +1232,16 @@ func (s *Store) CreatePlan(ctx context.Context, req CreatePlanRequest) (Plan, er
 	}
 	now := nowString()
 	payload := rawPlanPayload(req.Payload)
+	snapshotPolicy := defaultSnapshotPolicy(planType)
+	snapshotRequired := snapshotPolicy == "required"
+	snapshotStatus := "missing"
+	if snapshotPolicy == "not_required" {
+		snapshotStatus = "not_required"
+	}
 	result, err := s.db.ExecContext(ctx, `INSERT INTO plans
-		(type, title, status, execution_status, execution_note, manual_result, safety_level, command_classification, target_node_id, payload_json, generated_commands, command_groups, checklist, preflight, capability_requirements, markdown, warnings, created_at, updated_at)
-		VALUES (?, ?, 'draft', 'not_run', '', '', 'safe', 'manual', ?, ?, '[]', '[]', '[]', '{}', '[]', '', '[]', ?, ?)`,
-		planType, title, RedactString(req.TargetNodeID), payload, now, now)
+		(type, title, status, execution_status, execution_note, manual_result, dry_run_status, dry_run_task_ids, dry_run_report, last_dry_run_at, snapshot_policy, snapshot_required, snapshot_status, snapshot_ref, snapshot_note, rollback_available, rollback_ref, rollback_note, rollback_instructions, verification_status, verification_report, safety_level, command_classification, target_node_id, payload_json, generated_commands, command_groups, checklist, preflight, capability_requirements, markdown, warnings, created_at, updated_at)
+		VALUES (?, ?, 'draft', 'not_run', '', '', 'not_run', '[]', '{}', '', ?, ?, ?, '', '', 0, '', '', '', 'not_run', '{}', 'safe', 'manual', ?, ?, '[]', '[]', '[]', '{}', '[]', '', '[]', ?, ?)`,
+		planType, title, snapshotPolicy, snapshotRequired, snapshotStatus, RedactString(req.TargetNodeID), payload, now, now)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -907,7 +1254,7 @@ func (s *Store) CreatePlan(ctx context.Context, req CreatePlanRequest) (Plan, er
 }
 
 func (s *Store) ListPlans(ctx context.Context) ([]Plan, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, type, title, status, COALESCE(execution_status, 'not_run'), COALESCE(execution_note, ''), COALESCE(manual_result, ''), COALESCE(safety_level, 'safe'), COALESCE(command_classification, 'manual'), target_node_id, COALESCE(payload_json, '{}'), COALESCE(generated_commands, '[]'), COALESCE(command_groups, '[]'), COALESCE(checklist, '[]'), COALESCE(preflight, '{}'), COALESCE(capability_requirements, '[]'), COALESCE(markdown, ''), COALESCE(warnings, '[]'), created_at, updated_at FROM plans ORDER BY id DESC`)
+	rows, err := s.db.QueryContext(ctx, planSelectSQL+` ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -916,7 +1263,7 @@ func (s *Store) ListPlans(ctx context.Context) ([]Plan, error) {
 }
 
 func (s *Store) GetPlan(ctx context.Context, id int64) (Plan, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, type, title, status, COALESCE(execution_status, 'not_run'), COALESCE(execution_note, ''), COALESCE(manual_result, ''), COALESCE(safety_level, 'safe'), COALESCE(command_classification, 'manual'), target_node_id, COALESCE(payload_json, '{}'), COALESCE(generated_commands, '[]'), COALESCE(command_groups, '[]'), COALESCE(checklist, '[]'), COALESCE(preflight, '{}'), COALESCE(capability_requirements, '[]'), COALESCE(markdown, ''), COALESCE(warnings, '[]'), created_at, updated_at FROM plans WHERE id=?`, id)
+	rows, err := s.db.QueryContext(ctx, planSelectSQL+` WHERE id=?`, id)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -931,15 +1278,46 @@ func (s *Store) GetPlan(ctx context.Context, id int64) (Plan, error) {
 	return plans[0], nil
 }
 
+const planSelectSQL = `SELECT id, type, title, status, COALESCE(execution_status, 'not_run'), COALESCE(execution_note, ''), COALESCE(manual_result, ''), COALESCE(dry_run_status, 'not_run'), COALESCE(dry_run_task_ids, '[]'), COALESCE(dry_run_report, '{}'), COALESCE(last_dry_run_at, ''), COALESCE(snapshot_policy, ''), COALESCE(snapshot_required, 0), COALESCE(snapshot_status, ''), COALESCE(snapshot_ref, ''), COALESCE(snapshot_note, ''), COALESCE(rollback_available, 0), COALESCE(rollback_ref, ''), COALESCE(rollback_note, ''), COALESCE(rollback_instructions, ''), COALESCE(verification_status, 'not_run'), COALESCE(verification_report, '{}'), COALESCE(safety_level, 'safe'), COALESCE(command_classification, 'manual'), target_node_id, COALESCE(payload_json, '{}'), COALESCE(generated_commands, '[]'), COALESCE(command_groups, '[]'), COALESCE(checklist, '[]'), COALESCE(preflight, '{}'), COALESCE(capability_requirements, '[]'), COALESCE(markdown, ''), COALESCE(warnings, '[]'), created_at, updated_at FROM plans`
+
 func scanPlans(rows *sql.Rows) ([]Plan, error) {
 	out := []Plan{}
 	for rows.Next() {
 		var p Plan
 		var payload, commands, commandGroups, checklist, preflight, capabilityRequirements, markdown, warnings string
-		if err := rows.Scan(&p.ID, &p.Type, &p.Title, &p.Status, &p.ExecutionStatus, &p.ExecutionNote, &p.ManualResult, &p.SafetyLevel, &p.CommandClassification, &p.TargetNodeID, &payload, &commands, &commandGroups, &checklist, &preflight, &capabilityRequirements, &markdown, &warnings, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var dryRunTaskIDs, dryRunReport string
+		var snapshotRequired, rollbackAvailable int
+		var verificationReport string
+		if err := rows.Scan(&p.ID, &p.Type, &p.Title, &p.Status, &p.ExecutionStatus, &p.ExecutionNote, &p.ManualResult, &p.DryRunStatus, &dryRunTaskIDs, &dryRunReport, &p.LastDryRunAt, &p.SnapshotPolicy, &snapshotRequired, &p.SnapshotStatus, &p.SnapshotRef, &p.SnapshotNote, &rollbackAvailable, &p.RollbackRef, &p.RollbackNote, &p.RollbackInstructions, &p.VerificationStatus, &verificationReport, &p.SafetyLevel, &p.CommandClassification, &p.TargetNodeID, &payload, &commands, &commandGroups, &checklist, &preflight, &capabilityRequirements, &markdown, &warnings, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		p.PayloadJSON = json.RawMessage(RedactJSONBytes([]byte(payload)))
+		p.DryRunStatus = normalizeDryRunStatus(p.DryRunStatus)
+		p.DryRunTaskIDs = scanInt64Slice(dryRunTaskIDs)
+		p.DryRunReport = json.RawMessage(RedactJSONBytes([]byte(dryRunReport)))
+		if strings.TrimSpace(p.SnapshotPolicy) == "" {
+			p.SnapshotPolicy = defaultSnapshotPolicy(p.Type)
+		}
+		p.SnapshotPolicy = normalizeSnapshotPolicy(p.SnapshotPolicy)
+		p.SnapshotRequired = snapshotRequired != 0 || p.SnapshotPolicy == "required"
+		if strings.TrimSpace(p.SnapshotStatus) == "" {
+			p.SnapshotStatus = "missing"
+			if p.SnapshotPolicy == "not_required" {
+				p.SnapshotStatus = "not_required"
+			}
+		}
+		p.SnapshotStatus = normalizeSnapshotStatus(p.SnapshotStatus)
+		if p.SnapshotPolicy == "not_required" {
+			p.SnapshotStatus = "not_required"
+		}
+		p.SnapshotRef = RedactString(p.SnapshotRef)
+		p.SnapshotNote = RedactString(p.SnapshotNote)
+		p.RollbackAvailable = rollbackAvailable != 0
+		p.RollbackRef = RedactString(p.RollbackRef)
+		p.RollbackNote = RedactString(p.RollbackNote)
+		p.RollbackInstructions = RedactString(p.RollbackInstructions)
+		p.VerificationStatus = normalizeVerificationStatus(p.VerificationStatus)
+		p.VerificationReport = json.RawMessage(RedactJSONBytes([]byte(verificationReport)))
 		p.GeneratedCommands = scanStringSlice(commands)
 		p.CommandGroups = scanCommandGroups(commandGroups)
 		p.Checklist = scanStringSlice(checklist)
@@ -972,8 +1350,8 @@ func (s *Store) generatePlan(ctx context.Context, id int64, event string) (Plan,
 	}
 	artifacts := s.buildPlanArtifacts(ctx, plan)
 	now := nowString()
-	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET status='generated', generated_commands=?, command_groups=?, checklist=?, preflight=?, capability_requirements=?, markdown=?, warnings=?, safety_level=?, command_classification=?, updated_at=? WHERE id=?`,
-		jsonText(artifacts.GeneratedCommands), jsonText(artifacts.CommandGroups), jsonText(artifacts.Checklist), rawJSONText(artifacts.Preflight), jsonText(artifacts.CapabilityRequirements), RedactString(artifacts.Markdown), jsonText(artifacts.Warnings), artifacts.SafetyLevel, artifacts.CommandClassification, now, id); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET status='generated', generated_commands=?, command_groups=?, checklist=?, preflight=?, capability_requirements=?, markdown=?, warnings=?, rollback_instructions=?, safety_level=?, command_classification=?, updated_at=? WHERE id=?`,
+		jsonText(artifacts.GeneratedCommands), jsonText(artifacts.CommandGroups), jsonText(artifacts.Checklist), rawJSONText(artifacts.Preflight), jsonText(artifacts.CapabilityRequirements), RedactString(artifacts.Markdown), jsonText(artifacts.Warnings), RedactString(artifacts.RollbackInstructions), artifacts.SafetyLevel, artifacts.CommandClassification, now, id); err != nil {
 		return Plan{}, err
 	}
 	_ = s.AddEvent(ctx, plan.TargetNodeID, "info", fmt.Sprintf("%s: %s", event, plan.Type))
@@ -981,7 +1359,15 @@ func (s *Store) generatePlan(ctx context.Context, id int64, event string) (Plan,
 }
 
 func (s *Store) MarkPlan(ctx context.Context, id int64, req MarkPlanRequest) (Plan, error) {
+	return s.MarkPlanBy(ctx, id, req, "operator")
+}
+
+func (s *Store) MarkPlanBy(ctx context.Context, id int64, req MarkPlanRequest, actor string) (Plan, error) {
 	status := normalizeExecutionStatus(req.ExecutionStatus)
+	actor = RedactString(strings.TrimSpace(actor))
+	if actor == "" {
+		actor = "operator"
+	}
 	now := nowString()
 	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET execution_status=?, execution_note=?, manual_result=?, updated_at=? WHERE id=?`,
 		status, redactManualText(req.ExecutionNote), redactManualText(req.ManualResult), now, id); err != nil {
@@ -991,7 +1377,7 @@ func (s *Store) MarkPlan(ctx context.Context, id int64, req MarkPlanRequest) (Pl
 	if err != nil {
 		return Plan{}, err
 	}
-	_ = s.AddEvent(ctx, plan.TargetNodeID, "info", fmt.Sprintf("plan marked %s: %s", status, plan.Type))
+	_ = s.AddEvent(ctx, plan.TargetNodeID, "info", fmt.Sprintf("plan marked %s by %s: %s", status, actor, plan.Type))
 	return plan, nil
 }
 
@@ -1021,6 +1407,164 @@ func (s *Store) PlanPreflight(ctx context.Context, id int64) (Plan, error) {
 	return s.GetPlan(ctx, id)
 }
 
+func (s *Store) StartPlanDryRun(ctx context.Context, id int64) (Plan, error) {
+	plan, err := s.GetPlan(ctx, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	if strings.TrimSpace(plan.TargetNodeID) == "" {
+		report := dryRunReport("failed", "target node is required before dry-run", map[string]any{
+			"plan_id": id,
+			"checks":  []string{"target node missing"},
+		})
+		now := nowString()
+		if _, err := s.db.ExecContext(ctx, `UPDATE plans SET dry_run_status='failed', dry_run_task_ids='[]', dry_run_report=?, last_dry_run_at=?, updated_at=? WHERE id=?`, rawJSONText(report), now, now, id); err != nil {
+			return Plan{}, err
+		}
+		_ = s.AddEvent(ctx, plan.TargetNodeID, "warn", fmt.Sprintf("plan dry-run failed: %s", plan.Type))
+		return s.GetPlan(ctx, id)
+	}
+	actions := dryRunActionsForPlan(plan.Type)
+	if len(actions) == 0 {
+		return Plan{}, fmt.Errorf("unsupported dry-run plan type: %s", plan.Type)
+	}
+	groupID := fmt.Sprintf("plan-%d-dry-run-%d", id, time.Now().UTC().Unix())
+	ids := []int64{}
+	for _, action := range actions {
+		if !allowedTaskAction(action) {
+			return Plan{}, fmt.Errorf("unsupported dry-run action: %s", action)
+		}
+		task, err := s.CreateTask(ctx, CreateTaskRequest{
+			NodeID:      plan.TargetNodeID,
+			Action:      action,
+			RequestedBy: "plan-dry-run",
+			TTLSeconds:  300,
+			MaxAttempts: 1,
+			TaskGroupID: groupID,
+		})
+		if err != nil {
+			return Plan{}, err
+		}
+		ids = append(ids, task.ID)
+	}
+	report := dryRunReport("running", "readonly dry-run tasks queued; waiting for Agent results", map[string]any{
+		"plan_id":          id,
+		"plan_type":        plan.Type,
+		"target_node_id":   plan.TargetNodeID,
+		"task_group_id":    groupID,
+		"queued_actions":   actions,
+		"dry_run_task_ids": ids,
+	})
+	now := nowString()
+	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET dry_run_status='running', dry_run_task_ids=?, dry_run_report=?, last_dry_run_at=?, updated_at=? WHERE id=?`,
+		jsonText(ids), rawJSONText(report), now, now, id); err != nil {
+		return Plan{}, err
+	}
+	_ = s.AddEvent(ctx, plan.TargetNodeID, "info", fmt.Sprintf("plan dry-run queued: %s", plan.Type))
+	return s.GetPlan(ctx, id)
+}
+
+func (s *Store) PlanDryRun(ctx context.Context, id int64) (Plan, error) {
+	plan, err := s.GetPlan(ctx, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	if len(plan.DryRunTaskIDs) == 0 {
+		return plan, nil
+	}
+	tasks, err := s.GetTasksByIDs(ctx, plan.DryRunTaskIDs)
+	if err != nil {
+		return Plan{}, err
+	}
+	status, report := s.buildDryRunReport(ctx, plan, tasks)
+	now := nowString()
+	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET dry_run_status=?, dry_run_report=?, updated_at=? WHERE id=?`,
+		status, rawJSONText(report), now, id); err != nil {
+		return Plan{}, err
+	}
+	return s.GetPlan(ctx, id)
+}
+
+func (s *Store) RecordPlanSnapshot(ctx context.Context, id int64, req PlanSnapshotRequest) (Plan, error) {
+	plan, err := s.GetPlan(ctx, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	status := normalizeSnapshotStatus(req.SnapshotStatus)
+	if req.SnapshotStatus == "" {
+		status = "missing"
+		if strings.TrimSpace(req.SnapshotRef) != "" {
+			status = "recorded"
+		}
+		if plan.SnapshotPolicy == "not_required" && strings.TrimSpace(req.SnapshotRef) == "" {
+			status = "not_required"
+		}
+	}
+	now := nowString()
+	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET snapshot_status=?, snapshot_ref=?, snapshot_note=?, updated_at=? WHERE id=?`,
+		status, redactManualText(req.SnapshotRef), redactManualText(req.SnapshotNote), now, id); err != nil {
+		return Plan{}, err
+	}
+	_ = s.AddEvent(ctx, plan.TargetNodeID, "info", fmt.Sprintf("plan snapshot metadata recorded: %s", plan.Type))
+	return s.GetPlan(ctx, id)
+}
+
+func (s *Store) RecordPlanRollbackInfo(ctx context.Context, id int64, req PlanRollbackInfoRequest) (Plan, error) {
+	plan, err := s.GetPlan(ctx, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	available := req.RollbackAvailable || strings.TrimSpace(req.RollbackRef) != "" || strings.TrimSpace(req.RollbackNote) != ""
+	now := nowString()
+	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET rollback_available=?, rollback_ref=?, rollback_note=?, updated_at=? WHERE id=?`,
+		available, redactManualText(req.RollbackRef), redactManualText(req.RollbackNote), now, id); err != nil {
+		return Plan{}, err
+	}
+	_ = s.AddEvent(ctx, plan.TargetNodeID, "info", fmt.Sprintf("plan rollback metadata recorded: %s", plan.Type))
+	return s.GetPlan(ctx, id)
+}
+
+func (s *Store) PlanSafetyGate(ctx context.Context, id int64) (SafetyGateResponse, error) {
+	plan, err := s.GetPlan(ctx, id)
+	if err != nil {
+		return SafetyGateResponse{}, err
+	}
+	return buildSafetyGate(plan), nil
+}
+
+func (s *Store) VerifyPlan(ctx context.Context, id int64) (Plan, error) {
+	plan, err := s.GetPlan(ctx, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	gate := buildSafetyGate(plan)
+	status := "passed"
+	if len(gate.BlockedReasons) > 0 {
+		status = "failed"
+	} else if len(gate.Warnings) > 0 || plan.DryRunStatus == "warning" {
+		status = "warning"
+	}
+	report := RedactValue(map[string]any{
+		"plan_id":             plan.ID,
+		"verification_status": status,
+		"safety_gate":         gate,
+		"node_id":             plan.TargetNodeID,
+		"dry_run_status":      plan.DryRunStatus,
+		"snapshot_policy":     plan.SnapshotPolicy,
+		"snapshot_status":     plan.SnapshotStatus,
+		"rollback_available":  plan.RollbackAvailable,
+		"checked_at":          nowString(),
+		"note":                "Controller-side verification only; no Agent task or system change was created.",
+	})
+	now := nowString()
+	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET verification_status=?, verification_report=?, updated_at=? WHERE id=?`,
+		status, jsonText(report), now, id); err != nil {
+		return Plan{}, err
+	}
+	_ = s.AddEvent(ctx, plan.TargetNodeID, "info", fmt.Sprintf("plan verification %s: %s", status, plan.Type))
+	return s.GetPlan(ctx, id)
+}
+
 func (s *Store) ArchivePlan(ctx context.Context, id int64) (Plan, error) {
 	now := nowString()
 	if _, err := s.db.ExecContext(ctx, `UPDATE plans SET status='archived', updated_at=? WHERE id=?`, now, id); err != nil {
@@ -1042,6 +1586,7 @@ type planArtifacts struct {
 	CapabilityRequirements []string
 	Markdown               string
 	Warnings               []string
+	RollbackInstructions   string
 	SafetyLevel            string
 	CommandClassification  string
 }
@@ -1167,11 +1712,43 @@ func (s *Store) buildPlanArtifacts(ctx context.Context, plan Plan) planArtifacts
 		Checklist:              checklist,
 		Preflight:              preflight,
 		CapabilityRequirements: requirements,
-		Markdown:               buildPlanMarkdown(plan, warnings, groups, checklist, preflight, requirements, safety, classification),
+		Markdown:               buildPlanMarkdown(plan, warnings, groups, checklist, preflight, requirements, rollbackInstructionsForPlan(plan.Type), safety, classification),
 		Warnings:               warnings,
+		RollbackInstructions:   rollbackInstructionsForPlan(plan.Type),
 		SafetyLevel:            normalizeSafetyLevel(safety),
 		CommandClassification:  normalizeCommandClassification(classification),
 	}
+}
+
+func rollbackInstructionsForPlan(planType string) string {
+	lines := []string{
+		"Manual rollback only. The Panel does not run rollback commands.",
+		"Record the exact pre-change state, snapshot path, operator, and time before manual execution.",
+	}
+	switch planType {
+	case "create_forward":
+		lines = append(lines,
+			"If the forward does not work, use the Leikwan Core interactive menu on the relay node to remove or disable only the newly added forward.",
+			"If a pre-change config export or snapshot exists, inspect it and restore manually during a maintenance window.",
+			"After rollback, run lq status and lq doctor locally on the relay node.")
+	case "create_entry":
+		lines = append(lines,
+			"If the entry setup fails, keep the old entry configuration unchanged and use the Core interactive menu to disable only the new entry.",
+			"Keep the old pairing/return code notes until the relay side confirms the new entry is healthy.",
+			"After rollback, run lq status and lq doctor locally on the entry and relay nodes.")
+	case "switch_entry":
+		lines = append(lines,
+			"Do not remove or stop the old entry before validating the new entry.",
+			"If validation fails, keep traffic on the old entry and manually switch back in the Core menu.",
+			"Perform the switch only during a low-traffic window and record the old PRIMARY/BACKUP state.")
+	case "ddns_check":
+		lines = append(lines,
+			"If DDNS validation shows a bad change, restore the previous DNS/provider setting manually in the DNS provider or external DDNS client.",
+			"Re-run lq ddns overview and lq doctor locally after DNS propagation.")
+	default:
+		lines = append(lines, "Review current Core state and restore manually from your own snapshot or config export.")
+	}
+	return RedactString(strings.Join(lines, "\n"))
 }
 
 func (s *Store) lookupNodeBrief(ctx context.Context, id string) (nodeID, nodeName, role string) {
@@ -1350,6 +1927,246 @@ func (s *Store) buildPlanPreflight(ctx context.Context, plan Plan, groups []Comm
 	return json.RawMessage(raw)
 }
 
+func dryRunActionsForPlan(planType string) []string {
+	switch planType {
+	case "create_forward":
+		return []string{"run_status_json", "run_doctor_json", "list_forwards"}
+	case "switch_entry":
+		return []string{"run_status_json", "run_doctor_json", "list_forwards", "ddns_overview"}
+	case "create_entry":
+		return []string{"run_status_json", "run_doctor_json", "ddns_overview"}
+	case "ddns_check":
+		return []string{"ddns_overview", "run_doctor_json"}
+	default:
+		return nil
+	}
+}
+
+func dryRunReport(status, recommendation string, extra map[string]any) json.RawMessage {
+	payload := map[string]any{
+		"status":         normalizeDryRunStatus(status),
+		"recommendation": RedactString(recommendation),
+	}
+	for k, v := range extra {
+		payload[k] = RedactValue(v)
+	}
+	raw, _ := json.Marshal(RedactValue(payload))
+	return json.RawMessage(raw)
+}
+
+func snapshotReady(plan Plan) bool {
+	switch normalizeSnapshotPolicy(plan.SnapshotPolicy) {
+	case "not_required":
+		return true
+	case "recommended":
+		return plan.SnapshotStatus == "recorded" || plan.SnapshotStatus == "verified" || strings.TrimSpace(plan.SnapshotRef) != ""
+	case "required":
+		return plan.SnapshotStatus == "recorded" || plan.SnapshotStatus == "verified"
+	default:
+		return false
+	}
+}
+
+func rollbackReady(plan Plan) bool {
+	if strings.TrimSpace(plan.RollbackInstructions) == "" {
+		return false
+	}
+	if plan.SnapshotRequired {
+		return plan.RollbackAvailable || strings.TrimSpace(plan.RollbackRef) != "" || strings.TrimSpace(plan.RollbackNote) != ""
+	}
+	return true
+}
+
+func buildSafetyGate(plan Plan) SafetyGateResponse {
+	review := buildActionReview(plan)
+	gate := SafetyGateResponse{
+		PlanID:        plan.ID,
+		DryRunPassed:  plan.DryRunStatus == "passed",
+		ApprovalReady: plan.SafetyLevel != "dangerous" && plan.CommandClassification != "blocked",
+		SnapshotReady: snapshotReady(plan),
+		RollbackReady: rollbackReady(plan),
+		Overall:       "ready",
+		ActionReview:  &review,
+	}
+	if !gate.DryRunPassed {
+		gate.BlockedReasons = append(gate.BlockedReasons, "dry-run has not passed")
+	}
+	if !gate.ApprovalReady {
+		gate.BlockedReasons = append(gate.BlockedReasons, "plan is dangerous or contains blocked command text")
+	}
+	switch plan.SnapshotPolicy {
+	case "required":
+		if !gate.SnapshotReady {
+			gate.BlockedReasons = append(gate.BlockedReasons, "required snapshot metadata is missing")
+		}
+		if !gate.RollbackReady {
+			gate.BlockedReasons = append(gate.BlockedReasons, "required rollback metadata is missing")
+		}
+	case "recommended":
+		if !gate.SnapshotReady {
+			gate.Warnings = append(gate.Warnings, "snapshot is recommended but not recorded")
+		}
+		if !gate.RollbackReady {
+			gate.Warnings = append(gate.Warnings, "rollback information is recommended but not recorded")
+		}
+	}
+	if plan.DryRunStatus == "warning" {
+		gate.Warnings = append(gate.Warnings, "dry-run completed with warnings")
+	}
+	if plan.VerificationStatus == "failed" {
+		gate.BlockedReasons = append(gate.BlockedReasons, "last verification failed")
+	}
+	if len(gate.BlockedReasons) > 0 {
+		gate.Overall = "blocked"
+	} else if len(gate.Warnings) > 0 {
+		gate.Overall = "warning"
+	}
+	gate.BlockedReasons = redactStringSlice(gate.BlockedReasons)
+	gate.Warnings = redactStringSlice(gate.Warnings)
+	return gate
+}
+
+func (s *Store) buildDryRunReport(ctx context.Context, plan Plan, tasks []Task) (string, json.RawMessage) {
+	node, found, _ := s.GetNode(ctx, plan.TargetNodeID)
+	taskSummaries := []map[string]any{}
+	pending := 0
+	failed := 0
+	warnings := []string{}
+	doctorWarnings := []string{}
+	for _, task := range tasks {
+		if task.Status == "queued" || task.Status == "picked" {
+			pending++
+		}
+		if task.Status == "failed" || task.Status == "expired" || task.Status == "canceled" || task.Status == "rejected" {
+			failed++
+		}
+		stdoutLower := strings.ToLower(task.ResultStdout)
+		if task.Action == "run_doctor_json" {
+			doctorWarnings = append(doctorWarnings, extractDoctorWarnings(task.ResultStdout)...)
+			if strings.Contains(stdoutLower, `"overall":"warn"`) || strings.Contains(stdoutLower, `"overall":"fail"`) || strings.Contains(stdoutLower, `"overall":"failed"`) {
+				warnings = append(warnings, "doctor reported non-OK overall")
+			}
+		}
+		if task.Action == "list_forwards" && task.Status == "succeeded" && strings.TrimSpace(task.ResultStdout) == "" {
+			warnings = append(warnings, "forward list succeeded but returned empty output")
+		}
+		if task.Action == "ddns_overview" && task.Status == "succeeded" && strings.TrimSpace(task.ResultStdout) == "" {
+			warnings = append(warnings, "ddns overview succeeded but returned empty output")
+		}
+		taskSummaries = append(taskSummaries, map[string]any{
+			"id":        task.ID,
+			"action":    task.Action,
+			"status":    task.Status,
+			"exit_code": task.ExitCode,
+			"error":     task.Error,
+		})
+	}
+	if !found {
+		warnings = append(warnings, "target node has not reported yet")
+	} else if node.Status != "online" {
+		warnings = append(warnings, "target node status="+node.Status)
+	}
+	artifacts := s.buildPlanArtifacts(ctx, plan)
+	if strings.TrimSpace(plan.RollbackInstructions) == "" {
+		plan.RollbackInstructions = artifacts.RollbackInstructions
+	}
+	_, _, blocked := classifyCommandGroups(artifacts.CommandGroups)
+	if len(blocked) > 0 {
+		warnings = append(warnings, "blocked command detected in plan artifacts")
+	}
+	status := "passed"
+	recommendation := "readonly dry-run passed; review the manual plan before any SSH execution"
+	if pending > 0 {
+		status = "running"
+		recommendation = "waiting for readonly Agent tasks to finish"
+	} else if failed > 0 {
+		status = "failed"
+		recommendation = "fix failed readonly checks before manual execution"
+	} else if len(warnings) > 0 || len(doctorWarnings) > 0 {
+		status = "warning"
+		recommendation = "review warnings before manual execution"
+	}
+	report := dryRunReport(status, recommendation, map[string]any{
+		"plan_id":                  plan.ID,
+		"plan_type":                plan.Type,
+		"target_node_id":           plan.TargetNodeID,
+		"node_status":              node.Status,
+		"node_found":               found,
+		"capabilities_satisfied":   dryRunCapabilitiesSatisfied(plan, node),
+		"snapshot_policy":          plan.SnapshotPolicy,
+		"snapshot_status":          plan.SnapshotStatus,
+		"snapshot_ready":           snapshotReady(plan),
+		"rollback_available":       plan.RollbackAvailable,
+		"rollback_ref":             plan.RollbackRef,
+		"rollback_instructions":    strings.TrimSpace(plan.RollbackInstructions) != "",
+		"rollback_ready":           rollbackReady(plan),
+		"doctor_warnings":          doctorWarnings,
+		"warnings":                 warnings,
+		"forward_list_readable":    taskSucceeded(tasks, "list_forwards"),
+		"ddns_overview_readable":   taskSucceeded(tasks, "ddns_overview"),
+		"blocked_commands_present": len(blocked) > 0,
+		"tasks":                    taskSummaries,
+	})
+	return status, report
+}
+
+func extractDoctorWarnings(text string) []string {
+	warnings := []string{}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		if strings.Contains(strings.ToLower(text), "warn") {
+			return []string{"doctor output contains warning text"}
+		}
+		return warnings
+	}
+	if list, ok := doc["warnings"].([]any); ok {
+		for _, item := range list {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" && strings.ToLower(s) != "none" {
+				warnings = append(warnings, RedactString(s))
+			}
+		}
+	}
+	if overall, ok := doc["overall"].(string); ok && strings.ToLower(overall) != "ok" {
+		warnings = append(warnings, "doctor overall="+RedactString(overall))
+	}
+	return warnings
+}
+
+func taskSucceeded(tasks []Task, action string) bool {
+	for _, task := range tasks {
+		if task.Action == action && task.Status == "succeeded" {
+			return true
+		}
+	}
+	return false
+}
+
+func dryRunCapabilitiesSatisfied(plan Plan, node Node) bool {
+	if node.NodeID == "" {
+		return false
+	}
+	caps := node.Capabilities
+	if !caps.LQAvailable {
+		return false
+	}
+	if !caps.SupportsStatusJSON || !caps.SupportsDoctorJSON {
+		return false
+	}
+	switch plan.Type {
+	case "create_forward", "switch_entry":
+		if !caps.SupportsForwardList {
+			return false
+		}
+	}
+	switch plan.Type {
+	case "create_entry", "switch_entry", "ddns_check":
+		if !caps.SupportsDDNSOverview {
+			return false
+		}
+	}
+	return true
+}
+
 func levelFor(ok bool) string {
 	if ok {
 		return "info"
@@ -1394,13 +2211,15 @@ func preflightOverall(raw json.RawMessage) string {
 	return "warn"
 }
 
-func buildPlanMarkdown(plan Plan, warnings []string, groups []CommandGroup, checklist []string, preflight json.RawMessage, requirements []string, safety, classification string) string {
+func buildPlanMarkdown(plan Plan, warnings []string, groups []CommandGroup, checklist []string, preflight json.RawMessage, requirements []string, rollbackInstructions, safety, classification string) string {
 	var b strings.Builder
 	b.WriteString("# Leikwan Plan Manual Execution Guide\n\n")
 	b.WriteString("This plan is manual-only. The agent will not execute it.\n\n")
 	b.WriteString(fmt.Sprintf("- Version: %s\n", Version))
 	b.WriteString(fmt.Sprintf("- Plan: %s\n", RedactString(plan.Title)))
 	b.WriteString(fmt.Sprintf("- Type: %s\n", RedactString(plan.Type)))
+	b.WriteString(fmt.Sprintf("- Snapshot policy: %s\n", normalizeSnapshotPolicy(plan.SnapshotPolicy)))
+	b.WriteString(fmt.Sprintf("- Snapshot status: %s\n", normalizeSnapshotStatus(plan.SnapshotStatus)))
 	b.WriteString(fmt.Sprintf("- Safety level: %s\n", normalizeSafetyLevel(safety)))
 	b.WriteString(fmt.Sprintf("- Command classification: %s\n", normalizeCommandClassification(classification)))
 	b.WriteString(fmt.Sprintf("- Target node: %s\n", RedactString(plan.TargetNodeID)))
@@ -1420,6 +2239,17 @@ func buildPlanMarkdown(plan Plan, warnings []string, groups []CommandGroup, chec
 	b.WriteString("\n## Capability Requirements\n\n")
 	for _, item := range requirements {
 		b.WriteString(fmt.Sprintf("- %s\n", RedactString(item)))
+	}
+	b.WriteString("\n## Snapshot / Rollback\n\n")
+	b.WriteString("Beta.1 records manual snapshot and rollback metadata only. It does not create snapshots and does not run rollback.\n\n")
+	if strings.TrimSpace(rollbackInstructions) == "" {
+		b.WriteString("- No rollback instructions generated yet.\n")
+	} else {
+		for _, line := range strings.Split(RedactString(rollbackInstructions), "\n") {
+			if strings.TrimSpace(line) != "" {
+				b.WriteString(fmt.Sprintf("- %s\n", line))
+			}
+		}
 	}
 	b.WriteString("\n## Preflight\n\n")
 	b.WriteString("```json\n")

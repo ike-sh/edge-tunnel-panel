@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -10,19 +12,28 @@ import (
 )
 
 type Server struct {
-	store *Store
-	token string
-	log   *log.Logger
+	store         *Store
+	agentToken    string
+	operatorToken string
+	strictAuth    bool
+	log           *log.Logger
 }
 
 func NewServer(store *Store, token string, logger *log.Logger) http.Handler {
+	return NewServerWithAuth(store, ServerOptions{AgentToken: token}, logger)
+}
+
+func NewServerWithAuth(store *Store, opts ServerOptions, logger *log.Logger) http.Handler {
 	if logger == nil {
 		logger = log.Default()
 	}
-	s := &Server{store: store, token: token, log: logger}
+	s := &Server{store: store, agentToken: opts.AgentToken, operatorToken: opts.OperatorToken, strictAuth: opts.StrictAuth, log: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("/api/v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("/api/v1/action-catalog", s.handleActionCatalog)
+	mux.HandleFunc("/api/v1/action-catalog/", s.handleActionCatalog)
 	mux.HandleFunc("/api/v1/bootstrap/agent-command", s.handleBootstrapAgentCommand)
 	mux.HandleFunc("/api/v1/topology", s.handleTopology)
 	mux.HandleFunc("/api/v1/plans", s.handlePlans)
@@ -38,7 +49,7 @@ func NewServer(store *Store, token string, logger *log.Logger) http.Handler {
 	mux.HandleFunc("/api/v1/entries", s.handleEntries)
 	mux.HandleFunc("/api/v1/forwards", s.handleForwards)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
-	return withCORS(mux)
+	return withCORS(s.withReadAuth(mux))
 }
 
 func withCORS(next http.Handler) http.Handler {
@@ -81,17 +92,58 @@ func (s *Server) requireGET(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) requireAgentAuth(w http.ResponseWriter, r *http.Request) bool {
-	if s.token == "" {
+	if s.agentToken == "" {
 		writeError(w, http.StatusUnauthorized, "controller token is not configured")
 		return false
 	}
-	header := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) || strings.TrimSpace(strings.TrimPrefix(header, prefix)) != s.token {
+	if bearerToken(r) != s.agentToken {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return false
 	}
 	return true
+}
+
+func bearerToken(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(header, prefix))
+}
+
+func (s *Server) requireOperatorAuth(w http.ResponseWriter, r *http.Request) bool {
+	if s.operatorToken == "" {
+		writeError(w, http.StatusForbidden, "operator token required")
+		return false
+	}
+	if bearerToken(r) != s.operatorToken {
+		writeError(w, http.StatusUnauthorized, "operator unauthorized")
+		return false
+	}
+	return true
+}
+
+func (s *Server) withReadAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.strictAuth || r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" || strings.HasPrefix(r.URL.Path, "/api/v1/agent/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) operatorIdentity(r *http.Request) string {
+	token := bearerToken(r)
+	if token == "" {
+		return "operator"
+	}
+	sum := sha256.Sum256([]byte(token))
+	return "operator:" + hex.EncodeToString(sum[:])[:8]
 }
 
 func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, dst any) ([]byte, bool) {
@@ -115,6 +167,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, HealthResponse{Name: "leikwan-controller", Version: Version, Status: "ok"})
 }
 
+func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGET(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, AuthStatusResponse{
+		OperatorAuthConfigured: s.operatorToken != "",
+		StrictAuth:             s.strictAuth,
+		AgentAuthConfigured:    s.agentToken != "",
+		Version:                Version,
+	})
+}
+
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if !s.requireGET(w, r) {
 		return
@@ -130,15 +194,34 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			{Command: "lq forward list", Class: "readonly", Note: "Forward inventory"},
 			{Command: "lq ddns overview", Class: "readonly", Note: "DDNS overview"},
 			{Command: "manual TODO steps", Class: "manual", Note: "Operator performs interactive Core menu work"},
-			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "2.1-alpha.1 Agent tasks map actions to fixed argv only"},
+			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "2.1.0 Agent tasks map actions to fixed argv only"},
+			{Command: "manual snapshot record", Class: "manual", Note: "Controller records operator-provided snapshot metadata only"},
+			{Command: "manual rollback record", Class: "manual", Note: "Controller records rollback metadata and instructions only"},
 			{Command: "future write tasks", Class: "future", Note: "Reserved for later dry-run, snapshot, rollback, and approval design"},
 		},
 		Blocked:            []string{"rm", "systemctl restart", "systemctl stop", "nft", "iptables", "ip route", "curl | bash", "bash -c", "eval", "write into /etc"},
 		Future:             []string{"write allowlist", "dry-run", "snapshot", "rollback", "operator approval"},
 		SafetyLevels:       []string{"safe", "caution", "dangerous"},
-		TaskSupport:        "2.1-alpha.1 supports readonly allowlisted tasks only; Agents default enable_tasks=false",
+		TaskSupport:        "2.1.0 supports readonly allowlisted tasks, Plan dry-runs, manual snapshot/rollback metadata, write action review, and Operator Auth only; approval is audit-only and Agents default enable_tasks=false",
 		AllowedTaskActions: allowedTaskActions(),
 	})
+}
+
+func (s *Server) handleActionCatalog(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGET(w, r) {
+		return
+	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/action-catalog"), "/")
+	if rest == "" {
+		writeJSON(w, http.StatusOK, ActionCatalogResponse{Version: Version, Actions: s.store.ActionCatalog(r.Context())})
+		return
+	}
+	def, err := s.store.ActionDefinition(r.Context(), rest)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "action not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, def)
 }
 
 func (s *Server) handleBootstrapAgentCommand(w http.ResponseWriter, r *http.Request) {
@@ -443,9 +526,15 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, tasks)
 	case http.MethodPost:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
 		var req CreateTaskRequest
 		if _, ok := s.decodeBody(w, r, &req); !ok {
 			return
+		}
+		if strings.TrimSpace(req.RequestedBy) == "" {
+			req.RequestedBy = s.operatorIdentity(r)
 		}
 		task, err := s.store.CreateTask(r.Context(), req)
 		if err != nil {
@@ -459,19 +548,93 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
-	if !s.requireGET(w, r) {
-		return
-	}
-	id, ok := parseIDFromPath(w, r.URL.Path, "/api/v1/tasks/", "task not found")
-	if !ok {
-		return
-	}
-	task, err := s.store.GetTask(r.Context(), id)
-	if err != nil {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/tasks/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, task)
+	if len(parts) == 1 {
+		if !s.requireGET(w, r) {
+			return
+		}
+		task, err := s.store.GetTask(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
+		return
+	}
+	switch parts[1] {
+	case "cancel":
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		task, err := s.store.CancelTask(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
+	case "retry":
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		task, err := s.store.RetryTask(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, task)
+	case "approve":
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req TaskApprovalRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		if strings.TrimSpace(req.Actor) == "" {
+			req.Actor = s.operatorIdentity(r)
+		}
+		task, err := s.store.ApproveTask(r.Context(), id, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
+	case "reject":
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req TaskApprovalRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		if strings.TrimSpace(req.Actor) == "" {
+			req.Actor = s.operatorIdentity(r)
+		}
+		task, err := s.store.RejectTask(r.Context(), id, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
+	case "timeline":
+		if !s.requireGET(w, r) {
+			return
+		}
+		timeline, err := s.store.TaskTimeline(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, timeline)
+	default:
+		writeError(w, http.StatusNotFound, "not found")
+	}
 }
 
 func (s *Server) handleAgentTasks(w http.ResponseWriter, r *http.Request) {
@@ -535,6 +698,9 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, plans)
 	case http.MethodPost:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
 		var req CreatePlanRequest
 		_, ok := s.decodeBody(w, r, &req)
 		if !ok {
@@ -562,7 +728,7 @@ func (s *Server) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 	if len(parts) > 1 {
 		switch parts[1] {
 		case "generate":
-			if !s.requirePOST(w, r) {
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
 				return
 			}
 			plan, err := s.store.GeneratePlan(r.Context(), id)
@@ -572,7 +738,7 @@ func (s *Server) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, plan)
 		case "regenerate":
-			if !s.requirePOST(w, r) {
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
 				return
 			}
 			plan, err := s.store.RegeneratePlan(r.Context(), id)
@@ -582,21 +748,21 @@ func (s *Server) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, plan)
 		case "mark":
-			if !s.requirePOST(w, r) {
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
 				return
 			}
 			var req MarkPlanRequest
 			if _, ok := s.decodeBody(w, r, &req); !ok {
 				return
 			}
-			plan, err := s.store.MarkPlan(r.Context(), id, req)
+			plan, err := s.store.MarkPlanBy(r.Context(), id, req, s.operatorIdentity(r))
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 			writeJSON(w, http.StatusOK, plan)
 		case "preflight":
-			if !s.requirePOST(w, r) {
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
 				return
 			}
 			plan, err := s.store.PlanPreflight(r.Context(), id)
@@ -605,6 +771,99 @@ func (s *Server) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, plan)
+		case "dry-run":
+			switch r.Method {
+			case http.MethodPost:
+				if !s.requireOperatorAuth(w, r) {
+					return
+				}
+				plan, err := s.store.StartPlanDryRun(r.Context(), id)
+				if err != nil {
+					writeError(w, http.StatusNotFound, "plan not found")
+					return
+				}
+				writeJSON(w, http.StatusCreated, plan)
+			case http.MethodGet:
+				plan, err := s.store.PlanDryRun(r.Context(), id)
+				if err != nil {
+					writeError(w, http.StatusNotFound, "plan not found")
+					return
+				}
+				writeJSON(w, http.StatusOK, plan)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		case "snapshot":
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+				return
+			}
+			var req PlanSnapshotRequest
+			if _, ok := s.decodeBody(w, r, &req); !ok {
+				return
+			}
+			plan, err := s.store.RecordPlanSnapshot(r.Context(), id, req)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "plan not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		case "rollback-info":
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+				return
+			}
+			var req PlanRollbackInfoRequest
+			if _, ok := s.decodeBody(w, r, &req); !ok {
+				return
+			}
+			plan, err := s.store.RecordPlanRollbackInfo(r.Context(), id, req)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "plan not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		case "safety-gate":
+			if !s.requireGET(w, r) {
+				return
+			}
+			gate, err := s.store.PlanSafetyGate(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "plan not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, gate)
+		case "verify":
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+				return
+			}
+			plan, err := s.store.VerifyPlan(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "plan not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		case "action-review":
+			switch r.Method {
+			case http.MethodGet:
+				review, err := s.store.PlanActionReview(r.Context(), id)
+				if err != nil {
+					writeError(w, http.StatusNotFound, "plan not found")
+					return
+				}
+				writeJSON(w, http.StatusOK, review)
+			case http.MethodPost:
+				if !s.requireOperatorAuth(w, r) {
+					return
+				}
+				review, err := s.store.PlanActionReview(r.Context(), id)
+				if err != nil {
+					writeError(w, http.StatusNotFound, "plan not found")
+					return
+				}
+				review.ReviewedBy = s.operatorIdentity(r)
+				writeJSON(w, http.StatusOK, review)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
 		case "markdown":
 			if !s.requireGET(w, r) {
 				return
@@ -618,7 +877,7 @@ func (s *Server) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(markdown))
 		case "archive":
-			if !s.requirePOST(w, r) {
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
 				return
 			}
 			plan, err := s.store.ArchivePlan(r.Context(), id)

@@ -1,8 +1,8 @@
 # Leikwan Agent Protocol
 
-Current protocol version: `2.1.0-alpha.1`.
+Current protocol version: `2.1.0`.
 
-Agent reports local read-only state to Controller. In `2.1.0-alpha.1`, Agent can optionally pull built-in readonly tasks, but it still cannot receive arbitrary command strings and cannot perform writes.
+Agent reports local read-only state to Controller. In `2.1.0`, Agent can optionally pull built-in readonly tasks, but it still cannot receive arbitrary command strings and cannot perform writes.
 
 ## Authorization
 
@@ -68,7 +68,7 @@ Content-Type: application/json
   "public_ip": "203.0.113.10",
   "primary_lan_ip": "10.0.0.10",
   "easytier_ip": "10.198.1.1",
-  "agent_version": "2.1.0-alpha.1",
+  "agent_version": "2.1.0",
   "core_version": "1.4.0 LTS",
   "status": "online",
   "health_score": 96,
@@ -85,9 +85,13 @@ Content-Type: application/json
     "supports_status_json": true,
     "supports_doctor_json": true,
     "supports_forward_list": true,
-    "supports_ddns_overview": true,
-    "enable_tasks": false,
-    "allowed_task_actions": [
+  "supports_ddns_overview": true,
+  "enable_tasks": false,
+  "supports_snapshot_manual_record": true,
+  "supports_rollback_manual_record": true,
+  "write_actions_supported": false,
+  "supported_write_actions": [],
+  "allowed_task_actions": [
       "ddns_overview",
       "list_forwards",
       "probe_core_version",
@@ -113,7 +117,7 @@ GET /api/v1/agent/tasks?node_id=relay-1
 Authorization: Bearer <token>
 ```
 
-Controller returns only queued tasks for that exact `node_id`.
+Controller returns only queued tasks for that exact `node_id`. Expired, canceled, rejected, and non-allowlisted tasks are not returned.
 
 ```json
 [
@@ -121,7 +125,10 @@ Controller returns only queued tasks for that exact `node_id`.
     "id": 1,
     "node_id": "relay-1",
     "action": "run_status_json",
-    "status": "picked"
+    "status": "picked",
+    "approval_status": "not_required",
+    "attempt": 1,
+    "max_attempts": 3
   }
 ]
 ```
@@ -145,6 +152,18 @@ Content-Type: application/json
 ```
 
 Controller redacts and truncates stdout/stderr to 64KB before storing.
+
+## Task Lifecycle API
+
+```http
+POST /api/v1/tasks/:id/cancel
+POST /api/v1/tasks/:id/retry
+POST /api/v1/tasks/:id/approve
+POST /api/v1/tasks/:id/reject
+GET  /api/v1/tasks/:id/timeline
+```
+
+These endpoints update Controller task state and audit timeline only. They do not cause Agents to perform writes.
 
 ## Allowed Task Actions
 
@@ -204,3 +223,27 @@ The protocol does not include:
 - EasyTier network modification
 - DDNS configuration updates
 - entries / forwards / PBR modification
+
+## 2.1.0 Snapshot / Rollback Safety Framework
+
+Leikwan Panel 2.1.0 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
+
+New Plan APIs:
+
+```text
+POST /api/v1/plans/:id/snapshot
+POST /api/v1/plans/:id/rollback-info
+GET  /api/v1/plans/:id/safety-gate
+POST /api/v1/plans/:id/verify
+```
+
+See `snapshot-rollback-beta.md` and `safety-gate.md`.
+
+## 2.1.0 Write Action Review
+
+The Agent protocol still has no write task channel. Agents report `write_actions_supported=false` and an empty `supported_write_actions` list.
+
+Controller Action Review is separate from Agent tasks. It does not send action-review results to Agents and does not create write tasks.
+## Agent Token and Operator Token
+
+Agent APIs use the Agent token from `LEIKWAN_CONTROLLER_TOKEN`. They do not accept `LEIKWAN_OPERATOR_TOKEN`. Operator APIs use the Operator token and do not accept the Agent token. See `operator-auth.md`.

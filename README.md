@@ -1,14 +1,14 @@
 # Leikwan Toolkit
 
-当前版本：`1.4.0 LTS`
+当前 Core 版本：`1.4.0 LTS`
 
 Leikwan Toolkit 是一个 **A 公网入口 + B 中转主机 + C 后端目标** 的 TCP/UDP 转发组网工具。
 
-1.4.0 LTS 是功能冻结版。后续版本主要只做 bug fix、兼容性修复、安全修复和文档完善，不再扩展大功能。
+1.4.x 是 Shell Core / LTS：负责真实转发、EasyTier、nftables、DDNS、PBR、快照和本机维护。后续只做 bugfix、兼容性修复、安全修复和文档维护。
 
 ## 适用场景
 
-适合这样的链路：
+典型链路：
 
 ```text
 外部客户端 -> A 公网入口 -> EasyTier -> B 利群主机 -> C 后端目标
@@ -25,20 +25,12 @@ Leikwan Toolkit 是一个 **A 公网入口 + B 中转主机 + C 后端目标** �
 
 不做：
 
-- Web 面板
+- Web 面板直接修改 Core 配置
 - 多用户权限系统
 - 自动负载均衡控制面
 - 复杂监控平台
 - DNS 服务商完整 SDK
 - 代理协议客户端生成器
-
-## 三台机器角色
-
-- **A 公网入口**：接收外部 TCP/UDP 流量，可以有多台。
-- **B 利群主机**：中转和转发中心，管理公网入口、转发目标、PBR 和 nftables。
-- **C 后端目标**：最终被访问的服务。
-
-多公网入口的 PRIMARY / BACKUP 只用于排序、展示和端点输出，不是自动负载均衡控制面。
 
 ## 快速安装
 
@@ -47,53 +39,7 @@ curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leik
 lq init
 ```
 
-安装后入口：
-
-```text
-/root/leikwan-toolkit.sh
-/usr/local/bin/lq
-/usr/local/bin/LQ
-```
-
-查看版本：
-
-```bash
-lq --version
-```
-
-## 快速组网
-
-如果你只是要用，按这个顺序：
-
-1. 安装
-2. 执行 `lq init`
-3. B 生成接入码
-4. A 粘贴接入码
-5. B 粘贴 A 返回码
-6. B 添加转发目标
-7. 使用输出的端点
-
-交互主菜单已经收敛为 6 个入口：
-
-```text
-1. 快速组网
-2. 利群主机 B
-3. 公网入口 A
-4. DDNS
-5. 状态 / 诊断
-6. 高级维护
-0. 退出
-```
-
-连接码输出仍支持：
-
-- `y`：确认返回
-- `r`：重显
-- `p`：显示保存路径
-
-## 常用命令
-
-首页只列最常用命令，其它兼容 CLI 见 [CLI 参考](docs/cli.md)。
+常用 Core 命令：
 
 ```bash
 lq init
@@ -104,112 +50,132 @@ lq forward apply-relay --auto-fix-route
 lq update check
 ```
 
-## DDNS 简明说明
+## Leikwan Panel 2.1.0 Stable
 
-DDNS 分成两端：
+Leikwan Panel 2.1.0 是安全控制面稳定版。它提供 Controller / Agent / Web UI，用于观察节点状态、审计人工操作、生成手动执行计划和运行只读诊断任务。
 
-- **A 端 DDNS**：让域名指向 A 当前公网 IP。
-- **B 端 DDNS**：发现域名变化后刷新转发 / PBR / relay 状态。
+2.1.0 支持：
 
-如果 A 的域名已经由路由器、云厂商客户端或其它外部 DDNS 客户端维护，可以不启用 `lq entry ddns`。
+- Controller / Agent
+- 节点心跳
+- 只读状态上报
+- 只读 Tasks
+- Task lifecycle
+- Plan manual execution
+- Plan dry-run
+- Snapshot / Rollback metadata
+- Safety Gate
+- Action Catalog
+- Write Action Review
+- Operator Auth
 
-常用检查：
+2.1.0 明确不支持：
+
+- 不执行写操作
+- 不自动新增、删除、修改转发
+- 不自动切换公网入口
+- 不自动 restart relay
+- 不自动创建快照
+- 不执行回滚
+- 不接受 command 字符串
+- 不修改 `leikwan-toolkit.sh`
+- 不修改 nftables / systemd / EasyTier / DDNS / entries / forwards / PBR
+
+推荐部署模型：
+
+- Controller 可以部署在独立管理服务器。
+- Agent 部署在 A/B/C 节点。
+- Agent 主动连接 Controller。
+- Controller 挂了不影响已有 Core 转发。
+
+Token 区分：
+
+- `LEIKWAN_CONTROLLER_TOKEN` 给 Agent 使用。
+- `LEIKWAN_OPERATOR_TOKEN` 给 Web / Operator API 使用。
+
+未来 2.2.0 以后才考虑极少量白名单写操作实验，并且必须建立在 dry-run、approval、snapshot、rollback、verification 和审计链路之上。
+
+## Panel 本地运行
+
+Controller：
 
 ```bash
-lq ddns overview
-lq ddns check-consistency
-lq ddns apply-entries
+cd panel/controller
+go test ./...
+go run ./cmd/leikwan-controller --listen 127.0.0.1:18080 --db ./data/controller.db
 ```
 
-公网入口 DDNS 变化后，B 端默认不会自动重启 relay。需要在维护窗口确认后执行：
+Agent：
 
 ```bash
-lq ddns apply-entries
+cd panel/agent
+go test ./...
+go run ./cmd/leikwan-agent --config ./agent.yml --once
 ```
 
-## 故障排查
-
-日常先看：
+Web：
 
 ```bash
-lq status
+cd panel/controller
+npm --prefix web install
+npm --prefix web run build
 ```
 
-需要详细检查：
+发布包：
 
 ```bash
-lq --doctor
+bash panel/scripts/build-release.sh
 ```
 
-常见修复：
-
-```bash
-lq doctor --auto-fix
-lq forward apply-relay --auto-fix-route
-lq port check
-lq logs
-```
-
-## 升级与卸载
-
-自更新：
-
-```bash
-lq update check
-lq update run
-lq update status
-```
-
-卸载在菜单中：
+输出：
 
 ```text
-高级维护 -> 卸载
+panel/dist/leikwan-controller
+panel/dist/leikwan-agent
+panel/dist/web/
+panel/dist/docs/
+panel/dist/examples/
+panel/dist/SHA256SUMS
 ```
-
-普通卸载保留配置、快照和备份；深度卸载会删除配置和状态，执行前会生成 final snapshot 并二次确认。
-
-## Leikwan Panel 2.1.0-alpha.1
-
-`1.4.x` 是 Shell LTS / Leikwan Core，后续只做 bugfix、兼容性、安全和文档维护。
-
-`2.1.0-alpha.1` 在 beta Plans 的基础上新增最小只读任务系统：Controller 只能创建内置 action，Agent 只有在 `enable_tasks=true` 时才拉取任务，并把 action 映射为固定 `lq` 只读 argv。
-
-- Controller / Agent 架构
-- Agent 只采集本机状态并上报
-- Controller 保存节点、入口、转发、事件、Plans 和只读 Tasks
-- Plans 只生成可复制的人工命令文本和 Markdown 手册
-- preflight 只检查 Controller 已知状态，不执行节点命令
-- mark succeeded / failed / rolled_back 只记录人工结果，不触发节点操作
-- Tasks 仅支持 `probe_core_version`、`run_status`、`run_status_json`、`run_doctor`、`run_doctor_json`、`list_forwards`、`ddns_overview`
-- Controller API 不接受 command 字符串，Agent 不执行 shell / bash -c
-- 不会修改现有转发配置
-- 不会远程执行任意写操作或任意命令
-
-详细说明见 [Panel 2.0-alpha/beta 文档](panel/docs/panel-2.0-alpha.md)、[Tasks Alpha](panel/docs/tasks-alpha.md)、[Plans Beta](panel/docs/plans-beta.md)、[Manual Execution](panel/docs/manual-execution.md)、[Capabilities](panel/docs/capabilities.md) 和 [Safety Model](panel/docs/safety-model.md)。
 
 ## 文档索引
 
-- [最终版使用手册](docs/final-guide.md)
+Core 文档：
+
+- [最终使用手册](docs/final-guide.md)
 - [CLI 参考](docs/cli.md)
-- [推荐工作流](docs/workflow.md)
-- [DDNS 自动刷新](docs/ddns-refresh.md)
-- [A 端 DDNS](docs/entry-ddns.md)
-- [PBR](docs/pbr.md)
-- [配置迁移](docs/config-migration.md)
-- [端点输出](docs/endpoint-output.md)
-- [状态输出](docs/status.md)
-- [doctor 诊断](docs/doctor.md)
-- [安全边界](docs/security.md)
+- [组网流程](docs/workflow.md)
+- [DDNS](docs/ddns-refresh.md)
+- [安全说明](docs/security.md)
 - [故障排查](docs/troubleshooting.md)
-- [测试与验收](docs/testing.md)
-- [验收清单](docs/acceptance-test.md)
-- [Release Notes](docs/release-notes.md)
+- [验收测试](docs/acceptance-test.md)
+
+Panel 文档：
+
+- [Panel 2.1.0 Release Notes](panel/docs/release-2.1.0.md)
+- [Operator Auth](panel/docs/operator-auth.md)
+- [Agent Protocol](panel/docs/agent-protocol.md)
+- [Readonly Tasks](panel/docs/tasks-alpha.md)
+- [Task Lifecycle](panel/docs/task-lifecycle.md)
+- [Plan Dry-run](panel/docs/dry-run-alpha.md)
+- [Plans](panel/docs/plans-beta.md)
+- [Manual Execution](panel/docs/manual-execution.md)
+- [Snapshot / Rollback Metadata](panel/docs/snapshot-rollback-beta.md)
+- [Safety Gate](panel/docs/safety-gate.md)
+- [Action Catalog](panel/docs/action-catalog.md)
+- [Write Action Review](panel/docs/write-action-review.md)
+- [Capabilities](panel/docs/capabilities.md)
+- [Controller 安装](panel/docs/install-controller.md)
+- [Agent 安装](panel/docs/install-agent.md)
+- [systemd 示例](panel/docs/systemd.md)
 
 ## Release
 
-Release 包名：
+Core release：
 
 ```text
 leikwan-toolkit-1.4.0.tar.gz
 leikwan-toolkit-1.4.0.tar.gz.sha256
 ```
+
+Panel 2.1.0 release files are generated under `panel/dist/`.

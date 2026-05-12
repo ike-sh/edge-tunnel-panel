@@ -34,7 +34,7 @@ func (c Client) Report(ctx context.Context, req ReportRequest) error {
 }
 
 func (c Client) GetTasks(ctx context.Context, nodeID string) ([]Task, error) {
-	endpoint := "/api/v1/agent/tasks?node_id=" + url.QueryEscape(nodeID)
+	endpoint := "/api/v1/agent/tasks?node_id=" + url.QueryEscape(nodeID) + "&limit=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+endpoint, nil)
 	if err != nil {
 		return nil, err

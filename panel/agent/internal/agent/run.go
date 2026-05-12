@@ -3,8 +3,11 @@ package agent
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 )
+
+var taskExecutionLock sync.Mutex
 
 func Run(ctx context.Context, cfg Config, once bool, debug bool) error {
 	client := NewClient(cfg)
@@ -74,6 +77,11 @@ func taskTickerC(t *time.Ticker) <-chan time.Time {
 }
 
 func processTasks(ctx context.Context, cfg Config, client Client, collector Collector, debug bool) {
+	if !taskExecutionLock.TryLock() {
+		log.Printf("[WARN] readonly task already running; skip this poll")
+		return
+	}
+	defer taskExecutionLock.Unlock()
 	tasks, err := client.GetTasks(ctx, cfg.NodeID)
 	if err != nil {
 		log.Printf("[WARN] task poll failed: %s", RedactString(err.Error()))

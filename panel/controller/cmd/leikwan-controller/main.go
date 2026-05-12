@@ -15,6 +15,8 @@ func main() {
 	listen := flag.String("listen", "0.0.0.0:18080", "HTTP listen address")
 	dbPath := flag.String("db", "./data/controller.db", "SQLite database path")
 	tokenFlag := flag.String("token", "", "controller bearer token")
+	operatorTokenFlag := flag.String("operator-token", "", "operator bearer token for mutating Panel APIs")
+	strictAuthFlag := flag.Bool("strict-auth", false, "require operator token for all non-health non-agent APIs")
 	configPath := flag.String("config", "", "optional controller config path")
 	flag.Parse()
 
@@ -23,11 +25,22 @@ func main() {
 		token = os.Getenv("LEIKWAN_CONTROLLER_TOKEN")
 	}
 	if token == "" {
-		token = tokenFromConfig(*configPath)
+		token = configValue(*configPath, "token")
 	}
 	if token == "" {
 		log.Print("[WARN] LEIKWAN_CONTROLLER_TOKEN is empty; set LEIKWAN_CONTROLLER_TOKEN manually or configure /etc/leikwan-panel/controller.yml before accepting agents")
 	}
+	operatorToken := *operatorTokenFlag
+	if operatorToken == "" {
+		operatorToken = os.Getenv("LEIKWAN_OPERATOR_TOKEN")
+	}
+	if operatorToken == "" {
+		operatorToken = configValue(*configPath, "operator_token")
+	}
+	if operatorToken == "" {
+		log.Print("[WARN] LEIKWAN_OPERATOR_TOKEN is empty; mutating operator APIs will return 403")
+	}
+	strictAuth := *strictAuthFlag || strings.EqualFold(os.Getenv("LEIKWAN_STRICT_AUTH"), "true") || strings.EqualFold(configValue(*configPath, "strict_auth"), "true")
 
 	store, err := controller.OpenStore(*dbPath)
 	if err != nil {
@@ -35,14 +48,18 @@ func main() {
 	}
 	defer store.Close()
 
-	srv := controller.NewServer(store, token, log.Default())
+	srv := controller.NewServerWithAuth(store, controller.ServerOptions{
+		AgentToken:    token,
+		OperatorToken: operatorToken,
+		StrictAuth:    strictAuth,
+	}, log.Default())
 	log.Printf("leikwan-controller %s listening on %s", controller.Version, *listen)
 	if err := http.ListenAndServe(*listen, srv); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func tokenFromConfig(path string) string {
+func configValue(path, key string) string {
 	paths := []string{path}
 	if path == "" {
 		paths = []string{"./controller.yml", "/etc/leikwan-panel/controller.yml"}
@@ -51,15 +68,15 @@ func tokenFromConfig(path string) string {
 		if candidate == "" {
 			continue
 		}
-		token := readToken(candidate)
-		if token != "" {
-			return token
+		value := readConfigValue(candidate, key)
+		if value != "" {
+			return value
 		}
 	}
 	return ""
 }
 
-func readToken(path string) string {
+func readConfigValue(path, key string) string {
 	file, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -75,7 +92,7 @@ func readToken(path string) string {
 		if len(parts) != 2 {
 			continue
 		}
-		if strings.TrimSpace(parts[0]) == "token" {
+		if strings.TrimSpace(parts[0]) == key {
 			return strings.Trim(strings.TrimSpace(parts[1]), `"'`)
 		}
 	}
