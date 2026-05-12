@@ -23,6 +23,39 @@ if ! command -v "$GO_BIN" >/dev/null 2>&1; then
 fi
 
 log() { printf '[build-release] %s\n' "$*"; }
+die() {
+  printf '[build-release] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+cleanup() {
+  rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+
+find_npm() {
+  if command -v npm >/dev/null 2>&1; then
+    printf 'npm\n'
+    return 0
+  fi
+  for candidate in "/mnt/host/d/Program Files/nodejs/npm" "/mnt/host/c/Program Files/nodejs/npm" "/c/Program Files/nodejs/npm" "/d/Program Files/nodejs/npm"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  if command -v npm.cmd >/dev/null 2>&1; then
+    printf 'npm.cmd\n'
+    return 0
+  fi
+  for candidate in "/mnt/host/d/Program Files/nodejs/npm.cmd" "/mnt/host/c/Program Files/nodejs/npm.cmd" "/c/Program Files/nodejs/npm.cmd" "/d/Program Files/nodejs/npm.cmd"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
 
 build_go() {
   local module="$1" package="$2" arch="$3" output="$4" ldflags="$5"
@@ -50,12 +83,13 @@ package_arch() {
 rm -rf "$DIST_DIR"
 mkdir -p "$WORK_DIR"
 log "building web"
-(cd "$ROOT/panel/controller/web" && if [ -f package-lock.json ]; then
-  npm ci
+NPM_CMD="$(find_npm)" || die "npm is required to build Web. Install Node.js or add npm to PATH."
+(cd "$ROOT" && if [ -f panel/controller/web/package-lock.json ]; then
+  "$NPM_CMD" --prefix panel/controller/web ci
 else
-  npm install
+  "$NPM_CMD" --prefix panel/controller/web install
 fi
-npm run build)
+"$NPM_CMD" --prefix panel/controller/web run build)
 
 log "building linux/amd64"
 package_arch amd64
@@ -63,7 +97,6 @@ log "building linux/arm64"
 package_arch arm64
 
 (cd "$DIST_DIR" && sha256sum edge-tunnel-panel-"$VERSION"-linux-*.tar.gz > SHA256SUMS)
-rm -rf "$WORK_DIR"
 
 log "created:"
 ls -1 "$DIST_DIR"/edge-tunnel-panel-"$VERSION"-linux-*.tar.gz "$DIST_DIR/SHA256SUMS"
