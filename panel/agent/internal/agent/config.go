@@ -1,160 +1,87 @@
 package agent
 
 import (
-	"bufio"
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
+	"errors"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
+	"time"
 )
 
-const defaultConfigPath = "/etc/leikwan-agent/config.yml"
-
-func ConfigPathOrDefault(path string) string {
-	if path == "" {
-		return defaultConfigPath
+func DefaultConfig() Config {
+	host, _ := os.Hostname()
+	if strings.TrimSpace(host) == "" {
+		host = "edge-node"
 	}
-	return path
+	return Config{
+		NodeName:           host,
+		NodeRole:           "backend",
+		ConfigDir:          "/etc/edge-tunnel/agent",
+		StateDir:           "/var/lib/edge-tunnel/agent",
+		PollInterval:       5 * time.Second,
+		ReportInterval:     15 * time.Second,
+		TaskResultLimitKB:  defaultTaskResultLimitKB,
+		MaxConcurrentTasks: 1,
+	}
 }
 
-func LoadConfig(path string) (Config, error) {
-	if path == "" {
-		path = defaultConfigPath
-		if _, err := os.Stat(path); err != nil {
-			if _, localErr := os.Stat("./agent.yml"); localErr == nil {
-				path = "./agent.yml"
-			}
-		}
-	}
-	cfg := Config{Role: "unknown", IntervalSeconds: 60, EnableTasks: false, EnableWriteActions: false, TaskIntervalSeconds: 10, TaskTimeoutSeconds: 20, MaxConcurrentTasks: 1, TaskResultLimitKB: 64}
-	if path == "" {
-		return cfg, nil
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return cfg, err
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		value = strings.Trim(value, `"'`)
-		switch key {
-		case "controller_url":
-			cfg.ControllerURL = value
-		case "token":
-			cfg.Token = value
-		case "node_id":
-			cfg.NodeID = value
-		case "node_name":
-			cfg.NodeName = value
-		case "role":
-			cfg.Role = normalizeRole(value)
-		case "interval_seconds":
-			n, err := strconv.Atoi(value)
-			if err == nil && n > 0 {
-				cfg.IntervalSeconds = n
-			}
-		case "enable_tasks":
-			cfg.EnableTasks = parseBool(value)
-		case "enable_write_actions":
-			cfg.EnableWriteActions = parseBool(value)
-		case "task_interval_seconds":
-			n, err := strconv.Atoi(value)
-			if err == nil && n > 0 {
-				cfg.TaskIntervalSeconds = n
-			}
-		case "task_timeout_seconds":
-			n, err := strconv.Atoi(value)
-			if err == nil && n > 0 {
-				cfg.TaskTimeoutSeconds = n
-			}
-		case "max_concurrent_tasks":
-			n, err := strconv.Atoi(value)
-			if err == nil && n > 0 {
-				cfg.MaxConcurrentTasks = n
-			}
-		case "task_result_limit_kb":
-			n, err := strconv.Atoi(value)
-			if err == nil && n > 0 {
-				cfg.TaskResultLimitKB = n
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return cfg, err
-	}
-	if cfg.ControllerURL == "" {
-		return cfg, fmt.Errorf("controller_url is required")
-	}
-	if cfg.TaskIntervalSeconds <= 0 {
-		cfg.TaskIntervalSeconds = 10
-	}
-	if cfg.TaskTimeoutSeconds <= 0 {
-		cfg.TaskTimeoutSeconds = 20
-	}
-	cfg.MaxConcurrentTasks = 1
-	if cfg.TaskResultLimitKB <= 0 {
-		cfg.TaskResultLimitKB = 64
-	}
-	if cfg.NodeID == "" {
-		cfg.NodeID = stableNodeID(cfg.NodeName)
-	}
-	if cfg.NodeName == "" {
-		cfg.NodeName = cfg.NodeID
-	}
-	return cfg, nil
+func ConfigFromEnv() Config {
+	cfg := DefaultConfig()
+	cfg.ControllerURL = strings.TrimSpace(os.Getenv("EDGE_CONTROLLER_URL"))
+	cfg.ControllerToken = strings.TrimSpace(os.Getenv("EDGE_CONTROLLER_TOKEN"))
+	cfg.NodeName = envOrDefault("EDGE_NODE_NAME", cfg.NodeName)
+	cfg.NodeRole = envOrDefault("EDGE_NODE_ROLE", cfg.NodeRole)
+	cfg.ConfigDir = envOrDefault("EDGE_AGENT_CONFIG_DIR", cfg.ConfigDir)
+	cfg.StateDir = envOrDefault("EDGE_AGENT_STATE_DIR", cfg.StateDir)
+	cfg.EnableTasks = parseBool(os.Getenv("EDGE_ENABLE_TASKS"))
+	cfg.EnableWriteActions = parseBool(os.Getenv("EDGE_ENABLE_WRITE_ACTIONS"))
+	_ = cfg.Normalize()
+	return cfg
 }
 
-func WriteConfig(path string, cfg Config) error {
-	path = ConfigPathOrDefault(path)
-	if cfg.ControllerURL == "" {
-		return fmt.Errorf("controller_url is required")
-	}
-	if cfg.Token == "" {
-		return fmt.Errorf("token is required")
-	}
-	cfg.Role = normalizeRole(cfg.Role)
+func (cfg *Config) Normalize() error {
+	cfg.ControllerURL = strings.TrimRight(strings.TrimSpace(cfg.ControllerURL), "/")
+	cfg.ControllerToken = strings.TrimSpace(cfg.ControllerToken)
+	cfg.NodeName = strings.TrimSpace(cfg.NodeName)
+	cfg.NodeRole = normalizeRole(cfg.NodeRole)
 	if cfg.NodeName == "" {
-		host, _ := os.Hostname()
-		cfg.NodeName = host
+		cfg.NodeName = "edge-node"
 	}
-	if cfg.NodeID == "" {
-		cfg.NodeID = cfg.NodeName
+	if cfg.ConfigDir == "" {
+		cfg.ConfigDir = "/etc/edge-tunnel/agent"
 	}
-	if cfg.IntervalSeconds <= 0 {
-		cfg.IntervalSeconds = 30
+	if cfg.StateDir == "" {
+		cfg.StateDir = "/var/lib/edge-tunnel/agent"
 	}
-	if cfg.TaskIntervalSeconds <= 0 {
-		cfg.TaskIntervalSeconds = 10
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = 5 * time.Second
 	}
-	if cfg.TaskTimeoutSeconds <= 0 {
-		cfg.TaskTimeoutSeconds = 20
+	if cfg.ReportInterval <= 0 {
+		cfg.ReportInterval = 15 * time.Second
 	}
-	cfg.MaxConcurrentTasks = 1
 	if cfg.TaskResultLimitKB <= 0 {
-		cfg.TaskResultLimitKB = 64
+		cfg.TaskResultLimitKB = defaultTaskResultLimitKB
 	}
-	if dir := filepath.Dir(path); dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
+	if cfg.MaxConcurrentTasks <= 0 {
+		cfg.MaxConcurrentTasks = 1
 	}
-	content := fmt.Sprintf("controller_url: %s\ntoken: %s\nnode_id: %s\nnode_name: %s\nrole: %s\ninterval_seconds: %d\nenable_tasks: %t\nenable_write_actions: %t\ntask_interval_seconds: %d\ntask_timeout_seconds: %d\nmax_concurrent_tasks: 1\ntask_result_limit_kb: %d\n",
-		cfg.ControllerURL, cfg.Token, cfg.NodeID, cfg.NodeName, cfg.Role, cfg.IntervalSeconds, cfg.EnableTasks, cfg.EnableWriteActions, cfg.TaskIntervalSeconds, cfg.TaskTimeoutSeconds, cfg.TaskResultLimitKB)
-	return os.WriteFile(path, []byte(content), 0o600)
+	return nil
+}
+
+func (cfg Config) Validate() error {
+	if strings.TrimSpace(cfg.ControllerURL) == "" {
+		return errors.New("controller url is required")
+	}
+	if strings.TrimSpace(cfg.ControllerToken) == "" {
+		return errors.New("controller token is required")
+	}
+	return nil
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func parseBool(value string) bool {
@@ -166,67 +93,11 @@ func parseBool(value string) bool {
 	}
 }
 
-func stableNodeID(nodeName string) string {
-	if path := nodeIDStatePath(); path != "" {
-		if raw, err := os.ReadFile(path); err == nil {
-			if id := strings.TrimSpace(string(raw)); id != "" {
-				return id
-			}
-		}
-		id := generatedNodeID(nodeName)
-		if dir := filepath.Dir(path); dir != "." && dir != "" {
-			_ = os.MkdirAll(dir, 0o700)
-		}
-		_ = os.WriteFile(path, []byte(id+"\n"), 0o600)
-		return id
-	}
-	return generatedNodeID(nodeName)
-}
-
-func nodeIDStatePath() string {
-	if v := strings.TrimSpace(os.Getenv("LEIKWAN_AGENT_NODE_ID_FILE")); v != "" {
-		return v
-	}
-	return "/var/lib/leikwan-agent/node_id"
-}
-
-func generatedNodeID(nodeName string) string {
-	host := strings.TrimSpace(nodeName)
-	if host == "" {
-		host, _ = os.Hostname()
-	}
-	if host == "" {
-		host = "leikwan-node"
-	}
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err == nil {
-		return normalizeNodeID(host) + "-" + hex.EncodeToString(b[:])
-	}
-	return normalizeNodeID(host)
-}
-
-func normalizeNodeID(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	var b strings.Builder
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			b.WriteRune(r)
-		} else if r == '.' || r == ' ' {
-			b.WriteRune('-')
-		}
-	}
-	out := strings.Trim(b.String(), "-_")
-	if out == "" {
-		return "leikwan-node"
-	}
-	return out
-}
-
 func normalizeRole(role string) string {
-	switch role {
-	case "entry", "relay", "backend", "mixed", "unknown":
-		return role
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "controller", "entry", "relay", "exit", "backend":
+		return strings.ToLower(strings.TrimSpace(role))
 	default:
-		return "unknown"
+		return "backend"
 	}
 }

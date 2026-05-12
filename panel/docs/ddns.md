@@ -1,23 +1,24 @@
-# DDNS 动态域名
+# DDNS
 
-Leikwan Panel `3.0.0-alpha.4` 支持基础 DDNS Profile，并通过固定 Agent action 应用和同步。
+DDNS is an integrated Entry/Node capability rather than a top-level primary workflow.
 
-## Provider
+## Usage
 
-- `cloudflare`
-- `generic_webhook`
-- `manual`
+Entries can enable DDNS fields:
 
-## API Token 安全
+- provider
+- domain
+- record type
+- token reference
 
-`api_token` 只用于被控端同步。前端、日志、events、task result 和 raw_json 都应脱敏显示。
+Agent writes DDNS config to:
 
-## Apply / Sync
+- `/etc/edge-tunnel/agent/ddns.json`
 
-- Apply 创建 `apply_ddns_config` 任务。
-- Sync now 创建 `ddns_sync_now` 任务。
-- `manual` provider 只检测公网 IP，不更新 DNS。
+## Provider Strategy
 
-## 限制
+The first MVP focuses on safe config landing and webhook-style integration points. Provider-specific sync behavior can be expanded after real deployment feedback.
 
-不支持任意 shell，不支持用户自定义命令。generic webhook 只使用固定 HTTP 请求逻辑。
+## Secret Handling
+
+DDNS tokens should be stored as references whenever possible. Task outputs and errors redact token-like values.

@@ -1,99 +1,71 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
-if [[ -n "${SCRIPT_SOURCE}" && -f "${SCRIPT_SOURCE}" ]]; then
-  ROOT_DIR="$(cd -- "$(dirname -- "${SCRIPT_SOURCE}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VERSION="${VERSION:-}"
+DIST_DIR="$ROOT/panel/dist"
+WORK_DIR="$DIST_DIR/work"
+
+if [ -z "$VERSION" ]; then
+  VERSION="$(git -C "$ROOT" describe --tags --exact-match 2>/dev/null || true)"
+fi
+VERSION="${VERSION:-0.1.0-dev}"
+COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+GO_BIN="${GO_BIN:-go}"
+if ! command -v "$GO_BIN" >/dev/null 2>&1; then
+  for candidate in "/mnt/host/d/Program Files/Go/bin/go.exe" "/mnt/d/Program Files/Go/bin/go.exe" "/d/Program Files/Go/bin/go.exe" "/c/Program Files/Go/bin/go.exe"; do
+    if [ -x "$candidate" ]; then
+      GO_BIN="$candidate"
+      break
+    fi
+  done
+fi
+
+log() { printf '[build-release] %s\n' "$*"; }
+
+build_go() {
+  local module="$1" package="$2" arch="$3" output="$4" ldflags="$5"
+  command -v "$GO_BIN" >/dev/null 2>&1 || [ -x "$GO_BIN" ] || { printf '[build-release] ERROR: go not found\n' >&2; exit 1; }
+  (cd "$ROOT/$module" && GOOS=linux GOARCH="$arch" CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags "$ldflags" -o "$output" "$package")
+}
+
+package_arch() {
+  local arch="$1"
+  local stage="$WORK_DIR/linux-$arch"
+  rm -rf "$stage"
+  mkdir -p "$stage"
+  local controller_ldflags="-X github.com/ike-sh/edge-tunnel-panel/panel/controller/internal/controller.Version=${VERSION} -X github.com/ike-sh/edge-tunnel-panel/panel/controller/internal/controller.Commit=${COMMIT} -X github.com/ike-sh/edge-tunnel-panel/panel/controller/internal/controller.Date=${BUILD_DATE}"
+  local agent_ldflags=""
+  build_go "panel/controller" "./cmd/edge-tunnel-controller" "$arch" "$stage/edge-tunnel-controller" "$controller_ldflags"
+  build_go "panel/agent" "./cmd/edge-tunnel-agent" "$arch" "$stage/edge-tunnel-agent" "$agent_ldflags"
+  cp -a "$ROOT/panel/controller/web/dist" "$stage/web"
+  cp -a "$ROOT/panel/docs" "$stage/docs"
+  cp -a "$ROOT/panel/examples" "$stage/examples"
+  cp -a "$ROOT/panel/scripts" "$stage/scripts"
+  printf '%s\n' "$VERSION" >"$stage/VERSION"
+  (cd "$stage" && tar -czf "$DIST_DIR/edge-tunnel-panel-${VERSION}-linux-${arch}.tar.gz" .)
+}
+
+rm -rf "$DIST_DIR"
+mkdir -p "$WORK_DIR"
+log "building web"
+(cd "$ROOT/panel/controller/web" && if [ -f package-lock.json ]; then
+  npm ci
 else
-  ROOT_DIR="$(pwd)"
+  npm install
 fi
-PANEL_DIR="${ROOT_DIR}/panel"
-DIST_DIR="${PANEL_DIR}/dist"
-PANEL_VERSION="${PANEL_VERSION:-3.0.0-alpha.4}"
-CONTROLLER_GOCACHE="${PANEL_DIR}/controller/.gocache"
-AGENT_GOCACHE="${PANEL_DIR}/agent/.gocache"
+npm run build)
 
-GO_BIN="${GO_BIN:-}"
-if [[ -z "${GO_BIN}" ]] && command -v go >/dev/null 2>&1; then
-  GO_BIN="$(command -v go)"
-fi
-if [[ -z "${GO_BIN}" ]]; then
-  for candidate in "/c/Program Files/Go/bin/go.exe" "/d/Program Files/Go/bin/go.exe" "/mnt/host/c/Program Files/Go/bin/go.exe" "/mnt/host/d/Program Files/Go/bin/go.exe"; do
-    if [[ -x "${candidate}" ]]; then
-      GO_BIN="${candidate}"
-      break
-    fi
-  done
-fi
-if [[ -z "${GO_BIN}" ]]; then
-  echo "[FAIL] go not found in PATH" >&2
-  exit 1
-fi
+log "building linux/amd64"
+package_arch amd64
+log "building linux/arm64"
+package_arch arm64
 
-NPM_BIN="${NPM_BIN:-}"
-if [[ -z "${NPM_BIN}" ]] && command -v npm >/dev/null 2>&1; then
-  NPM_BIN="$(command -v npm)"
-fi
-if [[ -z "${NPM_BIN}" ]]; then
-  for candidate in "/c/Program Files/nodejs/npm.cmd" "/d/Program Files/nodejs/npm.cmd" "/mnt/host/c/Program Files/nodejs/npm.cmd" "/mnt/host/d/Program Files/nodejs/npm.cmd"; do
-    if [[ -x "${candidate}" ]]; then
-      NPM_BIN="${candidate}"
-      break
-    fi
-  done
-fi
-if [[ -z "${NPM_BIN}" ]]; then
-  echo "[FAIL] npm not found in PATH" >&2
-  exit 1
-fi
+(cd "$DIST_DIR" && sha256sum edge-tunnel-panel-"$VERSION"-linux-*.tar.gz > SHA256SUMS)
+rm -rf "$WORK_DIR"
 
-mkdir -p "${DIST_DIR}" "${CONTROLLER_GOCACHE}" "${AGENT_GOCACHE}"
-
-GOOS_VALUE="${GOOS:-linux}"
-GOARCH_VALUE="${GOARCH:-amd64}"
-TARBALL="leikwan-panel-${PANEL_VERSION}-${GOOS_VALUE}-${GOARCH_VALUE}.tar.gz"
-
-echo "[INFO] Building controller for ${GOOS_VALUE}/${GOARCH_VALUE}"
-(
-  cd "${PANEL_DIR}/controller"
-  GOCACHE="${GOCACHE:-${CONTROLLER_GOCACHE}}" GOOS="${GOOS_VALUE}" GOARCH="${GOARCH_VALUE}" "${GO_BIN}" build -o "${DIST_DIR}/leikwan-controller" ./cmd/leikwan-controller
-)
-
-echo "[INFO] Building agent for ${GOOS_VALUE}/${GOARCH_VALUE}"
-(
-  cd "${PANEL_DIR}/agent"
-  GOCACHE="${GOCACHE:-${AGENT_GOCACHE}}" GOOS="${GOOS_VALUE}" GOARCH="${GOARCH_VALUE}" "${GO_BIN}" build -o "${DIST_DIR}/leikwan-agent" ./cmd/leikwan-agent
-)
-
-echo "[INFO] Building web assets"
-(
-  cd "${PANEL_DIR}/controller"
-  "${NPM_BIN}" --prefix web install
-  "${NPM_BIN}" --prefix web run build
-)
-
-rm -rf "${DIST_DIR}/web" "${DIST_DIR}/examples" "${DIST_DIR}/docs" "${DIST_DIR}/scripts"
-mkdir -p "${DIST_DIR}/web" "${DIST_DIR}/examples" "${DIST_DIR}/docs" "${DIST_DIR}/scripts"
-cp -R "${PANEL_DIR}/controller/web/dist/." "${DIST_DIR}/web/"
-cp -R "${PANEL_DIR}/examples/." "${DIST_DIR}/examples/"
-cp -R "${PANEL_DIR}/docs/." "${DIST_DIR}/docs/"
-install -m 0755 "${PANEL_DIR}/scripts/install-controller.sh" "${DIST_DIR}/scripts/install-controller.sh"
-install -m 0755 "${PANEL_DIR}/scripts/install-agent.sh" "${DIST_DIR}/scripts/install-agent.sh"
-printf '%s\n' "${PANEL_VERSION}" >"${DIST_DIR}/VERSION"
-
-rm -f "${DIST_DIR}"/*.tar.gz "${DIST_DIR}/SHA256SUMS"
-echo "[INFO] Creating ${TARBALL}"
-(
-  cd "${DIST_DIR}"
-  tar -czf "${TARBALL}" leikwan-controller leikwan-agent web docs examples scripts VERSION
-)
-
-echo "[INFO] Writing SHA256SUMS"
-(
-  cd "${DIST_DIR}"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-)
-
-echo "[OK] Panel release files written to ${DIST_DIR}"
-echo "[OK] GitHub Release asset to upload: ${DIST_DIR}/${TARBALL}"
-echo "[OK] Suggested release tags: v${PANEL_VERSION} or panel-${PANEL_VERSION}"
+log "created:"
+ls -1 "$DIST_DIR"/edge-tunnel-panel-"$VERSION"-linux-*.tar.gz "$DIST_DIR/SHA256SUMS"
+log "install controller:"
+log "curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash"

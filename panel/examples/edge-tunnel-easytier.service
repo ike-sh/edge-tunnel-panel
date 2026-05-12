@@ -1,0 +1,14 @@
+[Unit]
+Description=Edge Tunnel Panel EasyTier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/easytier-core -c /etc/edge-tunnel/agent/easytier.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

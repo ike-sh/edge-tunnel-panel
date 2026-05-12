@@ -1,243 +1,190 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="3.0.0-alpha.4"
-CONTROLLER_URL=""
-TOKEN=""
-NODE_NAME=""
-ROLE="unknown"
-ENABLE_TASKS="true"
-ENABLE_WRITE_ACTIONS="false"
-RELEASE_URL=""
-REPO="ike-sh/leikwan-toolkit"
-SOURCE_REF="panel-3-alpha"
-CONFIG_DIR="/etc/leikwan-agent"
-CONFIG_FILE="${CONFIG_DIR}/config.yml"
-STATE_DIR="/var/lib/leikwan-agent"
-BIN_DST="/usr/local/bin/leikwan-agent"
-SERVICE_DST="/etc/systemd/system/leikwan-agent.service"
+REPO="${REPO:-ike-sh/edge-tunnel-panel}"
+VERSION="${VERSION:-latest}"
+INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/edge-tunnel/agent}"
+STATE_DIR="${STATE_DIR:-/var/lib/edge-tunnel/agent}"
+LOG_DIR="${LOG_DIR:-/var/log/edge-tunnel}"
+CONTROLLER_URL="${EDGE_CONTROLLER_URL:-}"
+CONTROLLER_TOKEN="${EDGE_CONTROLLER_TOKEN:-}"
+NODE_ID="${EDGE_NODE_ID:-}"
+NODE_NAME="${EDGE_NODE_NAME:-$(hostname 2>/dev/null || printf 'edge-node')}"
+NODE_ROLE="${EDGE_NODE_ROLE:-backend}"
+ENABLE_TASKS="${EDGE_ENABLE_TASKS:-false}"
+ENABLE_WRITE_ACTIONS="${EDGE_ENABLE_WRITE_ACTIONS:-false}"
+SOURCE_BUILD=false
+NO_START=false
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --controller|--controller-url) CONTROLLER_URL="${2:-}"; shift 2 ;;
-    --token) TOKEN="${2:-}"; shift 2 ;;
-    --name|--node-name) NODE_NAME="${2:-}"; shift 2 ;;
-    --role) ROLE="${2:-}"; shift 2 ;;
-    --enable-tasks) ENABLE_TASKS="true"; shift ;;
-    --disable-tasks) ENABLE_TASKS="false"; shift ;;
-    --enable-write-actions) ENABLE_WRITE_ACTIONS="true"; shift ;;
-    --version) VERSION="${2:-}"; shift 2 ;;
-    --release-url|--install-url) RELEASE_URL="${2:-}"; shift 2 ;;
-    --repo) REPO="${2:-}"; shift 2 ;;
-    --source-ref) SOURCE_REF="${2:-}"; shift 2 ;;
-    *) echo "[FAIL] Unknown argument: $1" >&2; exit 1 ;;
+usage() {
+  cat <<'USAGE'
+Install Edge Tunnel Panel Agent.
+
+Options:
+  --version VERSION             Release version, default: latest
+  --controller-url URL          Controller URL, required
+  --token TOKEN                 Controller token, required
+  --node-id ID                  Optional node id
+  --node-name NAME              Node name
+  --role ROLE                   entry, relay, exit, backend
+  --enable-tasks                Enable task polling
+  --enable-write-actions        Enable write actions
+  --config-dir DIR              Agent config directory
+  --state-dir DIR               Agent state directory
+  --install-dir DIR             Binary install directory
+  --source-build                Build from current source checkout
+  --no-start                    Do not start service after install
+  -h, --help                    Show help
+USAGE
+}
+
+log() { printf '[edge-tunnel-agent] %s\n' "$*"; }
+fail() { printf '[edge-tunnel-agent] ERROR: %s\n' "$*" >&2; exit 1; }
+mask() {
+  local value="$1"
+  if [ "${#value}" -le 8 ]; then printf '[REDACTED]'; else printf '%s...[REDACTED]' "${value:0:4}"; fi
+}
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    fail "please run as root"
+  fi
+}
+
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'amd64' ;;
+    aarch64|arm64) printf 'arm64' ;;
+    *) fail "unsupported architecture: $(uname -m)" ;;
   esac
-done
-
-if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-  echo "[FAIL] Please run as root or via sudo." >&2
-  exit 1
-fi
-if [[ -z "${CONTROLLER_URL}" || -z "${TOKEN}" || -z "${NODE_NAME}" ]]; then
-  echo "[FAIL] Missing required arguments: --controller-url, --token, --node-name" >&2
-  exit 1
-fi
-
-SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
-if [[ -n "${SCRIPT_SOURCE}" && -f "${SCRIPT_SOURCE}" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd)"
-else
-  SCRIPT_DIR=""
-fi
+}
 
 download_file() {
-  local url="$1"
-  local out="$2"
+  local url="$1" dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fL --retry 2 --connect-timeout 10 "${url}" -o "${out}"
+    curl -fL "$url" -o "$dest"
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO "${out}" "${url}"
+    wget -O "$dest" "$url"
   else
-    echo "[FAIL] curl or wget is required." >&2
-    return 1
+    fail "curl or wget is required"
   fi
 }
 
-detect_os_arch() {
-  OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  ARCH="$(uname -m)"
-  case "${ARCH}" in
-    x86_64|amd64) ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-  esac
+resolve_version() {
+  if [ "$VERSION" != "latest" ]; then
+    printf '%s' "$VERSION"
+    return
+  fi
+  local api="https://api.github.com/repos/${REPO}/releases/latest"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$api" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "$api" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+  fi
 }
 
-install_deps_for_source_build() {
-  command -v go >/dev/null 2>&1 && return 0
-  if ! command -v apt-get >/dev/null 2>&1; then
-    echo "[FAIL] Source build requires go. Please install it manually." >&2
-    return 1
+install_from_release() {
+  local arch version asset url tmp
+  arch="$(detect_arch)"
+  version="$(resolve_version)"
+  [ -n "$version" ] || fail "cannot resolve latest release; use --version or --source-build"
+  asset="edge-tunnel-panel-${version}-linux-${arch}.tar.gz"
+  url="https://github.com/${REPO}/releases/download/${version}/${asset}"
+  tmp="$(mktemp -d)"
+  log "downloading $url"
+  if ! download_file "$url" "$tmp/$asset"; then
+    fail "release asset not available; use --source-build or run panel/scripts/build-release.sh first"
   fi
-  echo "[INFO] Installing build dependencies for Agent source build."
-  apt-get update
-  apt-get install -y ca-certificates curl wget tar gzip golang
+  tar -xzf "$tmp/$asset" -C "$tmp"
+  install -m 0755 "$tmp/edge-tunnel-agent" "$INSTALL_DIR/edge-tunnel-agent"
+  rm -rf "$tmp"
 }
 
-install_from_dist_dir() {
-  local dist="$1"
-  if [[ ! -x "${dist}/leikwan-agent" ]]; then
-    return 1
-  fi
-  echo "[INFO] Installing Agent from ${dist}"
-  install -m 0755 "${dist}/leikwan-agent" "${BIN_DST}"
+install_from_source() {
+  command -v go >/dev/null 2>&1 || fail "go is required for --source-build"
+  local root
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  (cd "$root/panel/agent" && go build -o "$INSTALL_DIR/edge-tunnel-agent" ./cmd/edge-tunnel-agent)
 }
 
-try_local_dist() {
-  if [[ -z "${SCRIPT_DIR}" ]]; then
-    return 1
-  fi
-  local panel_dir
-  panel_dir="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd || true)"
-  [[ -n "${panel_dir}" ]] || return 1
-  if [[ -d "${panel_dir}/dist" ]]; then
-    install_from_dist_dir "${panel_dir}/dist"
-    return $?
-  fi
-  install_from_dist_dir "${panel_dir}"
+write_env() {
+  install -d -m 0755 "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
+  cat >"$CONFIG_DIR/agent.env" <<EOF
+EDGE_CONTROLLER_URL=${CONTROLLER_URL}
+EDGE_CONTROLLER_TOKEN=${CONTROLLER_TOKEN}
+EDGE_NODE_ID=${NODE_ID}
+EDGE_NODE_NAME=${NODE_NAME}
+EDGE_NODE_ROLE=${NODE_ROLE}
+EDGE_ENABLE_TASKS=${ENABLE_TASKS}
+EDGE_ENABLE_WRITE_ACTIONS=${ENABLE_WRITE_ACTIONS}
+EDGE_AGENT_CONFIG_DIR=${CONFIG_DIR}
+EDGE_AGENT_STATE_DIR=${STATE_DIR}
+EOF
+  chmod 0600 "$CONFIG_DIR/agent.env"
 }
 
-extract_and_install_tarball() {
-  local tarball="$1"
-  local tmp="$2"
-  rm -rf "${tmp}/extract"
-  mkdir -p "${tmp}/extract"
-  tar -xzf "${tarball}" -C "${tmp}/extract"
-  local dist="${tmp}/extract"
-  if [[ ! -x "${dist}/leikwan-agent" ]]; then
-    dist="$(find "${tmp}/extract" -maxdepth 3 -type f -name leikwan-agent -perm -111 -print -quit | xargs -r dirname)"
-  fi
-  [[ -n "${dist}" ]] || return 1
-  install_from_dist_dir "${dist}"
-}
-
-try_release_download() {
-  local tmp="$1"
-  detect_os_arch
-  local urls=()
-  if [[ -n "${RELEASE_URL}" ]]; then
-    urls+=("${RELEASE_URL}")
-  else
-    local tags=("v${VERSION}" "panel-${VERSION}")
-    local assets=(
-      "leikwan-panel-${VERSION}-${OS}-${ARCH}.tar.gz"
-      "leikwan-panel-${OS}-${ARCH}.tar.gz"
-      "panel-dist-${OS}-${ARCH}.tar.gz"
-    )
-    for tag in "${tags[@]}"; do
-      for asset in "${assets[@]}"; do
-        urls+=("https://github.com/${REPO}/releases/download/${tag}/${asset}")
-      done
-    done
-  fi
-  local url
-  for url in "${urls[@]}"; do
-    echo "[INFO] Trying Panel release: ${url}"
-    if download_file "${url}" "${tmp}/panel.tar.gz"; then
-      if extract_and_install_tarball "${tmp}/panel.tar.gz" "${tmp}"; then
-        return 0
-      fi
-      echo "[WARN] Release downloaded but layout was not usable: ${url}" >&2
-    else
-      echo "[WARN] Release not available: ${url}" >&2
-    fi
-  done
-  return 1
-}
-
-source_build_fallback() {
-  local tmp="$1"
-  install_deps_for_source_build
-  echo "[INFO] Falling back to Agent source build from GitHub ref: ${SOURCE_REF}"
-  local source_url
-  if [[ "${SOURCE_REF}" == v* ]]; then
-    source_url="https://github.com/${REPO}/archive/refs/tags/${SOURCE_REF}.tar.gz"
-  else
-    source_url="https://github.com/${REPO}/archive/refs/heads/${SOURCE_REF}.tar.gz"
-  fi
-  download_file "${source_url}" "${tmp}/source.tar.gz"
-  rm -rf "${tmp}/source"
-  mkdir -p "${tmp}/source"
-  tar -xzf "${tmp}/source.tar.gz" -C "${tmp}/source" --strip-components=1
-  if [[ ! -d "${tmp}/source/panel/agent" ]]; then
-    echo "[FAIL] Source tarball missing panel/agent" >&2
-    return 1
-  fi
-  (
-    cd "${tmp}/source/panel/agent"
-    go build -o "${tmp}/leikwan-agent" ./cmd/leikwan-agent
-  )
-  install -m 0755 "${tmp}/leikwan-agent" "${BIN_DST}"
-}
-
-if ! try_local_dist; then
-  TMP_DIR="$(mktemp -d)"
-  trap 'rm -rf "${TMP_DIR}"' EXIT
-  if ! try_release_download "${TMP_DIR}"; then
-    source_build_fallback "${TMP_DIR}"
-  fi
-fi
-
-mkdir -p "${CONFIG_DIR}" "${STATE_DIR}"
-chmod 0750 "${CONFIG_DIR}" "${STATE_DIR}"
-
-INIT_ARGS=(--init-config --config "${CONFIG_FILE}" --controller-url "${CONTROLLER_URL}" --token "${TOKEN}" --node-name "${NODE_NAME}" --role "${ROLE}")
-if [[ "${ENABLE_TASKS}" == "true" ]]; then
-  INIT_ARGS+=(--enable-tasks)
-else
-  INIT_ARGS+=(--enable-tasks=false)
-fi
-if [[ "${ENABLE_WRITE_ACTIONS}" == "true" ]]; then
-  INIT_ARGS+=(--enable-write-actions)
-fi
-"${BIN_DST}" "${INIT_ARGS[@]}"
-chmod 0600 "${CONFIG_FILE}"
-
-cat >"${SERVICE_DST}" <<EOF
+write_service() {
+  cat >/etc/systemd/system/edge-tunnel-agent.service <<EOF
 [Unit]
-Description=Leikwan Panel Agent
+Description=Edge Tunnel Panel Agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=${BIN_DST} --config ${CONFIG_FILE}
-Restart=on-failure
-RestartSec=3s
+Type=simple
+User=root
+EnvironmentFile=${CONFIG_DIR}/agent.env
+WorkingDirectory=${STATE_DIR}
+ExecStart=${INSTALL_DIR}/edge-tunnel-agent
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
+}
 
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version) VERSION="$2"; shift 2 ;;
+    --controller-url) CONTROLLER_URL="$2"; shift 2 ;;
+    --token) CONTROLLER_TOKEN="$2"; shift 2 ;;
+    --node-id) NODE_ID="$2"; shift 2 ;;
+    --node-name) NODE_NAME="$2"; shift 2 ;;
+    --role) NODE_ROLE="$2"; shift 2 ;;
+    --enable-tasks) ENABLE_TASKS=true; shift ;;
+    --enable-write-actions) ENABLE_WRITE_ACTIONS=true; shift ;;
+    --config-dir) CONFIG_DIR="$2"; shift 2 ;;
+    --state-dir) STATE_DIR="$2"; shift 2 ;;
+    --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+    --source-build) SOURCE_BUILD=true; shift ;;
+    --no-start) NO_START=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) fail "unknown option: $1" ;;
+  esac
+done
+
+require_root
+[ -n "$CONTROLLER_URL" ] || fail "--controller-url is required"
+[ -n "$CONTROLLER_TOKEN" ] || fail "--token is required"
+install -d -m 0755 "$INSTALL_DIR"
+if [ "$SOURCE_BUILD" = true ]; then
+  install_from_source
+else
+  install_from_release
+fi
+write_env
+write_service
 systemctl daemon-reload
-systemctl enable --now leikwan-agent.service
-
-if ! "${BIN_DST}" --config "${CONFIG_FILE}" --once; then
-  echo "[WARN] initial Agent report failed; service remains installed and will retry." >&2
+systemctl enable edge-tunnel-agent.service
+"$INSTALL_DIR/edge-tunnel-agent" --once || log "one-time registration check failed; inspect service logs after startup"
+if [ "$NO_START" = false ]; then
+  systemctl restart edge-tunnel-agent.service
 fi
 
-cat <<EOF
-
-Leikwan Panel Agent installed.
-
-Controller URL: ${CONTROLLER_URL}
-Node name: ${NODE_NAME}
-Role: ${ROLE}
-enable_tasks=${ENABLE_TASKS}
-enable_write_actions=${ENABLE_WRITE_ACTIONS}
-
-Status:
-systemctl status leikwan-agent --no-pager
-
-Logs:
-journalctl -u leikwan-agent -n 100 --no-pager
-
-EOF
+log "installed /usr/local/bin/edge-tunnel-agent"
+log "controller URL: ${CONTROLLER_URL}"
+log "controller token: $(mask "$CONTROLLER_TOKEN")"
+log "node name: ${NODE_NAME}"
+log "node role: ${NODE_ROLE}"

@@ -1,39 +1,28 @@
-# 拓扑视图
+# Topology
 
-Leikwan Panel `3.0.0-alpha.4` 保留拓扑视图，用于展示 Entry、Relay、Forward 和 target 的关系。
+## Direct Forwarding
 
-## API
+Client traffic reaches a public Entry node. The Entry node forwards TCP/UDP traffic to a target on the same host or a directly reachable LAN address.
 
-```bash
-curl http://127.0.0.1:18080/api/v1/topology
+```text
+Client -> Public Entry Node -> Local target service
 ```
 
-返回：
+Use `target_mode=local` for this mode.
 
-```json
-{
-  "nodes": [],
-  "entries": [],
-  "forwards": [],
-  "links": []
-}
+## Overlay Forwarding
+
+Client traffic reaches a public Entry node. The Entry node forwards traffic through EasyTier to a backend node or overlay address.
+
+```text
+Client -> Public Entry Node -> EasyTier overlay -> Backend Node -> Target service
 ```
 
-## 推断规则
+Use `target_mode=overlay` for this mode.
 
-拓扑基于 Controller 中的节点、Entry 和 Forward 数据轻量推断：
+## Node Roles
 
-- entry -> relay
-- relay -> target
-
-如果信息不足，API 仍返回 nodes / entries / forwards，links 可以为空。
-
-## 安全边界
-
-Topology 页面不执行：
-
-- 入口切换
-- 转发新增 / 删除 / 修改
-- relay restart
-- 配置下发
-- 任意命令
+- `entry`: public ingress node that listens for client traffic.
+- `relay`: overlay helper node for connectivity.
+- `exit`: node that can route selected traffic out.
+- `backend`: private service node behind NAT.

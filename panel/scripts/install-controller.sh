@@ -1,67 +1,63 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="3.0.0-alpha.4"
-LISTEN="0.0.0.0:18080"
-DATA_DIR="/var/lib/leikwan-panel"
-CONFIG_DIR="/etc/leikwan-panel"
-LOG_DIR="/var/log/leikwan-panel"
-WEB_DIR=""
-ENV_FILE=""
-BIN_DST="/usr/local/bin/leikwan-controller"
-AGENT_BIN_DST="/usr/local/bin/leikwan-agent"
-SERVICE_DST="/etc/systemd/system/leikwan-controller.service"
-AGENT_TOKEN=""
-OPERATOR_TOKEN=""
-ADMIN_PASSWORD=""
-STRICT_AUTH="false"
-PUBLIC_URL=""
-RELEASE_URL=""
-REPO="ike-sh/leikwan-toolkit"
-SOURCE_REF="panel-3-alpha"
+REPO="${REPO:-ike-sh/edge-tunnel-panel}"
+VERSION="${VERSION:-latest}"
+LISTEN="${LISTEN:-0.0.0.0:18080}"
+INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/edge-tunnel/controller}"
+DATA_DIR="${DATA_DIR:-/var/lib/edge-tunnel/controller}"
+WEB_DIR="${WEB_DIR:-/var/lib/edge-tunnel/controller/web}"
+LOG_DIR="${LOG_DIR:-/var/log/edge-tunnel}"
+SOURCE_BUILD=false
+NO_START=false
+OPERATOR_TOKEN="${EDGE_OPERATOR_TOKEN:-}"
+AGENT_TOKEN="${EDGE_CONTROLLER_TOKEN:-}"
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --version) VERSION="${2:-}"; shift 2 ;;
-    --listen) LISTEN="${2:-}"; shift 2 ;;
-    --data-dir) DATA_DIR="${2:-}"; shift 2 ;;
-    --agent-token) AGENT_TOKEN="${2:-}"; shift 2 ;;
-    --operator-token) OPERATOR_TOKEN="${2:-}"; shift 2 ;;
-    --admin-password) ADMIN_PASSWORD="${2:-}"; shift 2 ;;
-    --strict-auth) STRICT_AUTH="true"; shift ;;
-    --public-url) PUBLIC_URL="${2:-}"; shift 2 ;;
-    --release-url|--install-url) RELEASE_URL="${2:-}"; shift 2 ;;
-    --repo) REPO="${2:-}"; shift 2 ;;
-    --source-ref) SOURCE_REF="${2:-}"; shift 2 ;;
-    *) echo "[FAIL] Unknown argument: $1" >&2; exit 1 ;;
+usage() {
+  cat <<'USAGE'
+Install Edge Tunnel Panel Controller.
+
+Options:
+  --version VERSION          Release version, default: latest
+  --listen ADDR             Listen address, default: 0.0.0.0:18080
+  --operator-token TOKEN    Web/API operator token
+  --agent-token TOKEN       Agent controller token
+  --web-dir DIR             Web asset directory
+  --install-dir DIR         Binary install directory
+  --data-dir DIR            Controller data directory
+  --config-dir DIR          Controller config directory
+  --source-build            Build from current source checkout
+  --no-start                Do not start service after install
+  -h, --help                Show help
+USAGE
+}
+
+log() { printf '[edge-tunnel-controller] %s\n' "$*"; }
+fail() { printf '[edge-tunnel-controller] ERROR: %s\n' "$*" >&2; exit 1; }
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    fail "please run as root"
+  fi
+}
+
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'amd64' ;;
+    aarch64|arm64) printf 'arm64' ;;
+    *) fail "unsupported architecture: $(uname -m)" ;;
   esac
-done
-
-WEB_DIR="${DATA_DIR}/web"
-ENV_FILE="${CONFIG_DIR}/controller.env"
-
-if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-  echo "[FAIL] Please run as root or via sudo." >&2
-  exit 1
-fi
-
-SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
-if [[ -n "${SCRIPT_SOURCE}" && -f "${SCRIPT_SOURCE}" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd)"
-else
-  SCRIPT_DIR=""
-fi
+}
 
 download_file() {
-  local url="$1"
-  local out="$2"
+  local url="$1" dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fL --retry 2 --connect-timeout 10 "${url}" -o "${out}"
+    curl -fL "$url" -o "$dest"
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO "${out}" "${url}"
+    wget -O "$dest" "$url"
   else
-    echo "[FAIL] curl or wget is required." >&2
-    return 1
+    fail "curl or wget is required"
   fi
 }
 
@@ -69,276 +65,129 @@ random_token() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 32
   else
-    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48
   fi
 }
 
-password_hash() {
-  local value="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    printf '%s' "${value}" | sha256sum | awk '{print $1}'
-  elif command -v openssl >/dev/null 2>&1; then
-    printf '%s' "${value}" | openssl dgst -sha256 | awk '{print $NF}'
+resolve_version() {
+  if [ "$VERSION" != "latest" ]; then
+    printf '%s' "$VERSION"
+    return
+  fi
+  local api="https://api.github.com/repos/${REPO}/releases/latest"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$api" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "$api" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+  fi
+}
+
+install_from_release() {
+  local arch version asset url tmp
+  arch="$(detect_arch)"
+  version="$(resolve_version)"
+  [ -n "$version" ] || fail "cannot resolve latest release; use --version or --source-build"
+  asset="edge-tunnel-panel-${version}-linux-${arch}.tar.gz"
+  url="https://github.com/${REPO}/releases/download/${version}/${asset}"
+  tmp="$(mktemp -d)"
+  log "downloading $url"
+  if ! download_file "$url" "$tmp/$asset"; then
+    fail "release asset not available; use --source-build or run panel/scripts/build-release.sh first"
+  fi
+  tar -xzf "$tmp/$asset" -C "$tmp"
+  install -m 0755 "$tmp/edge-tunnel-controller" "$INSTALL_DIR/edge-tunnel-controller"
+  if [ -d "$tmp/web" ]; then
+    rm -rf "$WEB_DIR"
+    mkdir -p "$WEB_DIR"
+    cp -a "$tmp/web/." "$WEB_DIR/"
+  fi
+  rm -rf "$tmp"
+}
+
+install_from_source() {
+  command -v go >/dev/null 2>&1 || fail "go is required for --source-build"
+  local root
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  (cd "$root/panel/controller" && go build -o "$INSTALL_DIR/edge-tunnel-controller" ./cmd/edge-tunnel-controller)
+  if [ -d "$root/panel/controller/web/dist" ]; then
+    rm -rf "$WEB_DIR"
+    mkdir -p "$WEB_DIR"
+    cp -a "$root/panel/controller/web/dist/." "$WEB_DIR/"
   else
-    printf '%s' "${value}"
+    log "web dist not found; run npm --prefix panel/controller/web run build if static assets are needed"
   fi
 }
 
-detect_os_arch() {
-  OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  ARCH="$(uname -m)"
-  case "${ARCH}" in
-    x86_64|amd64) ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-  esac
-}
-
-install_deps_for_source_build() {
-  local missing=()
-  command -v go >/dev/null 2>&1 || missing+=(golang)
-  command -v npm >/dev/null 2>&1 || missing+=(npm nodejs)
-  if [[ ${#missing[@]} -eq 0 ]]; then
-    return 0
-  fi
-  if ! command -v apt-get >/dev/null 2>&1; then
-    echo "[FAIL] Source build requires go and npm/nodejs. Please install them manually." >&2
-    return 1
-  fi
-  echo "[INFO] Installing build dependencies: ${missing[*]}"
-  apt-get update
-  apt-get install -y ca-certificates curl wget tar gzip "${missing[@]}"
-}
-
-install_from_dist_dir() {
-  local dist="$1"
-  if [[ ! -x "${dist}/leikwan-controller" ]]; then
-    return 1
-  fi
-  echo "[INFO] Installing Controller from ${dist}"
-  install -m 0755 "${dist}/leikwan-controller" "${BIN_DST}"
-  if [[ -x "${dist}/leikwan-agent" ]]; then
-    install -m 0755 "${dist}/leikwan-agent" "${AGENT_BIN_DST}"
-  fi
-  if [[ -d "${dist}/web" ]]; then
-    rm -rf "${WEB_DIR}"
-    mkdir -p "${WEB_DIR}"
-    cp -R "${dist}/web/." "${WEB_DIR}/"
-  else
-    echo "[WARN] dist does not contain web/; Controller API will run but Web UI may be missing." >&2
-  fi
-}
-
-ensure_controller_supports_web_dir() {
-  if ! "${BIN_DST}" -h 2>&1 | grep -q -- "-web-dir"; then
-    echo "[FAIL] controller binary does not support --web-dir; source/ref mismatch" >&2
-    echo "[INFO] Installed binary: ${BIN_DST}" >&2
-    echo "[INFO] Requested source ref: ${SOURCE_REF}" >&2
-    exit 1
-  fi
-}
-
-try_local_dist() {
-  if [[ -z "${SCRIPT_DIR}" ]]; then
-    return 1
-  fi
-  local panel_dir
-  panel_dir="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd || true)"
-  [[ -n "${panel_dir}" ]] || return 1
-  if [[ -d "${panel_dir}/dist" ]]; then
-    install_from_dist_dir "${panel_dir}/dist"
-    return $?
-  fi
-  install_from_dist_dir "${panel_dir}"
-}
-
-extract_and_install_tarball() {
-  local tarball="$1"
-  local tmp="$2"
-  rm -rf "${tmp}/extract"
-  mkdir -p "${tmp}/extract"
-  tar -xzf "${tarball}" -C "${tmp}/extract"
-  local dist="${tmp}/extract"
-  if [[ ! -x "${dist}/leikwan-controller" ]]; then
-    dist="$(find "${tmp}/extract" -maxdepth 3 -type f -name leikwan-controller -perm -111 -print -quit | xargs -r dirname)"
-  fi
-  [[ -n "${dist}" ]] || return 1
-  install_from_dist_dir "${dist}"
-}
-
-try_release_download() {
-  local tmp="$1"
-  detect_os_arch
-  local urls=()
-  if [[ -n "${RELEASE_URL}" ]]; then
-    urls+=("${RELEASE_URL}")
-  else
-    local tags=("v${VERSION}" "panel-${VERSION}")
-    local assets=(
-      "leikwan-panel-${VERSION}-${OS}-${ARCH}.tar.gz"
-      "leikwan-panel-${OS}-${ARCH}.tar.gz"
-      "panel-dist-${OS}-${ARCH}.tar.gz"
-    )
-    for tag in "${tags[@]}"; do
-      for asset in "${assets[@]}"; do
-        urls+=("https://github.com/${REPO}/releases/download/${tag}/${asset}")
-      done
-    done
-  fi
-  local url
-  for url in "${urls[@]}"; do
-    echo "[INFO] Trying Panel release: ${url}"
-    if download_file "${url}" "${tmp}/panel.tar.gz"; then
-      if extract_and_install_tarball "${tmp}/panel.tar.gz" "${tmp}"; then
-        return 0
-      fi
-      echo "[WARN] Release downloaded but layout was not usable: ${url}" >&2
-    else
-      echo "[WARN] Release not available: ${url}" >&2
-    fi
-  done
-  return 1
-}
-
-source_build_fallback() {
-  local tmp="$1"
-  install_deps_for_source_build
-  echo "[INFO] Falling back to source build from GitHub ref: ${SOURCE_REF}"
-  local source_url
-  if [[ "${SOURCE_REF}" == v* ]]; then
-    source_url="https://github.com/${REPO}/archive/refs/tags/${SOURCE_REF}.tar.gz"
-  else
-    source_url="https://github.com/${REPO}/archive/refs/heads/${SOURCE_REF}.tar.gz"
-  fi
-  download_file "${source_url}" "${tmp}/source.tar.gz"
-  rm -rf "${tmp}/source"
-  mkdir -p "${tmp}/source"
-  tar -xzf "${tmp}/source.tar.gz" -C "${tmp}/source" --strip-components=1
-  for required in panel/controller panel/agent panel/controller/web; do
-    if [[ ! -d "${tmp}/source/${required}" ]]; then
-      echo "[FAIL] Source tarball missing ${required}" >&2
-      return 1
-    fi
-  done
-  (
-    cd "${tmp}/source/panel/controller"
-    go build -o "${tmp}/leikwan-controller" ./cmd/leikwan-controller
-    npm --prefix web install
-    npm --prefix web run build
-  )
-  (
-    cd "${tmp}/source/panel/agent"
-    go build -o "${tmp}/leikwan-agent" ./cmd/leikwan-agent
-  )
-  install -m 0755 "${tmp}/leikwan-controller" "${BIN_DST}"
-  install -m 0755 "${tmp}/leikwan-agent" "${AGENT_BIN_DST}"
-  rm -rf "${WEB_DIR}"
-  mkdir -p "${WEB_DIR}"
-  cp -R "${tmp}/source/panel/controller/web/dist/." "${WEB_DIR}/"
-}
-
-if [[ -z "${AGENT_TOKEN}" ]]; then
-  AGENT_TOKEN="$(random_token)"
-fi
-if [[ -z "${ADMIN_PASSWORD}" ]]; then
-  ADMIN_PASSWORD="$(random_token)"
-fi
-if [[ -z "${OPERATOR_TOKEN}" ]]; then
-  OPERATOR_TOKEN="${ADMIN_PASSWORD}"
-fi
-
-mkdir -p "${CONFIG_DIR}" "${DATA_DIR}" "${LOG_DIR}" "${WEB_DIR}"
-chmod 0750 "${CONFIG_DIR}" "${DATA_DIR}" "${LOG_DIR}" "${WEB_DIR}"
-
-if ! try_local_dist; then
-  TMP_DIR="$(mktemp -d)"
-  trap 'rm -rf "${TMP_DIR}"' EXIT
-  if ! try_release_download "${TMP_DIR}"; then
-    source_build_fallback "${TMP_DIR}"
-  fi
-fi
-
-ensure_controller_supports_web_dir
-
-ADMIN_PASSWORD_HASH="$(password_hash "${ADMIN_PASSWORD}")"
-umask 077
-cat >"${ENV_FILE}" <<EOF
-LEIKWAN_CONTROLLER_TOKEN=${AGENT_TOKEN}
-LEIKWAN_OPERATOR_TOKEN=${OPERATOR_TOKEN}
-LEIKWAN_ADMIN_USER=admin
-LEIKWAN_ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
-LEIKWAN_SESSION_SECRET=$(random_token)
-LEIKWAN_STRICT_AUTH=${STRICT_AUTH}
-LEIKWAN_LISTEN=${LISTEN}
-LEIKWAN_DATA_DIR=${DATA_DIR}
-LEIKWAN_WEB_DIR=${WEB_DIR}
+write_env() {
+  install -d -m 0755 "$CONFIG_DIR" "$DATA_DIR" "$WEB_DIR" "$LOG_DIR"
+  OPERATOR_TOKEN="${OPERATOR_TOKEN:-$(random_token)}"
+  AGENT_TOKEN="${AGENT_TOKEN:-$(random_token)}"
+  cat >"$CONFIG_DIR/controller.env" <<EOF
+EDGE_LISTEN=${LISTEN}
+EDGE_DATA_DIR=${DATA_DIR}
+EDGE_OPERATOR_TOKEN=${OPERATOR_TOKEN}
+EDGE_CONTROLLER_TOKEN=${AGENT_TOKEN}
+EDGE_STRICT_AUTH=true
+EDGE_WEB_DIR=${WEB_DIR}
 EOF
-chmod 0600 "${ENV_FILE}"
+  chmod 0600 "$CONFIG_DIR/controller.env"
+}
 
-cat >"${SERVICE_DST}" <<EOF
+write_service() {
+  cat >/etc/systemd/system/edge-tunnel-controller.service <<EOF
 [Unit]
-Description=Leikwan Panel Controller
+Description=Edge Tunnel Panel Controller
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-EnvironmentFile=${ENV_FILE}
-ExecStart=${BIN_DST} --listen \${LEIKWAN_LISTEN} --db \${LEIKWAN_DATA_DIR}/controller.db --web-dir \${LEIKWAN_WEB_DIR} --strict-auth=\${LEIKWAN_STRICT_AUTH}
-Restart=on-failure
-RestartSec=3s
+Type=simple
+User=root
+EnvironmentFile=${CONFIG_DIR}/controller.env
+WorkingDirectory=${DATA_DIR}
+ExecStart=${INSTALL_DIR}/edge-tunnel-controller
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
+}
 
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version) VERSION="$2"; shift 2 ;;
+    --listen) LISTEN="$2"; shift 2 ;;
+    --operator-token) OPERATOR_TOKEN="$2"; shift 2 ;;
+    --agent-token) AGENT_TOKEN="$2"; shift 2 ;;
+    --web-dir) WEB_DIR="$2"; shift 2 ;;
+    --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+    --data-dir) DATA_DIR="$2"; shift 2 ;;
+    --config-dir) CONFIG_DIR="$2"; shift 2 ;;
+    --source-build) SOURCE_BUILD=true; shift ;;
+    --no-start) NO_START=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) fail "unknown option: $1" ;;
+  esac
+done
+
+require_root
+install -d -m 0755 "$INSTALL_DIR"
+if [ "$SOURCE_BUILD" = true ]; then
+  install_from_source
+else
+  install_from_release
+fi
+write_env
+write_service
 systemctl daemon-reload
-systemctl enable leikwan-controller.service
-if ! systemctl restart leikwan-controller.service; then
-  echo "[FAIL] leikwan-controller.service failed to start." >&2
-  systemctl status leikwan-controller --no-pager || true
-  journalctl -u leikwan-controller -n 100 --no-pager || true
-  exit 1
-fi
-systemctl status leikwan-controller --no-pager || true
-
-HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-if [[ -z "${HOST_IP}" ]] && command -v curl >/dev/null 2>&1; then
-  HOST_IP="$(curl -fsSL --connect-timeout 3 https://ifconfig.me 2>/dev/null || true)"
-fi
-if [[ -z "${HOST_IP}" ]]; then
-  HOST_IP="127.0.0.1"
-fi
-PORT="${LISTEN##*:}"
-if [[ -z "${PUBLIC_URL}" ]]; then
-  PUBLIC_URL="http://${HOST_IP}:${PORT}"
+systemctl enable edge-tunnel-controller.service
+if [ "$NO_START" = false ]; then
+  systemctl restart edge-tunnel-controller.service
 fi
 
-AGENT_CMD="curl -fsSL https://raw.githubusercontent.com/${REPO}/${SOURCE_REF}/panel/scripts/install-agent.sh | sudo bash -s -- --controller-url '${PUBLIC_URL}' --token '${AGENT_TOKEN}' --node-name 'relay-1' --role relay --enable-tasks"
-
-cat <<EOF
-
-Leikwan Panel installed.
-
-Web URL:
-${PUBLIC_URL}
-
-Login:
-username: admin
-password: ${ADMIN_PASSWORD}
-
-Operator token:
-${OPERATOR_TOKEN}
-
-Agent token:
-${AGENT_TOKEN}
-
-Add Agent:
-Open Web Panel -> Add Agent
-
-Example Agent install command:
-${AGENT_CMD}
-
-Service:
-systemctl status leikwan-controller --no-pager
-journalctl -u leikwan-controller -n 100 --no-pager
-
-EOF
+log "installed /usr/local/bin/edge-tunnel-controller"
+log "controller URL: http://${LISTEN}"
+log "operator token: ${OPERATOR_TOKEN}"
+log "agent token: ${AGENT_TOKEN}"
+log "tokens are shown once; keep them safe"

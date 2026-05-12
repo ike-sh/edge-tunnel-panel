@@ -1,0 +1,16 @@
+[Unit]
+Description=Edge Tunnel Panel Controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/edge-tunnel/controller/controller.env
+WorkingDirectory=/var/lib/edge-tunnel/controller
+ExecStart=/usr/local/bin/edge-tunnel-controller
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

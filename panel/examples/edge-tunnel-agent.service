@@ -1,0 +1,16 @@
+[Unit]
+Description=Edge Tunnel Panel Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/edge-tunnel/agent/agent.env
+WorkingDirectory=/var/lib/edge-tunnel/agent
+ExecStart=/usr/local/bin/edge-tunnel-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

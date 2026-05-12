@@ -1,103 +1,105 @@
 package agent
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
-const Version = "3.0.0-alpha.4"
+const Version = "0.1.0"
+
+type APIResponse struct {
+	OK    bool            `json:"ok"`
+	Data  json.RawMessage `json:"data,omitempty"`
+	Error *APIError       `json:"error,omitempty"`
+}
+
+type APIError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
 
 type Config struct {
-	ControllerURL       string
-	Token               string
-	NodeID              string
-	NodeName            string
-	Role                string
-	IntervalSeconds     int
-	EnableTasks         bool
-	EnableWriteActions  bool
-	TaskIntervalSeconds int
-	TaskTimeoutSeconds  int
-	MaxConcurrentTasks  int
-	TaskResultLimitKB   int
+	ControllerURL      string
+	ControllerToken    string
+	NodeID             string
+	NodeName           string
+	NodeRole           string
+	EnableTasks        bool
+	EnableWriteActions bool
+	ConfigDir          string
+	StateDir           string
+	PollInterval       time.Duration
+	ReportInterval     time.Duration
+	TaskResultLimitKB  int
+	MaxConcurrentTasks int
 }
 
 type RegisterRequest struct {
-	NodeID   string `json:"node_id"`
-	NodeName string `json:"node_name"`
+	ID       string `json:"id,omitempty"`
+	Name     string `json:"name"`
 	Role     string `json:"role"`
 	Hostname string `json:"hostname"`
 }
 
 type ReportRequest struct {
-	NodeID          string            `json:"node_id"`
-	NodeName        string            `json:"node_name"`
-	Role            string            `json:"role"`
-	Hostname        string            `json:"hostname"`
-	PublicIP        string            `json:"public_ip"`
-	PrimaryLANIP    string            `json:"primary_lan_ip"`
-	EasyTierIP      string            `json:"easytier_ip"`
-	AgentVersion    string            `json:"agent_version"`
-	CoreVersion     string            `json:"core_version"`
-	Status          string            `json:"status"`
-	HealthScore     int               `json:"health_score"`
-	IntervalSeconds int               `json:"interval_seconds"`
-	Summary         json.RawMessage   `json:"summary,omitempty"`
-	Doctor          json.RawMessage   `json:"doctor,omitempty"`
-	LQStatus        json.RawMessage   `json:"lq_status,omitempty"`
-	LQDoctor        json.RawMessage   `json:"lq_doctor,omitempty"`
-	Services        map[string]string `json:"services,omitempty"`
-	Entries         []EntryPayload    `json:"entries,omitempty"`
-	Forwards        []ForwardPayload  `json:"forwards,omitempty"`
-	RecentErrors    []string          `json:"recent_errors,omitempty"`
-	Errors          []string          `json:"errors,omitempty"`
-	Capabilities    Capabilities      `json:"capabilities,omitempty"`
+	ID             string          `json:"id,omitempty"`
+	Name           string          `json:"name"`
+	Role           string          `json:"role"`
+	PublicIP       string          `json:"public_ip,omitempty"`
+	PrivateIP      string          `json:"private_ip,omitempty"`
+	AgentVersion   string          `json:"agent_version"`
+	Hostname       string          `json:"hostname"`
+	OS             string          `json:"os"`
+	Arch           string          `json:"arch"`
+	EasyTierIP     string          `json:"easytier_ip,omitempty"`
+	EasyTierStatus string          `json:"easytier_status"`
+	Capabilities   map[string]bool `json:"capabilities"`
+	Warnings       []string        `json:"warnings,omitempty"`
 }
 
-type Capabilities struct {
-	LQAvailable                        bool     `json:"lq_available"`
-	CoreVersion                        string   `json:"core_version"`
-	SupportsStatusJSON                 bool     `json:"supports_status_json"`
-	SupportsDoctorJSON                 bool     `json:"supports_doctor_json"`
-	SupportsForwardList                bool     `json:"supports_forward_list"`
-	SupportsDDNSOverview               bool     `json:"supports_ddns_overview"`
-	EnableTasks                        bool     `json:"enable_tasks"`
-	SupportsSnapshotManualRecord       bool     `json:"supports_snapshot_manual_record"`
-	SupportsRollbackManualRecord       bool     `json:"supports_rollback_manual_record"`
-	WriteActionsSupported              bool     `json:"write_actions_supported"`
-	SupportedWriteActions              []string `json:"supported_write_actions,omitempty"`
-	ControllerMetadataActionsSupported bool     `json:"controller_metadata_actions_supported"`
-	AllowedTaskActions                 []string `json:"allowed_task_actions,omitempty"`
-}
-
-type EntryPayload struct {
-	Name       string          `json:"name"`
-	ListenPort int             `json:"listen_port"`
-	Protocol   string          `json:"protocol"`
-	PublicHost string          `json:"public_host"`
-	Status     string          `json:"status"`
-	RawJSON    json.RawMessage `json:"raw_json,omitempty"`
-}
-
-type ForwardPayload struct {
-	Name       string          `json:"name"`
-	EntryName  string          `json:"entry_name"`
-	TargetHost string          `json:"target_host"`
-	TargetPort int             `json:"target_port"`
-	Protocol   string          `json:"protocol"`
-	Status     string          `json:"status"`
-	RawJSON    json.RawMessage `json:"raw_json,omitempty"`
+type AgentStatus struct {
+	Hostname              string          `json:"hostname"`
+	OS                    string          `json:"os"`
+	Arch                  string          `json:"arch"`
+	NodeRole              string          `json:"node_role"`
+	ConfigDir             string          `json:"config_dir"`
+	StateDir              string          `json:"state_dir"`
+	EasyTierBinaryExists  bool            `json:"easytier_binary_exists"`
+	EasyTierServiceActive bool            `json:"easytier_service_active"`
+	AgentServiceActive    bool            `json:"agent_service_active"`
+	NFTAvailable          bool            `json:"nft_available"`
+	IPRouteAvailable      bool            `json:"iproute_available"`
+	Capabilities          map[string]bool `json:"capabilities"`
+	Warnings              []string        `json:"warnings,omitempty"`
+	PrivateIP             string          `json:"private_ip,omitempty"`
+	EasyTierIP            string          `json:"easytier_ip,omitempty"`
+	LastAppliedConfigHash string          `json:"last_applied_config_hash,omitempty"`
 }
 
 type Task struct {
-	ID          int64           `json:"id"`
-	NodeID      string          `json:"node_id"`
-	Action      string          `json:"action"`
-	Status      string          `json:"status"`
-	PayloadJSON json.RawMessage `json:"payload_json,omitempty"`
+	ID        string         `json:"id"`
+	NodeID    string         `json:"node_id"`
+	Action    string         `json:"action"`
+	Payload   map[string]any `json:"payload"`
+	Status    string         `json:"status"`
+	CreatedAt time.Time      `json:"created_at"`
+	ExpiresAt *time.Time     `json:"expires_at,omitempty"`
+	Attempt   int            `json:"attempt"`
 }
 
-type TaskResultRequest struct {
-	Status       string `json:"status"`
-	ResultStdout string `json:"result_stdout"`
-	ResultStderr string `json:"result_stderr"`
-	ExitCode     int    `json:"exit_code"`
-	Error        string `json:"error"`
+type TaskResult struct {
+	Status     string    `json:"status"`
+	Result     string    `json:"result,omitempty"`
+	Stdout     string    `json:"stdout,omitempty"`
+	Stderr     string    `json:"stderr,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
+type CommandResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+	Err      error
 }

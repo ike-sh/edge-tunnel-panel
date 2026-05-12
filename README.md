@@ -1,132 +1,106 @@
-# Leikwan Toolkit
+# Edge Tunnel Panel
 
-Leikwan Toolkit Shell Core is frozen at `1.4.0 LTS`.
+Edge Tunnel Panel is a Web controller and Agent system for building TCP/UDP tunnel networks with EasyTier. It is designed for hosts that do not have a public IPv4 address and need one or more public entry servers to expose services through direct forwarding or overlay forwarding.
 
-Leikwan Toolkit is a TCP/UDP forwarding toolkit for an **A public entry + B relay host + C backend target** topology. The Shell Core remains responsible for local forwarding behavior: EasyTier, nftables, DDNS, PBR, snapshots and maintenance.
+## Use Cases
 
-## Core Quick Start
+- Backend servers behind NAT with only a mapped SSH port.
+- Public entry servers forwarding TCP/UDP traffic to local or overlay targets.
+- Multi-node EasyTier networks with entry, relay, exit, and backend roles.
+- Central Web management for nodes, network profiles, entries, forwards, PBR policies, DDNS settings, and tasks.
+
+## Architecture
+
+- **Controller**: Go HTTP API, JSON file storage, task scheduler, Agent bootstrap command generator, and static Web server.
+- **Agent**: Go daemon installed on entry, relay, exit, or backend nodes. It reports status, polls fixed tasks, and applies structured configs.
+- **Web**: React + Vite management UI for login, nodes, Add Agent, Network Profiles, Entries, Forwards, PBR, Tasks, and Settings.
+- **EasyTier**: Overlay network layer managed by Agent config.
+- **nftables**: Forwarding rule backend generated from structured Forward configs.
+- **PBR**: Linux routing policy generated from structured PBR configs.
+- **DDNS**: Entry/Node integrated config capability for dynamic address updates.
+
+## Quick Start
+
+Install Controller:
 
 ```bash
-curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh
-lq init
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash
 ```
 
-Common Core commands:
+Install an Agent:
 
 ```bash
-lq init
-lq status
-lq --doctor
-lq ddns overview
-lq forward apply-relay --auto-fix-route
-lq update check
-```
-
-## Leikwan Panel 2.1.0 Stable
-
-Leikwan Panel `2.1.0` is the stable safety-control plane. It provides Controller / Agent / Web UI for observation, readonly diagnostics, manual planning and audit metadata.
-
-It supports Controller / Agent, node heartbeat, readonly status reports, readonly Tasks, Plan manual execution, Plan dry-run, Snapshot / Rollback metadata, Safety Gate, Action Catalog, Write Action Review, Operator Auth and strict-auth.
-
-It does **not** execute write operations, create write tasks, accept command strings, add/delete/modify forwards, switch public entries, restart relay, create snapshots, run rollback, or modify nftables, systemd, EasyTier, DDNS, entries, forwards or PBR.
-
-## Leikwan Panel 3.0.0-alpha.4
-
-`3.0.0-alpha.4` is a real-apply alpha for lab testing. It can install/configure EasyTier, write Panel-managed nftables/PBR/DDNS config, reload Panel firewall rules and queue fixed node actions when an operator explicitly enables `enable_write_actions=true` on that Agent.
-
-This alpha is for testing the end-to-end Panel flow:
-
-1. Install Controller.
-2. Open Web Panel.
-3. Login / unlock with the Operator token.
-4. Open `添加节点` and copy the generated Agent install command.
-5. Run that command on A/B VPS nodes.
-6. Create a Network profile.
-7. Create an Entry.
-8. Create a Forward.
-9. Apply and watch Tasks.
-
-Controller one-click install:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-controller.sh | sudo bash
-```
-
-Alpha 阶段默认使用 `panel-3-alpha` 分支。如果 GitHub Release 包已经上传，脚本会优先下载 release 包；如果 release 包不存在，脚本会 fallback 到同一 `source-ref` 的源码构建。源码构建会安装 `go`、`npm`、`nodejs`，耗时会更长；上传 release tarball 后安装会快很多。
-
-Agent one-click join:
-
-Open Web Panel -> `添加节点`, choose the node role and copy the generated command. A full command looks like:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/panel-3-alpha/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --controller-url http://PANEL_HOST:18080 \
-  --token AGENT_TOKEN \
-  --node-name relay-1 \
-  --role relay \
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
+  --controller-url http://YOUR_CONTROLLER:18080 \
+  --token YOUR_AGENT_TOKEN \
+  --node-name edge-node-1 \
+  --role entry \
   --enable-tasks \
   --enable-write-actions
 ```
 
-Alpha write actions are fixed allowlisted actions only. They do not accept command strings, do not run `shell -c`, do not run `bash -c`, do not run `eval`, and do not expose raw nft / iptables / ip route operations. The landing/backend machine does **not** need an Agent; it is configured as `target_host:target_port`.
+## Web Flow
 
-Still disabled or blocked:
+1. Open the Controller URL and save the Operator Token.
+2. Use **Add Agent** to generate an Agent install command.
+3. Confirm new nodes in **Nodes**.
+4. Create a **Network Profile** and apply it to selected nodes.
+5. Create an **Entry** on a public node.
+6. Create a **Forward** for TCP or UDP traffic.
+7. Add **PBR** policies when traffic needs a specific routing table or gateway.
+8. Track task execution in **Tasks**.
 
-- `create_entry`
-- `create_forward`
-- `switch_entry`
-- `rollback_config`
-- `restart_relay`
-- arbitrary commands
-- raw shell
-- raw nft / iptables / ip route
+## Forwarding Modes
 
-## Deployment Model
+- **Single-node direct forwarding**: the Entry node forwards traffic to a local target host and port.
+- **Multi-node tunnel forwarding**: the Entry node forwards traffic to a target node or overlay address through EasyTier.
 
-- Controller can run on a dedicated management host.
-- Agents run on A public entry and B relay nodes.
-- C backend/landing machines do not need Agents.
-- Agents connect outward to Controller.
-- Controller outage does not affect existing Core forwarding.
-- `LEIKWAN_CONTROLLER_TOKEN` is for Agents.
-- `LEIKWAN_OPERATOR_TOKEN` is for Web / Operator APIs.
-- Agent token and Operator token are intentionally not interchangeable.
+## Default Paths
 
-## Documentation
+| Purpose | Path |
+| --- | --- |
+| Controller binary | `/usr/local/bin/edge-tunnel-controller` |
+| Agent binary | `/usr/local/bin/edge-tunnel-agent` |
+| Controller config | `/etc/edge-tunnel/controller` |
+| Agent config | `/etc/edge-tunnel/agent` |
+| Controller data | `/var/lib/edge-tunnel/controller` |
+| Agent state | `/var/lib/edge-tunnel/agent` |
+| Logs | `/var/log/edge-tunnel` |
+| Controller service | `edge-tunnel-controller.service` |
+| Agent service | `edge-tunnel-agent.service` |
+| EasyTier service | `edge-tunnel-easytier.service` |
 
-Panel docs live under `panel/docs/`:
+## Security Boundary
 
-- `quickstart.md`
-- `install-controller.md`
-- `install-agent.md`
-- `network-forwarding.md`
-- `pbr.md`
-- `ddns.md`
-- `security.md`
-- `release-3.0-alpha.md`
+- Agent does not accept arbitrary shell commands.
+- Agent only accepts fixed actions from an allowlist.
+- Dangerous payload keys are rejected: `command`, `cmd`, `shell`, `script`, `raw_nft`, `raw_iptables`, `raw_ip_route`.
+- Tokens are redacted from task output and error strings.
+- Task result size is limited by the Agent.
+- Write actions are disabled unless `EDGE_ENABLE_WRITE_ACTIONS=true`.
 
-## Panel Local Development
-
-Controller:
-
-```bash
-cd panel/controller
-go test ./...
-go run ./cmd/leikwan-controller --listen 127.0.0.1:18080 --db ./data/controller.db --web-dir ./web/dist
-```
-
-Agent:
-
-```bash
-cd panel/agent
-go test ./...
-go run ./cmd/leikwan-agent --config ./agent.yml --once
-```
-
-Web:
+## Development Validation
 
 ```bash
 cd panel/controller
-npm --prefix web install
-npm --prefix web run build
+gofmt -w .
+go test ./... -v -count=1 -timeout=30s
+
+cd ../agent
+gofmt -w .
+go test ./... -v -count=1 -timeout=30s
+
+cd ../..
+npm --prefix panel/controller/web ci
+npm --prefix panel/controller/web run build
+
+bash -n panel/scripts/*.sh
+bash panel/scripts/build-release.sh
 ```
+
+## Current Limits
+
+- This is the first MVP for online testing.
+- EasyTier auto-download is intentionally conservative and can be enhanced later.
+- DDNS currently focuses on safe config landing and provider integration points.
+- PBR requires Linux root privileges plus `iproute2` and `nftables`.

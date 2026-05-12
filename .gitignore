@@ -1,9 +1,5 @@
-dist/
 node_modules/
-.cache/
-.gocache/
-*.tar.gz
-*.tar.gz.sha256
+panel/controller/web/node_modules/
+panel/controller/web/dist/
+panel/dist/
 *.log
-*.tmp
-leikwan-debug-report.txt
