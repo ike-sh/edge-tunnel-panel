@@ -4,7 +4,7 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.1-hotfix
+  --version v0.2.2-test
 ```
 
 打开 `http://服务器IP:18080`。
@@ -26,6 +26,21 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 9. 回到“节点”页面刷新查看 EasyTier 状态和 Peer 数量。
 
 入口节点 peers 会自动留空；后端节点 peers 会自动指向入口公网 IP 的 `11010/tcp` 和 `11010/udp`。
+
+## 验证组网成功
+
+快速组网任务完成后等待 10~20 秒，回到“节点”页面打开“节点操作”，点击“验证组网”。
+
+成功时面板会显示：
+
+- 组网状态：组网成功
+- Peer 数量大于 0
+- 延迟，例如 `146.8 ms`
+- 丢包，例如 `0.0%`
+- 隧道，例如 `udp,tcp`
+- 路由，例如 `DIRECT`
+
+命令行可用 `easytier-cli peer` 和 `easytier-cli route` 辅助确认。
 
 ## 节点预检
 

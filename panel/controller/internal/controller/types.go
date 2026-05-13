@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.2.1-hotfix"
+	Version = "v0.2.2-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -46,6 +46,12 @@ type Node struct {
 	EasyTierStatus        string            `json:"easytier_status"`
 	EasyTierPeerCount     int               `json:"easytier_peer_count"`
 	EasyTierHasRemotePeer bool              `json:"easytier_has_remote_peer"`
+	EasyTierBestLatencyMS float64           `json:"easytier_best_latency_ms,omitempty"`
+	EasyTierPacketLoss    string            `json:"easytier_packet_loss,omitempty"`
+	EasyTierTunnels       []string          `json:"easytier_tunnels,omitempty"`
+	EasyTierRouteType     string            `json:"easytier_route_type,omitempty"`
+	EasyTierNetworkOK     bool              `json:"easytier_network_ok"`
+	EasyTierNetworkReason string            `json:"easytier_network_reason,omitempty"`
 	LastSeenAt            time.Time         `json:"last_seen_at"`
 	Status                string            `json:"status"`
 	StatusReason          string            `json:"status_reason"`

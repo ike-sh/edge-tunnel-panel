@@ -165,6 +165,20 @@ func TestReportDoesNotOverwritePrivateIPWithPublicIP(t *testing.T) {
 	}
 }
 
+func TestReportStoresEasyTierNetworkHealth(t *testing.T) {
+	h := testServer(t)
+	rr := postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "216.23.101.103:23456", map[string]any{"id": "node-net", "node_name": "edge-node", "role": "backend", "easytier_status": "active", "easytier_peer_count": 1, "easytier_has_remote_peer": true, "easytier_best_latency_ms": 146.8, "easytier_packet_loss": "0.0%", "easytier_tunnels": []any{"udp", "tcp"}, "easytier_route_type": "DIRECT", "easytier_network_ok": true})
+	if rr.Code != 200 {
+		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+	body := get(t, h, "/api/v1/nodes", "operator-token").Body.String()
+	for _, want := range []string{`"easytier_network_ok":true`, `"easytier_best_latency_ms":146.8`, `"easytier_packet_loss":"0.0%"`, `"easytier_route_type":"DIRECT"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s in node response: %s", want, body)
+		}
+	}
+}
+
 func TestNodeStatusOnlineByLastSeen(t *testing.T) {
 	store := &Store{data: StoreFile{Nodes: []Node{{ID: "node-online", LastSeenAt: time.Now().UTC().Add(-30 * time.Second)}}}}
 	nodes := store.listNodes()
@@ -266,12 +280,12 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.2.1-hotfix"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.2.2-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.2.1-hotfix") ||
+		!strings.Contains(body, "--version v0.2.2-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||
@@ -354,6 +368,14 @@ func TestRunNodePreflightTaskAllowed(t *testing.T) {
 	rr := post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "node-a", "action": "run_node_preflight", "payload": map[string]any{}})
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "run_node_preflight") {
 		t.Fatalf("expected preflight task allowed: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestVerifyNetworkConnectivityTaskAllowed(t *testing.T) {
+	h := testServer(t)
+	rr := post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "node-a", "action": "verify_network_connectivity", "payload": map[string]any{}})
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "verify_network_connectivity") {
+		t.Fatalf("expected network verification task allowed: %d %s", rr.Code, rr.Body.String())
 	}
 }
 

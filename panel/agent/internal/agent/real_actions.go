@@ -252,36 +252,272 @@ func verifyEasyTier(ctx context.Context, cfg Config, runner CommandRunner) TaskR
 	if cli, err := findEasyTierCLI(runner); err == nil {
 		status["cli_exists"] = true
 		status["cli_path"] = cli
-		status["node_info"] = strings.TrimSpace(runner.Run(ctx, cli, "node").Stdout)
-		peerInfo := strings.TrimSpace(runner.Run(ctx, cli, "peer").Stdout)
-		status["peer_info"] = peerInfo
-		peerCount := countRemotePeers(peerInfo)
-		status["peer_count"] = peerCount
-		status["has_remote_peer"] = peerCount > 0
-		status["route_info"] = strings.TrimSpace(runner.Run(ctx, cli, "route").Stdout)
+		diagnostics := easyTierDiagnosticsFromCLI(ctx, runner, cli, true)
+		status["node_info"] = diagnostics.NodeInfoRaw
+		status["node_info_raw"] = diagnostics.NodeInfoRaw
+		status["peer_info"] = diagnostics.PeerInfoRaw
+		status["peer_info_raw"] = diagnostics.PeerInfoRaw
+		status["route_info"] = diagnostics.RouteInfoRaw
+		status["route_info_raw"] = diagnostics.RouteInfoRaw
+		status["peer_count"] = diagnostics.PeerCount
+		status["has_remote_peer"] = diagnostics.HasRemotePeer
+		status["best_latency_ms"] = diagnostics.BestLatencyMS
+		status["packet_loss"] = diagnostics.PacketLoss
+		status["tunnels"] = diagnostics.Tunnels
+		status["route_type"] = diagnostics.RouteType
+		status["network_ok"] = diagnostics.NetworkOK
+		status["network_reason"] = diagnostics.Reason
+		status["remote_peers"] = diagnostics.RemotePeers
 	} else {
 		status["peer_count"] = 0
 		status["has_remote_peer"] = false
+		status["network_ok"] = false
+		status["network_reason"] = "easytier-cli 不存在"
 	}
 	if active.Err != nil || active.ExitCode != 0 {
 		status["easytier_status"] = "inactive"
 		status["service_active"] = false
+		status["network_ok"] = false
+		status["network_reason"] = "EasyTier 服务未运行"
 		return TaskResult{Status: "failed", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(status), Error: errorText(active)}
 	}
 	return TaskResult{Status: "succeeded", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(status)}
 }
 
+func verifyNetworkConnectivity(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
+	diagnostics := EasyTierDiagnostics{EasyTierStatus: "unknown", NetworkOK: false}
+	if _, err := findEasyTierCore(runner); err != nil {
+		diagnostics.EasyTierStatus = "missing_binary"
+		diagnostics.Reason = "easytier-core 不存在"
+		return TaskResult{Status: "failed", Result: jsonResult(structMap(diagnostics)), Error: diagnostics.Reason}
+	}
+	active := runner.Run(ctx, "systemctl", "is-active", "edge-tunnel-easytier.service")
+	if active.Err != nil || active.ExitCode != 0 || strings.TrimSpace(active.Stdout) != "active" {
+		diagnostics.EasyTierStatus = "inactive"
+		diagnostics.Reason = "EasyTier 服务未运行"
+		return TaskResult{Status: "failed", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(structMap(diagnostics)), Error: diagnostics.Reason}
+	}
+	cli, err := findEasyTierCLI(runner)
+	if err != nil {
+		diagnostics.EasyTierStatus = "active"
+		diagnostics.Reason = "easytier-cli 不存在"
+		return TaskResult{Status: "failed", Result: jsonResult(structMap(diagnostics)), Error: diagnostics.Reason}
+	}
+	diagnostics = easyTierDiagnosticsFromCLI(ctx, runner, cli, true)
+	diagnostics.EasyTierStatus = "active"
+	if diagnostics.NetworkOK {
+		return TaskResult{Status: "succeeded", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(structMap(diagnostics))}
+	}
+	return TaskResult{Status: "failed", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(structMap(diagnostics)), Error: diagnostics.Reason}
+}
+
 func countRemotePeers(peerInfo string) int {
-	count := 0
+	return len(parseEasyTierPeers(peerInfo))
+}
+
+func easyTierDiagnosticsFromCLI(ctx context.Context, runner CommandRunner, cli string, serviceActive bool) EasyTierDiagnostics {
+	node := runner.Run(ctx, cli, "node")
+	peer := runner.Run(ctx, cli, "peer")
+	route := runner.Run(ctx, cli, "route")
+	peers := parseEasyTierPeers(strings.TrimSpace(peer.Stdout + "\n" + peer.Stderr))
+	routes := parseEasyTierRoutes(strings.TrimSpace(route.Stdout + "\n" + route.Stderr))
+	diagnostics := EasyTierDiagnostics{
+		EasyTierStatus: "active",
+		PeerCount:      len(peers),
+		HasRemotePeer:  len(peers) > 0,
+		RemotePeers:    peers,
+		Routes:         routes,
+		NodeInfoRaw:    strings.TrimSpace(node.Stdout + "\n" + node.Stderr),
+		PeerInfoRaw:    strings.TrimSpace(peer.Stdout + "\n" + peer.Stderr),
+		RouteInfoRaw:   strings.TrimSpace(route.Stdout + "\n" + route.Stderr),
+		RouteType:      "unknown",
+	}
+	if !serviceActive {
+		diagnostics.EasyTierStatus = "inactive"
+		diagnostics.Reason = "EasyTier 服务未运行"
+		return diagnostics
+	}
+	if len(peers) == 0 {
+		diagnostics.Reason = "EasyTier 已运行，但没有发现远端 Peer。"
+		return diagnostics
+	}
+	if len(routes) == 0 {
+		diagnostics.Reason = "EasyTier 已发现远端 Peer，但没有发现可用路由。"
+		diagnostics.BestLatencyMS = bestPeerLatency(peers)
+		diagnostics.PacketLoss = peers[0].Loss
+		diagnostics.Tunnels = uniqueTunnels(peers)
+		return diagnostics
+	}
+	diagnostics.NetworkOK = true
+	diagnostics.Reason = "组网成功"
+	diagnostics.BestLatencyMS = bestPeerLatency(peers)
+	diagnostics.PacketLoss = peers[0].Loss
+	diagnostics.Tunnels = uniqueTunnels(peers)
+	if len(routes) > 0 {
+		diagnostics.RouteType = routes[0].RouteType
+	}
+	if diagnostics.RouteType == "" {
+		diagnostics.RouteType = "unknown"
+	}
+	return diagnostics
+}
+
+func parseEasyTierPeers(peerInfo string) []EasyTierPeer {
+	peers := []EasyTierPeer{}
 	for _, line := range strings.Split(peerInfo, "\n") {
-		trimmed := strings.TrimSpace(line)
+		fields := easyTierTableFields(line)
+		trimmed := strings.TrimSpace(strings.Join(fields, " "))
 		lower := strings.ToLower(trimmed)
-		if trimmed == "" || strings.Contains(lower, "local") || strings.Contains(lower, "peerid") || strings.Contains(lower, "peer id") || strings.Contains(lower, "cost") {
+		if len(fields) == 0 || strings.Contains(lower, "peerid") || strings.Contains(lower, "peer id") || strings.Contains(lower, "cost") && strings.Contains(lower, "hostname") {
 			continue
 		}
-		count++
+		if containsFold(fields, "local") || looksLikeTableBorder(fields) {
+			continue
+		}
+		peer := EasyTierPeer{Hostname: fields[0]}
+		if len(fields) > 1 {
+			peer.Cost = fields[1]
+		}
+		if len(fields) > 2 {
+			peer.LatencyMS = parseLatency(fields[2])
+		}
+		if len(fields) > 3 {
+			peer.Loss = fields[3]
+		}
+		if len(fields) > 4 {
+			peer.RX = fields[4]
+			if len(fields) > 5 && isSizeUnit(fields[5]) {
+				peer.RX += " " + fields[5]
+			}
+		}
+		if len(fields) > 6 {
+			peer.TX = fields[6]
+			if len(fields) > 7 && isSizeUnit(fields[7]) {
+				peer.TX += " " + fields[7]
+			}
+		}
+		if len(fields) > 8 {
+			peer.Tunnel = fields[8]
+		}
+		if len(fields) > 9 {
+			peer.NAT = fields[9]
+		}
+		if len(fields) > 10 {
+			peer.Version = fields[10]
+		}
+		peers = append(peers, peer)
 	}
-	return count
+	return peers
+}
+
+func parseEasyTierRoutes(routeInfo string) []EasyTierRoute {
+	routes := []EasyTierRoute{}
+	for _, line := range strings.Split(routeInfo, "\n") {
+		fields := easyTierTableFields(line)
+		trimmed := strings.TrimSpace(strings.Join(fields, " "))
+		lower := strings.ToLower(trimmed)
+		if len(fields) == 0 || strings.Contains(lower, "next") && strings.Contains(lower, "path") || strings.Contains(lower, "hostname") {
+			continue
+		}
+		if containsFold(fields, "local") || looksLikeTableBorder(fields) {
+			continue
+		}
+		route := EasyTierRoute{RouteType: "unknown", NextHopHostname: fields[0]}
+		for _, field := range fields {
+			upper := strings.ToUpper(field)
+			if strings.Contains(upper, "DIRECT") {
+				route.RouteType = "DIRECT"
+			} else if strings.Contains(strings.ToLower(field), "relay") {
+				route.RouteType = "relay"
+			}
+		}
+		if len(fields) > 1 {
+			route.NextHopLatency = parseLatency(fields[1])
+		}
+		if len(fields) > 2 {
+			route.PathLatency = parseLatency(fields[2])
+		}
+		routes = append(routes, route)
+	}
+	return routes
+}
+
+func easyTierTableFields(line string) []string {
+	replacer := strings.NewReplacer("│", " ", "|", " ", "┃", " ", "║", " ", "┆", " ", "┊", " ")
+	cleaned := strings.TrimSpace(replacer.Replace(line))
+	if cleaned == "" {
+		return nil
+	}
+	return strings.Fields(cleaned)
+}
+
+func looksLikeTableBorder(fields []string) bool {
+	if len(fields) != 1 {
+		return false
+	}
+	field := strings.Trim(fields[0], "+-─━┄┅┈┉┬┴┼┌┐└┘├┤")
+	return field == ""
+}
+
+func parseLatency(value string) float64 {
+	value = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(value), "ms"))
+	value = strings.Trim(value, "[](),")
+	n, _ := strconv.ParseFloat(value, 64)
+	return n
+}
+
+func containsFold(fields []string, want string) bool {
+	for _, field := range fields {
+		if strings.EqualFold(strings.Trim(field, "[](),"), want) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSizeUnit(value string) bool {
+	switch strings.ToLower(strings.Trim(value, "[](),")) {
+	case "b", "kb", "mb", "gb", "tb", "kib", "mib", "gib":
+		return true
+	default:
+		return false
+	}
+}
+
+func bestPeerLatency(peers []EasyTierPeer) float64 {
+	best := 0.0
+	for _, peer := range peers {
+		if peer.LatencyMS <= 0 {
+			continue
+		}
+		if best == 0 || peer.LatencyMS < best {
+			best = peer.LatencyMS
+		}
+	}
+	return best
+}
+
+func uniqueTunnels(peers []EasyTierPeer) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, peer := range peers {
+		for _, tunnel := range strings.Split(peer.Tunnel, ",") {
+			tunnel = strings.TrimSpace(tunnel)
+			if tunnel == "" || seen[tunnel] {
+				continue
+			}
+			seen[tunnel] = true
+			out = append(out, tunnel)
+		}
+	}
+	return out
+}
+
+func structMap(value any) map[string]any {
+	raw, _ := json.Marshal(value)
+	out := map[string]any{}
+	_ = json.Unmarshal(raw, &out)
+	return out
 }
 
 func restartEasyTier(ctx context.Context, runner CommandRunner) TaskResult {

@@ -2,7 +2,7 @@
 
 ## 组网配置
 
-`v0.2.1-hotfix` 已支持把组网配置下发到节点：
+`v0.2.2-test` 已支持把组网配置下发到节点：
 
 - 推荐使用“快速组网”：选择公网入口节点和后端节点，面板自动生成 listeners 和 peers。
 - 入口节点 listeners 默认是 `tcp://0.0.0.0:11010`、`udp://0.0.0.0:11010`，peers 自动留空。
@@ -16,6 +16,17 @@
 - Agent 生成 `edge-tunnel-easytier.service`，并用固定 `systemctl` 参数启动。
 
 如果 GitHub 下载失败，任务会明确返回 URL 和错误原因；如果磁盘空间不足，任务会提示清理空间或调整 Agent 状态目录。可以配置代理、手动安装 EasyTier，或稍后重试。
+
+## 组网成功判定
+
+执行“验证组网”后，Agent 会固定调用：
+
+- `systemctl is-active edge-tunnel-easytier.service`
+- `easytier-cli node`
+- `easytier-cli peer`
+- `easytier-cli route`
+
+面板会展示远端 Peer 数量、最佳延迟、丢包、隧道类型和路由类型。`peer_count > 0` 且路由为 `DIRECT` 或可用路径时，可认为 EasyTier peer 层已经连通。
 
 ## 公网入口
 

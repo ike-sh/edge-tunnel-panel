@@ -81,7 +81,15 @@ func CollectStatus(ctx context.Context, cfg Config, runner CommandRunner) AgentS
 	if result := runner.Run(ctx, "systemctl", "is-active", "edge-tunnel-agent.service"); result.Err == nil && result.ExitCode == 0 {
 		status.AgentServiceActive = true
 	}
-	status.EasyTierPeerCount, status.EasyTierHasRemotePeer = easyTierPeerSummary(ctx, runner)
+	diagnostics := easyTierConnectivitySummary(ctx, runner, status.EasyTierServiceActive)
+	status.EasyTierPeerCount = diagnostics.PeerCount
+	status.EasyTierHasRemotePeer = diagnostics.HasRemotePeer
+	status.EasyTierBestLatencyMS = diagnostics.BestLatencyMS
+	status.EasyTierPacketLoss = diagnostics.PacketLoss
+	status.EasyTierTunnels = diagnostics.Tunnels
+	status.EasyTierRouteType = diagnostics.RouteType
+	status.EasyTierNetworkOK = diagnostics.NetworkOK
+	status.EasyTierNetworkReason = diagnostics.Reason
 	return status
 }
 
@@ -99,6 +107,12 @@ func ReportFromStatus(cfg Config, status AgentStatus) ReportRequest {
 		EasyTierStatus:        easyTierStatus(cfg, status),
 		EasyTierPeerCount:     status.EasyTierPeerCount,
 		EasyTierHasRemotePeer: status.EasyTierHasRemotePeer,
+		EasyTierBestLatencyMS: status.EasyTierBestLatencyMS,
+		EasyTierPacketLoss:    status.EasyTierPacketLoss,
+		EasyTierTunnels:       status.EasyTierTunnels,
+		EasyTierRouteType:     status.EasyTierRouteType,
+		EasyTierNetworkOK:     status.EasyTierNetworkOK,
+		EasyTierNetworkReason: status.EasyTierNetworkReason,
 		Capabilities:          status.Capabilities,
 		Warnings:              status.Warnings,
 	}
@@ -120,17 +134,12 @@ func easyTierStatus(cfg Config, status AgentStatus) string {
 	return "inactive"
 }
 
-func easyTierPeerSummary(ctx context.Context, runner CommandRunner) (int, bool) {
+func easyTierConnectivitySummary(ctx context.Context, runner CommandRunner, serviceActive bool) EasyTierDiagnostics {
 	cli, err := findEasyTierCLI(runner)
 	if err != nil {
-		return 0, false
+		return EasyTierDiagnostics{EasyTierStatus: "unknown", NetworkOK: false, Reason: "easytier-cli 不存在"}
 	}
-	result := runner.Run(ctx, cli, "peer")
-	if result.Err != nil || result.ExitCode != 0 {
-		return 0, false
-	}
-	count := countRemotePeers(result.Stdout + "\n" + result.Stderr)
-	return count, count > 0
+	return easyTierDiagnosticsFromCLI(ctx, runner, cli, serviceActive)
 }
 
 func privateIP() string {

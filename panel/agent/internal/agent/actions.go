@@ -20,6 +20,8 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		return verifyFile(cfg.ConfigDir)
 	case "verify_easytier_status":
 		return verifyEasyTier(ctx, cfg, runner)
+	case "verify_network_connectivity":
+		return verifyNetworkConnectivity(ctx, cfg, runner)
 	case "verify_forward_rules":
 		return verifyFile(forwardNFTPath(cfg))
 	case "verify_pbr_rules":

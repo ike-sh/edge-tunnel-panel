@@ -675,15 +675,61 @@ func TestVerifyEasyTierStatusDetailedFields(t *testing.T) {
 
 type peerRunner struct {
 	fakeRunner
-	peerOutput string
+	peerOutput  string
+	routeOutput string
+	nodeOutput  string
 }
 
 func (r *peerRunner) Run(ctx context.Context, name string, args ...string) CommandResult {
 	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	if strings.HasSuffix(name, "easytier-cli") && len(args) == 1 && args[0] == "node" {
+		return CommandResult{Stdout: r.nodeOutput, ExitCode: 0}
+	}
 	if strings.HasSuffix(name, "easytier-cli") && len(args) == 1 && args[0] == "peer" {
 		return CommandResult{Stdout: r.peerOutput, ExitCode: 0}
 	}
+	if strings.HasSuffix(name, "easytier-cli") && len(args) == 1 && args[0] == "route" {
+		return CommandResult{Stdout: r.routeOutput, ExitCode: 0}
+	}
 	return CommandResult{Stdout: "active", ExitCode: 0}
+}
+
+const samplePeerOutput = `
+hostname cost lat(ms) loss rx tx tunnel NAT version
+local-host Local 0 0.0% 0 B 0 B local Unknown 2.4.5
+ECS-dFbLSf p2p 146.8 0.0% 3.49 kB 3.92 kB udp,tcp Restricted 2.4.5-4c4d172e
+`
+
+const sampleRouteOutput = `
+next_hop_hostname next_hop_lat path_latency route_type
+ECS-dFbLSf 146.8 146.8 DIRECT
+`
+
+func TestParseEasyTierPeerLocalOnly(t *testing.T) {
+	if peers := parseEasyTierPeers("hostname cost lat(ms)\nlocal Local 0"); len(peers) != 0 {
+		t.Fatalf("local peer should be ignored: %+v", peers)
+	}
+}
+
+func TestParseEasyTierPeerRemote(t *testing.T) {
+	peers := parseEasyTierPeers(samplePeerOutput)
+	if len(peers) != 1 || peers[0].Hostname != "ECS-dFbLSf" || peers[0].Cost != "p2p" {
+		t.Fatalf("bad remote peer parse: %+v", peers)
+	}
+}
+
+func TestParseEasyTierPeerLatencyLossTunnel(t *testing.T) {
+	peers := parseEasyTierPeers(samplePeerOutput)
+	if len(peers) != 1 || peers[0].LatencyMS != 146.8 || peers[0].Loss != "0.0%" || peers[0].Tunnel != "udp,tcp" {
+		t.Fatalf("bad peer metrics: %+v", peers)
+	}
+}
+
+func TestParseEasyTierRouteDirect(t *testing.T) {
+	routes := parseEasyTierRoutes(sampleRouteOutput)
+	if len(routes) != 1 || routes[0].RouteType != "DIRECT" || routes[0].NextHopHostname != "ECS-dFbLSf" {
+		t.Fatalf("bad route parse: %+v", routes)
+	}
 }
 
 func TestVerifyEasyTierStatusPeerCountLocalOnly(t *testing.T) {
@@ -708,12 +754,32 @@ func TestVerifyEasyTierStatusPeerCountRemotePeer(t *testing.T) {
 	}
 }
 
+func TestVerifyNetworkConnectivitySuccess(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true}}, peerOutput: samplePeerOutput, routeOutput: sampleRouteOutput}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_network_connectivity", Payload: map[string]any{}})
+	for _, want := range []string{`"network_ok":true`, `"peer_count":1`, `"best_latency_ms":146.8`, `"packet_loss":"0.0%"`, `"route_type":"DIRECT"`, `"tunnels":["udp","tcp"]`} {
+		if result.Status != "succeeded" || !strings.Contains(result.Result, want) {
+			t.Fatalf("missing %s in result: %+v", want, result)
+		}
+	}
+}
+
+func TestVerifyNetworkConnectivityNoRemotePeer(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true}}, peerOutput: "local Local 0", routeOutput: ""}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_network_connectivity", Payload: map[string]any{}})
+	if result.Status != "failed" || !strings.Contains(result.Result, `"network_ok":false`) || !strings.Contains(result.Error, "没有发现远端 Peer") {
+		t.Fatalf("expected no remote peer failure: %+v", result)
+	}
+}
+
 func TestAgentReportIncludesEasyTierPeerFields(t *testing.T) {
 	cfg := testConfig(t)
-	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true, "nft": true, "ip": true}}, peerOutput: "Local\npeer-remote"}
+	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true, "nft": true, "ip": true}}, peerOutput: samplePeerOutput, routeOutput: sampleRouteOutput}
 	status := CollectStatus(context.Background(), cfg, runner)
 	report := ReportFromStatus(cfg, status)
-	if report.EasyTierPeerCount != 1 || !report.EasyTierHasRemotePeer {
+	if report.EasyTierPeerCount != 1 || !report.EasyTierHasRemotePeer || !report.EasyTierNetworkOK || report.EasyTierBestLatencyMS != 146.8 || report.EasyTierRouteType != "DIRECT" {
 		t.Fatalf("report missing peer details: %+v", report)
 	}
 }

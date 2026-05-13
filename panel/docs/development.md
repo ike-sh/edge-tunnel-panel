@@ -27,11 +27,15 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-VERSION=v0.2.1-hotfix bash panel/scripts/build-release.sh
+VERSION=v0.2.2-test bash panel/scripts/build-release.sh
 ```
 
-## v0.2.1-hotfix 重点
+## v0.2.2-test 重点
 
+- 新增只读 action：`verify_network_connectivity`。
+- 解析 `easytier-cli peer`，展示远端 Peer、延迟、丢包和 tunnel。
+- 解析 `easytier-cli route`，展示 `DIRECT` 等路由类型。
+- 节点页显示“组网成功 / 未发现 Peer / 服务未运行”等状态。
 - 修复 Web 中文文案显示为问号的问题。
 - 组网配置新增“快速组网”：选择入口节点和后端节点后自动创建两个下发任务。
 - 节点操作改为卡片内紧凑横向操作区，不再使用抽屉。

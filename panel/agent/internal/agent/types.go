@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const Version = "v0.2.1-hotfix"
+const Version = "v0.2.2-test"
 
 type APIResponse struct {
 	OK    bool            `json:"ok"`
@@ -55,6 +55,12 @@ type ReportRequest struct {
 	EasyTierStatus        string          `json:"easytier_status"`
 	EasyTierPeerCount     int             `json:"easytier_peer_count"`
 	EasyTierHasRemotePeer bool            `json:"easytier_has_remote_peer"`
+	EasyTierBestLatencyMS float64         `json:"easytier_best_latency_ms,omitempty"`
+	EasyTierPacketLoss    string          `json:"easytier_packet_loss,omitempty"`
+	EasyTierTunnels       []string        `json:"easytier_tunnels,omitempty"`
+	EasyTierRouteType     string          `json:"easytier_route_type,omitempty"`
+	EasyTierNetworkOK     bool            `json:"easytier_network_ok"`
+	EasyTierNetworkReason string          `json:"easytier_network_reason,omitempty"`
 	Capabilities          map[string]bool `json:"capabilities"`
 	Warnings              []string        `json:"warnings,omitempty"`
 }
@@ -77,7 +83,49 @@ type AgentStatus struct {
 	EasyTierIP            string          `json:"easytier_ip,omitempty"`
 	EasyTierPeerCount     int             `json:"easytier_peer_count"`
 	EasyTierHasRemotePeer bool            `json:"easytier_has_remote_peer"`
+	EasyTierBestLatencyMS float64         `json:"easytier_best_latency_ms,omitempty"`
+	EasyTierPacketLoss    string          `json:"easytier_packet_loss,omitempty"`
+	EasyTierTunnels       []string        `json:"easytier_tunnels,omitempty"`
+	EasyTierRouteType     string          `json:"easytier_route_type,omitempty"`
+	EasyTierNetworkOK     bool            `json:"easytier_network_ok"`
+	EasyTierNetworkReason string          `json:"easytier_network_reason,omitempty"`
 	LastAppliedConfigHash string          `json:"last_applied_config_hash,omitempty"`
+}
+
+type EasyTierPeer struct {
+	Hostname  string  `json:"hostname,omitempty"`
+	Cost      string  `json:"cost,omitempty"`
+	LatencyMS float64 `json:"latency_ms,omitempty"`
+	Loss      string  `json:"loss,omitempty"`
+	RX        string  `json:"rx,omitempty"`
+	TX        string  `json:"tx,omitempty"`
+	Tunnel    string  `json:"tunnel,omitempty"`
+	NAT       string  `json:"nat,omitempty"`
+	Version   string  `json:"version,omitempty"`
+}
+
+type EasyTierRoute struct {
+	NextHopHostname string  `json:"next_hop_hostname,omitempty"`
+	NextHopLatency  float64 `json:"next_hop_lat,omitempty"`
+	PathLatency     float64 `json:"path_latency,omitempty"`
+	RouteType       string  `json:"route_type,omitempty"`
+}
+
+type EasyTierDiagnostics struct {
+	EasyTierStatus string          `json:"easytier_status"`
+	NetworkOK      bool            `json:"network_ok"`
+	Reason         string          `json:"reason,omitempty"`
+	PeerCount      int             `json:"peer_count"`
+	HasRemotePeer  bool            `json:"has_remote_peer"`
+	BestLatencyMS  float64         `json:"best_latency_ms,omitempty"`
+	PacketLoss     string          `json:"packet_loss,omitempty"`
+	Tunnels        []string        `json:"tunnels,omitempty"`
+	RouteType      string          `json:"route_type,omitempty"`
+	RemotePeers    []EasyTierPeer  `json:"remote_peers,omitempty"`
+	Routes         []EasyTierRoute `json:"routes,omitempty"`
+	NodeInfoRaw    string          `json:"node_info_raw,omitempty"`
+	PeerInfoRaw    string          `json:"peer_info_raw,omitempty"`
+	RouteInfoRaw   string          `json:"route_info_raw,omitempty"`
 }
 
 type Task struct {

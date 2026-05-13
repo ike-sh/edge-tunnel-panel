@@ -2,7 +2,7 @@
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
 
-当前版本：`v0.2.1-hotfix`
+当前版本：`v0.2.2-test`
 
 ## 典型场景
 
@@ -25,7 +25,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.1-hotfix
+  --version v0.2.2-test
 ```
 
 安装完成后打开：
@@ -47,7 +47,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.2.1-hotfix \
+  --version v0.2.2-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -70,9 +70,30 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 如果 EasyTier 已运行但 Peer 数量仍为 0，请检查入口服务器安全组是否放行 `11010/tcp` 和 `11010/udp`，并确认两个节点使用同一网络名和网络密钥。
 
+## 如何确认组网成功
+
+面板会通过“验证组网”任务解析 `easytier-cli peer` 和 `easytier-cli route`：
+
+1. 节点页 EasyTier 状态为“运行中”。
+2. 组网状态为“组网成功”。
+3. Peer 数量大于 0。
+4. 延迟有数值，例如 `146.8 ms`。
+5. 丢包为 `0.0%` 或较低。
+6. 隧道显示 `udp,tcp` 等可用 tunnel。
+7. 路由显示 `DIRECT` 或可用路径。
+
+命令行也可以在 Agent 服务器上验证：
+
+```bash
+easytier-cli peer
+easytier-cli route
+```
+
+如果 peer 显示远端节点、`lat(ms)` 有数值、`loss` 较低、`tunnel` 包含 `udp,tcp`，即表示 EasyTier peer 层已经连通。
+
 ### EasyTier 安装预检
 
-`v0.2.1-hotfix` 会在安装 EasyTier 前检查临时目录和 `/usr/local/bin` 所在分区空间，并优先使用 `/var/lib/edge-tunnel/agent/tmp` 作为工作目录。Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
+`v0.2.2-test` 会在安装 EasyTier 前检查临时目录和 `/usr/local/bin` 所在分区空间，并优先使用 `/var/lib/edge-tunnel/agent/tmp` 作为工作目录。Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
 
 如果任务页出现 `no space left on device` 或“磁盘空间不足”，可先执行：
 
@@ -128,7 +149,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 当前限制
 
-- `v0.2.1-hotfix` 是测试版。
+- `v0.2.2-test` 是测试版。
 - EasyTier 自动下载/安装后续增强。
 - DDNS provider 后续增强。
 - PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
@@ -159,5 +180,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.1-hotfix bash panel/scripts/build-release.sh
+VERSION=v0.2.2-test bash panel/scripts/build-release.sh
 ```

@@ -167,6 +167,22 @@ func numberValue(v any) int {
 	}
 }
 
+func floatValue(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case json.Number:
+		value, _ := n.Float64()
+		return value
+	default:
+		return 0
+	}
+}
+
 func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
 	if !s.strictAuth {
 		return true
@@ -325,7 +341,7 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 	if publicIP == "" && observedIP != "" {
 		publicIP = observedIP
 	}
-	node, err := s.store.upsertReport(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), PublicIP: publicIP, PrivateIP: stringValue(req["private_ip"], ""), ObservedIP: observedIP, AgentVersion: stringValue(req["agent_version"], ""), Hostname: stringValue(req["hostname"], ""), OS: stringValue(req["os"], ""), Arch: stringValue(req["arch"], ""), EasyTierIP: stringValue(req["easytier_ip"], ""), EasyTierStatus: stringValue(req["easytier_status"], "unknown"), EasyTierPeerCount: numberValue(req["easytier_peer_count"]), EasyTierHasRemotePeer: boolValue(req["easytier_has_remote_peer"]), LastSeenAt: time.Now().UTC(), Status: "online", StatusReason: "recent heartbeat normal", Capabilities: caps, Labels: map[string]string{}})
+	node, err := s.store.upsertReport(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), PublicIP: publicIP, PrivateIP: stringValue(req["private_ip"], ""), ObservedIP: observedIP, AgentVersion: stringValue(req["agent_version"], ""), Hostname: stringValue(req["hostname"], ""), OS: stringValue(req["os"], ""), Arch: stringValue(req["arch"], ""), EasyTierIP: stringValue(req["easytier_ip"], ""), EasyTierStatus: stringValue(req["easytier_status"], "unknown"), EasyTierPeerCount: numberValue(req["easytier_peer_count"]), EasyTierHasRemotePeer: boolValue(req["easytier_has_remote_peer"]), EasyTierBestLatencyMS: floatValue(req["easytier_best_latency_ms"]), EasyTierPacketLoss: stringValue(req["easytier_packet_loss"], ""), EasyTierTunnels: stringListValue(req["easytier_tunnels"]), EasyTierRouteType: stringValue(req["easytier_route_type"], ""), EasyTierNetworkOK: boolValue(req["easytier_network_ok"]), EasyTierNetworkReason: stringValue(req["easytier_network_reason"], ""), LastSeenAt: time.Now().UTC(), Status: "online", StatusReason: "recent heartbeat normal", Capabilities: caps, Labels: map[string]string{}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
@@ -679,7 +695,7 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 	if kind == "tasks" {
 		action := stringValue(req["action"], "collect_agent_status")
 		blocked := map[string]bool{"arbitrary_command": true, "shell_c": true, "bash_c": true, "eval": true, "raw_nft": true, "raw_iptables": true, "raw_ip_route": true, "curl_pipe_bash": true}
-		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_pbr_config": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
+		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_pbr_config": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
 		if blocked[action] || !allowed[action] {
 			writeErr(w, 400, "BLOCKED_ACTION", "action is not allowed")
 			return
