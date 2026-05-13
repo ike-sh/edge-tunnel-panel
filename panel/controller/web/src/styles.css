@@ -173,6 +173,10 @@ button.danger {
   padding: 16px;
 }
 
+.add-agent-card {
+  max-width: 980px;
+}
+
 .command-block {
   margin-top: 14px;
 }
@@ -195,7 +199,8 @@ button.danger {
 }
 
 .action-panel {
-  display: block;
+  display: grid;
+  gap: 10px;
   max-height: 360px;
   overflow: auto;
   margin-top: 10px;
@@ -253,6 +258,10 @@ button.danger {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: 14px;
+}
+
+.node-card .alert {
+  margin: 10px 0;
 }
 
 .node-card {

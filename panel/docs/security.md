@@ -1,15 +1,27 @@
-# 安全说明
+﻿# 安全说明
 
 ## Token
 
-- `EDGE_OPERATOR_TOKEN`：Web/API 操作员 Token。
-- `EDGE_CONTROLLER_TOKEN`：Agent 接入主控使用的 Token。
+- Web/API 使用 Operator Token；测试模式可关闭严格鉴权。
+- Agent 使用 Controller Token 注册、上报和轮询任务。
+- 日志、任务输出和错误信息会做 redaction。
 
-两类 Token 不应混用，也不要写入公开日志。
+## Agent action allowlist
 
-## Agent 边界
+Agent 只执行固定 action，例如：
 
-Agent 只接受固定 action，不接受任意命令字符串。危险字段会被拒绝：
+- `collect_agent_status`
+- `run_node_preflight`
+- `verify_easytier_status`
+- `verify_network_connectivity`
+- `apply_network_profile`
+- `install_or_update_easytier`
+- `apply_forward_config`
+- `verify_forward_rules`
+
+## 禁止 payload
+
+Controller 和 Agent 会拒绝危险字段：
 
 - `command`
 - `cmd`
@@ -19,10 +31,6 @@ Agent 只接受固定 action，不接受任意命令字符串。危险字段会�
 - `raw_iptables`
 - `raw_ip_route`
 
-## 写入动作
+## Root 权限
 
-启用 `EDGE_ENABLE_WRITE_ACTIONS=true` 后，Agent 可以写入 EasyTier、转发、PBR、DDNS 配置。只应在可信服务器启用。
-
-## 权限
-
-安装脚本和 systemd 示例默认使用 root，因为 nftables、路由策略和服务管理都需要系统权限。
+Agent 需要 root 权限来写 systemd、nftables 和 EasyTier 配置。写入动作应只在可信节点开启。

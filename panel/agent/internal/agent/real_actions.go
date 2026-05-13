@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -182,14 +183,31 @@ func applyNetworkProfile(ctx context.Context, cfg Config, runner CommandRunner, 
 	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"easytier_status": "active", "config_path": easyTierPath(cfg), "service_path": easyTierServiceSystemPath(), "binary_path": easyTierBinary, "cli_path": cliPath, "listeners": listeners, "peers": peers})}
 }
 
-func applyForwardConfig(cfg Config, payload map[string]any) TaskResult {
-	if err := writeJSONFile(forwardPath(cfg), payload, 0o600); err != nil {
+func applyForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
+	rule := mapPayload(payload, "forward_rule")
+	if len(rule) == 0 {
+		rule = payload
+	}
+	if err := writeJSONFile(forwardPath(cfg), rule, 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
-	if err := writeFile(forwardNFTPath(cfg), []byte(renderForwardNFT(payload)), 0o600); err != nil {
+	if err := writeFile(forwardNFTPath(cfg), []byte(renderForwardNFT(rule)), 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
-	return TaskResult{Status: "succeeded", Result: "forward config applied"}
+	check := runner.Run(ctx, "nft", "-c", "-f", forwardNFTPath(cfg))
+	if check.Err != nil || check.ExitCode != 0 {
+		return TaskResult{Status: "failed", Stdout: check.Stdout, Stderr: check.Stderr, Error: "nft syntax check failed: " + errorText(check), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": false, "applied": false})}
+	}
+	apply := runner.Run(ctx, "nft", "-f", forwardNFTPath(cfg))
+	if apply.Err != nil || apply.ExitCode != 0 {
+		return TaskResult{Status: "failed", Stdout: apply.Stdout, Stderr: apply.Stderr, Error: "nft apply failed: " + errorText(apply), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "applied": false})}
+	}
+	warnings := []string{}
+	ipForward := runner.Run(ctx, "sysctl", "-n", "net.ipv4.ip_forward")
+	if strings.TrimSpace(ipForward.Stdout) != "1" {
+		warnings = append(warnings, "net.ipv4.ip_forward is not enabled; forwarding may not work until IP forwarding is enabled")
+	}
+	return TaskResult{Status: "succeeded", Stdout: strings.TrimSpace(check.Stdout + "\n" + apply.Stdout), Stderr: strings.TrimSpace(check.Stderr + "\n" + apply.Stderr), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "applied": true, "warnings": warnings, "listen_port": intField(rule, "listen_port"), "target_ip": stringField(rule, "target_ip", stringField(rule, "target_host", "")), "target_port": intField(rule, "target_port")})}
 }
 
 func applyPBRConfig(cfg Config, payload map[string]any) TaskResult {
@@ -268,17 +286,19 @@ func verifyEasyTier(ctx context.Context, cfg Config, runner CommandRunner) TaskR
 		status["network_ok"] = diagnostics.NetworkOK
 		status["network_reason"] = diagnostics.Reason
 		status["remote_peers"] = diagnostics.RemotePeers
+		status["virtual_ip"] = diagnostics.VirtualIP
+		status["easytier_ip"] = diagnostics.VirtualIP
 	} else {
 		status["peer_count"] = 0
 		status["has_remote_peer"] = false
 		status["network_ok"] = false
-		status["network_reason"] = "easytier-cli 不存在"
+		status["network_reason"] = "easytier-cli not found"
 	}
 	if active.Err != nil || active.ExitCode != 0 {
 		status["easytier_status"] = "inactive"
 		status["service_active"] = false
 		status["network_ok"] = false
-		status["network_reason"] = "EasyTier 服务未运行"
+		status["network_reason"] = "EasyTier service is not running"
 		return TaskResult{Status: "failed", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(status), Error: errorText(active)}
 	}
 	return TaskResult{Status: "succeeded", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(status)}
@@ -288,19 +308,19 @@ func verifyNetworkConnectivity(ctx context.Context, cfg Config, runner CommandRu
 	diagnostics := EasyTierDiagnostics{EasyTierStatus: "unknown", NetworkOK: false}
 	if _, err := findEasyTierCore(runner); err != nil {
 		diagnostics.EasyTierStatus = "missing_binary"
-		diagnostics.Reason = "easytier-core 不存在"
+		diagnostics.Reason = "easytier-core not found"
 		return TaskResult{Status: "failed", Result: jsonResult(structMap(diagnostics)), Error: diagnostics.Reason}
 	}
 	active := runner.Run(ctx, "systemctl", "is-active", "edge-tunnel-easytier.service")
 	if active.Err != nil || active.ExitCode != 0 || strings.TrimSpace(active.Stdout) != "active" {
 		diagnostics.EasyTierStatus = "inactive"
-		diagnostics.Reason = "EasyTier 服务未运行"
+		diagnostics.Reason = "EasyTier service is not running"
 		return TaskResult{Status: "failed", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(structMap(diagnostics)), Error: diagnostics.Reason}
 	}
 	cli, err := findEasyTierCLI(runner)
 	if err != nil {
 		diagnostics.EasyTierStatus = "active"
-		diagnostics.Reason = "easytier-cli 不存在"
+		diagnostics.Reason = "easytier-cli not found"
 		return TaskResult{Status: "failed", Result: jsonResult(structMap(diagnostics)), Error: diagnostics.Reason}
 	}
 	diagnostics = easyTierDiagnosticsFromCLI(ctx, runner, cli, true)
@@ -332,24 +352,25 @@ func easyTierDiagnosticsFromCLI(ctx context.Context, runner CommandRunner, cli s
 		RouteInfoRaw:   strings.TrimSpace(route.Stdout + "\n" + route.Stderr),
 		RouteType:      "unknown",
 	}
+	diagnostics.VirtualIP = parseEasyTierVirtualIP(diagnostics.NodeInfoRaw)
 	if !serviceActive {
 		diagnostics.EasyTierStatus = "inactive"
-		diagnostics.Reason = "EasyTier 服务未运行"
+		diagnostics.Reason = "EasyTier service is not running"
 		return diagnostics
 	}
 	if len(peers) == 0 {
-		diagnostics.Reason = "EasyTier 已运行，但没有发现远端 Peer。"
+		diagnostics.Reason = "EasyTier is running, but no remote Peer was found."
 		return diagnostics
 	}
 	if len(routes) == 0 {
-		diagnostics.Reason = "EasyTier 已发现远端 Peer，但没有发现可用路由。"
+		diagnostics.Reason = "EasyTier found remote Peer, but no usable route was found."
 		diagnostics.BestLatencyMS = bestPeerLatency(peers)
 		diagnostics.PacketLoss = peers[0].Loss
 		diagnostics.Tunnels = uniqueTunnels(peers)
 		return diagnostics
 	}
 	diagnostics.NetworkOK = true
-	diagnostics.Reason = "组网成功"
+	diagnostics.Reason = "network connected"
 	diagnostics.BestLatencyMS = bestPeerLatency(peers)
 	diagnostics.PacketLoss = peers[0].Loss
 	diagnostics.Tunnels = uniqueTunnels(peers)
@@ -361,7 +382,6 @@ func easyTierDiagnosticsFromCLI(ctx context.Context, runner CommandRunner, cli s
 	}
 	return diagnostics
 }
-
 func parseEasyTierPeers(peerInfo string) []EasyTierPeer {
 	peers := []EasyTierPeer{}
 	for _, line := range strings.Split(peerInfo, "\n") {
@@ -442,9 +462,27 @@ func parseEasyTierRoutes(routeInfo string) []EasyTierRoute {
 	return routes
 }
 
+var virtualIPPattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d+)?\b`)
+
+func parseEasyTierVirtualIP(nodeInfo string) string {
+	for _, line := range strings.Split(nodeInfo, "\n") {
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, "virtual") && !strings.Contains(lower, "ipv4") && !strings.Contains(lower, "ip") {
+			continue
+		}
+		for _, match := range virtualIPPattern.FindAllString(line, -1) {
+			ip := strings.Split(match, "/")[0]
+			if ip == "0.0.0.0" || strings.HasPrefix(ip, "127.") {
+				continue
+			}
+			return match
+		}
+	}
+	return ""
+}
+
 func easyTierTableFields(line string) []string {
-	replacer := strings.NewReplacer("│", " ", "|", " ", "┃", " ", "║", " ", "┆", " ", "┊", " ")
-	cleaned := strings.TrimSpace(replacer.Replace(line))
+	cleaned := strings.TrimSpace(strings.ReplaceAll(line, "|", " "))
 	if cleaned == "" {
 		return nil
 	}
@@ -455,10 +493,9 @@ func looksLikeTableBorder(fields []string) bool {
 	if len(fields) != 1 {
 		return false
 	}
-	field := strings.Trim(fields[0], "+-─━┄┅┈┉┬┴┼┌┐└┘├┤")
+	field := strings.Trim(fields[0], "+-=")
 	return field == ""
 }
-
 func parseLatency(value string) float64 {
 	value = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(value), "ms"))
 	value = strings.Trim(value, "[](),")
@@ -600,7 +637,11 @@ func edgeTunnelEasyTierService(cfg Config, payload map[string]any, binary string
 	if binary == "" {
 		binary = "/usr/local/bin/easytier-core"
 	}
-	args := []string{binary, "--network-name", stringField(payload, "network_name", "edge-net"), "--network-secret", stringField(payload, "network_secret", "")}
+	args := []string{binary, "-d"}
+	if cidr := stringField(payload, "cidr", ""); cidr != "" {
+		args = append(args, "-i", cidr)
+	}
+	args = append(args, "--network-name", stringField(payload, "network_name", "edge-net"), "--network-secret", stringField(payload, "network_secret", ""))
 	for _, listener := range listeners {
 		args = append(args, "-l", listener)
 	}
@@ -612,13 +653,55 @@ func edgeTunnelEasyTierService(cfg Config, payload map[string]any, binary string
 
 func renderForwardNFT(payload map[string]any) string {
 	protocol := strings.ToLower(stringField(payload, "protocol", "tcp"))
-	if protocol != "udp" {
-		protocol = "tcp"
-	}
 	listenPort := intField(payload, "listen_port")
-	targetHost := stringField(payload, "target_host", "127.0.0.1")
+	targetHost := stringField(payload, "target_ip", stringField(payload, "target_host", "127.0.0.1"))
 	targetPort := intField(payload, "target_port")
-	return fmt.Sprintf("table ip edge_tunnel_forward {\n  chain prerouting {\n    type nat hook prerouting priority dstnat;\n    %s dport %d dnat to %s:%d\n  }\n}\n", protocol, listenPort, targetHost, targetPort)
+	rules := []string{}
+	for _, proto := range forwardProtocols(protocol) {
+		rules = append(rules, fmt.Sprintf("    %s dport %d dnat ip to %s:%d", proto, listenPort, targetHost, targetPort))
+	}
+	return fmt.Sprintf("table inet edge_tunnel_forward {\n  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n%s\n  }\n  chain postrouting {\n    type nat hook postrouting priority srcnat; policy accept;\n    masquerade\n  }\n}\n", strings.Join(rules, "\n"))
+}
+
+func forwardProtocols(protocol string) []string {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "udp":
+		return []string{"udp"}
+	case "both":
+		return []string{"tcp", "udp"}
+	default:
+		return []string{"tcp"}
+	}
+}
+
+func verifyForwardRules(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
+	status := map[string]any{
+		"config_path":   forwardPath(cfg),
+		"nft_path":      forwardNFTPath(cfg),
+		"table_exists":  false,
+		"rules_present": false,
+	}
+	if _, err := os.Stat(forwardPath(cfg)); err != nil {
+		return TaskResult{Status: "failed", Result: jsonResult(status), Error: err.Error()}
+	}
+	if _, err := os.Stat(forwardNFTPath(cfg)); err != nil {
+		return TaskResult{Status: "failed", Result: jsonResult(status), Error: err.Error()}
+	}
+	table := runner.Run(ctx, "nft", "list", "table", "inet", "edge_tunnel_forward")
+	ipForward := runner.Run(ctx, "sysctl", "-n", "net.ipv4.ip_forward")
+	status["ip_forward"] = strings.TrimSpace(ipForward.Stdout)
+	status["nft_output"] = strings.TrimSpace(table.Stdout + "\n" + table.Stderr)
+	status["table_exists"] = table.Err == nil && table.ExitCode == 0
+	status["rules_present"] = strings.Contains(table.Stdout, "dnat")
+	warnings := []string{}
+	if strings.TrimSpace(ipForward.Stdout) != "1" {
+		warnings = append(warnings, "net.ipv4.ip_forward is not enabled")
+	}
+	status["warnings"] = warnings
+	if table.Err != nil || table.ExitCode != 0 {
+		return TaskResult{Status: "failed", Stdout: table.Stdout, Stderr: table.Stderr, Result: jsonResult(status), Error: errorText(table)}
+	}
+	return TaskResult{Status: "succeeded", Stdout: table.Stdout, Stderr: table.Stderr, Result: jsonResult(status)}
 }
 
 func renderPBRScript(payload map[string]any) string {

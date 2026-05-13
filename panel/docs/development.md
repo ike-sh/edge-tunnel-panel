@@ -1,4 +1,4 @@
-# 开发验证
+﻿# 开发验证
 
 ## Controller
 
@@ -27,41 +27,24 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-VERSION=v0.2.2-test bash panel/scripts/build-release.sh
+VERSION=v0.2.3-test bash panel/scripts/build-release.sh
 ```
 
-## v0.2.2-test 重点
+## v0.2.3-test 重点
 
-- 新增只读 action：`verify_network_connectivity`。
-- 解析 `easytier-cli peer`，展示远端 Peer、延迟、丢包和 tunnel。
-- 解析 `easytier-cli route`，展示 `DIRECT` 等路由类型。
-- 节点页显示“组网成功 / 未发现 Peer / 服务未运行”等状态。
-- 修复 Web 中文文案显示为问号的问题。
-- 组网配置新增“快速组网”：选择入口节点和后端节点后自动创建两个下发任务。
-- 节点操作改为卡片内紧凑横向操作区，不再使用抽屉。
-- HTTP 环境下复制命令使用 clipboard fallback。
-- EasyTier 安装前检查磁盘空间。
-- EasyTier 安装优先使用 Agent 状态目录下的临时目录。
-- 新增只读 action：`run_node_preflight`。
-- 任务页对空间不足错误给出中文提示。
-- 节点支持从主控面板删除记录。
-- 任务页支持按节点和状态筛选。
-- Agent purge 会清理 EasyTier service/config，可选删除 EasyTier 二进制。
+- 添加节点改为紧凑卡片式接入流程，不再让用户选择节点角色。
+- 组网配置收敛为“快速组网”主流程，并生成组网卡片。
+- NetworkLink 记录入口节点、后端节点、任务、Peer、延迟、丢包、隧道和路由。
+- EasyTier ExecStart 增加 `-d` 和 `-i CIDR`，并解析虚拟 IP。
+- 新增转发规则 MVP：Controller CRUD、Web 表单、Agent 生成 nftables 文件。
+- `apply_forward_config` 先执行 `nft -c` 检查，再执行 `nft -f` 加载。
+- `verify_forward_rules` 可检查 nftables table、规则和 IPv4 forwarding 状态。
 
 ## 后续规划
 
-参考同类转发面板的产品思路，后续计划增强：
-
-- 节点管理体验增强
-- 隧道/转发规则管理
-- 端口转发 / 隧道转发两种模式
-- 转发规则批量启停
-- 节点批量下发
-- TCP/UDP 转发状态检查
-- 隧道/转发流量统计
-- 转发规则分组
-- 节点分组
-- 分组权限
-- 限速/配额
-- 节点分享或多面板对接
-- 动态最优路径
+- 多端口池转发。
+- 转发规则批量启停。
+- 转发状态和流量统计。
+- 更完整的 DDNS provider。
+- PBR 策略可视化和验证。
+- 节点分组、权限和多面板对接。

@@ -1,15 +1,13 @@
-# DDNS
+﻿# DDNS
 
-DDNS 不是一级主流程，而是节点或公网入口的内置能力。
+DDNS 在 Edge Tunnel Panel 中作为节点或公网入口的内置配置能力，不作为独立主菜单功能。
 
-## 当前能力
-
-测试版主要完成配置落地和安全 redaction，provider 同步逻辑后续增强。
-
-## 配置路径
-
-Agent 写入：
+当前 MVP 重点是组网和转发链路，DDNS 配置会通过固定 action 写入结构化配置文件：
 
 - `/etc/edge-tunnel/agent/ddns.json`
 
-Token 建议使用引用方式保存，任务输出会隐藏敏感值。
+安全要求：
+
+- Token 不在任务输出中明文展示。
+- 不接受任意 shell 或脚本。
+- 后续可扩展 Cloudflare、Webhook 等 provider。

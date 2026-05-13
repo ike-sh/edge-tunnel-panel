@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const Version = "v0.2.2-test"
+const Version = "v0.2.3-test"
 
 type APIResponse struct {
 	OK    bool            `json:"ok"`
@@ -61,6 +61,8 @@ type ReportRequest struct {
 	EasyTierRouteType     string          `json:"easytier_route_type,omitempty"`
 	EasyTierNetworkOK     bool            `json:"easytier_network_ok"`
 	EasyTierNetworkReason string          `json:"easytier_network_reason,omitempty"`
+	EasyTierDHCPEnabled   bool            `json:"easytier_dhcp_enabled"`
+	EasyTierCIDR          string          `json:"easytier_cidr,omitempty"`
 	Capabilities          map[string]bool `json:"capabilities"`
 	Warnings              []string        `json:"warnings,omitempty"`
 }
@@ -89,6 +91,8 @@ type AgentStatus struct {
 	EasyTierRouteType     string          `json:"easytier_route_type,omitempty"`
 	EasyTierNetworkOK     bool            `json:"easytier_network_ok"`
 	EasyTierNetworkReason string          `json:"easytier_network_reason,omitempty"`
+	EasyTierDHCPEnabled   bool            `json:"easytier_dhcp_enabled"`
+	EasyTierCIDR          string          `json:"easytier_cidr,omitempty"`
 	LastAppliedConfigHash string          `json:"last_applied_config_hash,omitempty"`
 }
 
@@ -121,6 +125,7 @@ type EasyTierDiagnostics struct {
 	PacketLoss     string          `json:"packet_loss,omitempty"`
 	Tunnels        []string        `json:"tunnels,omitempty"`
 	RouteType      string          `json:"route_type,omitempty"`
+	VirtualIP      string          `json:"virtual_ip,omitempty"`
 	RemotePeers    []EasyTierPeer  `json:"remote_peers,omitempty"`
 	Routes         []EasyTierRoute `json:"routes,omitempty"`
 	NodeInfoRaw    string          `json:"node_info_raw,omitempty"`

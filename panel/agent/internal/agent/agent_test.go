@@ -285,8 +285,9 @@ func TestExecuteReadonlyTask(t *testing.T) {
 func TestApplyForwardWritesStructuredConfig(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
-	payload := map[string]any{"protocol": "udp", "listen_port": 8443.0, "target_host": "10.144.1.9", "target_port": 443.0}
-	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_forward_config", Payload: payload})
+	payload := map[string]any{"protocol": "both", "listen_port": 8443.0, "target_ip": "10.144.1.9", "target_port": 443.0}
+	runner := &fakeRunner{}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_forward_config", Payload: payload})
 	if result.Status != "succeeded" {
 		t.Fatalf("forward apply failed: %+v", result)
 	}
@@ -295,11 +296,15 @@ func TestApplyForwardWritesStructuredConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if strings.Contains(text, "raw_nft") || !strings.Contains(text, "udp dport") {
+	if strings.Contains(text, "raw_nft") || !strings.Contains(text, "udp dport") || !strings.Contains(text, "tcp dport") || !strings.Contains(text, "table inet edge_tunnel_forward") {
 		t.Fatalf("unexpected nft output: %s", text)
 	}
 	if _, err := os.Stat(forwardPath(cfg)); err != nil {
 		t.Fatal(err)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	if !strings.Contains(joined, "nft -c -f") || !strings.Contains(joined, "nft -f") {
+		t.Fatalf("expected nft check before apply: %s", joined)
 	}
 }
 
@@ -517,7 +522,7 @@ func TestDiskSpacePreflightFailsWhenLow(t *testing.T) {
 	diskFreeBytesFunc = func(path string) (uint64, error) { return 1 << 20, nil }
 	t.Cleanup(func() { diskFreeBytesFunc = oldDisk })
 	_, err := selectInstallTempDir(cfg, map[string]any{})
-	if err == nil || !strings.Contains(err.Error(), "磁盘空间不足") {
+	if err == nil || !strings.Contains(err.Error(), "EasyTier") {
 		t.Fatalf("expected friendly low disk error, got %v", err)
 	}
 }
@@ -551,7 +556,7 @@ func TestInstallEasyTierNoSpaceLeftReturnsFriendlyError(t *testing.T) {
 	diskFreeBytesFunc = func(path string) (uint64, error) { return 1 << 20, nil }
 	t.Cleanup(func() { diskFreeBytesFunc = oldDisk })
 	result := ExecuteTask(context.Background(), cfg, &installRunner{}, Task{Action: "install_or_update_easytier", Payload: map[string]any{}})
-	if result.Status != "failed" || !strings.Contains(result.Error, "磁盘空间不足") {
+	if result.Status != "failed" || !strings.Contains(result.Error, "EasyTier") {
 		t.Fatalf("expected friendly no space error: %+v", result)
 	}
 }
@@ -582,11 +587,19 @@ func TestRunNodePreflightRedactsToken(t *testing.T) {
 
 func TestGenerateEasyTierServiceUsesCLIArgs(t *testing.T) {
 	cfg := testConfig(t)
-	service := edgeTunnelEasyTierService(cfg, map[string]any{"network_name": "edge", "network_secret": "secret"}, "/usr/local/bin/easytier-core", []string{"tcp://0.0.0.0:11010"}, []string{"tcp://1.2.3.4:11010"})
-	for _, want := range []string{"--network-name edge", "--network-secret secret", "-l tcp://0.0.0.0:11010", "-p tcp://1.2.3.4:11010"} {
+	service := edgeTunnelEasyTierService(cfg, map[string]any{"network_name": "edge", "network_secret": "secret", "cidr": "10.144.0.0/16"}, "/usr/local/bin/easytier-core", []string{"tcp://0.0.0.0:11010"}, []string{"tcp://1.2.3.4:11010"})
+	for _, want := range []string{"-d", "-i 10.144.0.0/16", "--network-name edge", "--network-secret secret", "-l tcp://0.0.0.0:11010", "-p tcp://1.2.3.4:11010"} {
 		if !strings.Contains(service, want) {
 			t.Fatalf("service missing %q: %s", want, service)
 		}
+	}
+}
+
+func TestGenerateEasyTierServiceIncludesDHCPAndCIDR(t *testing.T) {
+	cfg := testConfig(t)
+	service := edgeTunnelEasyTierService(cfg, map[string]any{"network_name": "edge", "network_secret": "secret", "cidr": "10.144.0.0/16"}, "/usr/local/bin/easytier-core", nil, nil)
+	if !strings.Contains(service, "-d") || !strings.Contains(service, "-i 10.144.0.0/16") {
+		t.Fatalf("service should enable DHCP and CIDR: %s", service)
 	}
 }
 
@@ -732,6 +745,13 @@ func TestParseEasyTierRouteDirect(t *testing.T) {
 	}
 }
 
+func TestParseEasyTierNodeVirtualIP(t *testing.T) {
+	out := "hostname edge-node\nVirtual IP 10.144.0.23/16\n"
+	if got := parseEasyTierVirtualIP(out); got != "10.144.0.23/16" {
+		t.Fatalf("bad virtual IP parse: %q", got)
+	}
+}
+
 func TestVerifyEasyTierStatusPeerCountLocalOnly(t *testing.T) {
 	cfg := testConfig(t)
 	_ = writeFile(easyTierPath(cfg), []byte("network_name = \"edge\""), 0o600)
@@ -769,18 +789,36 @@ func TestVerifyNetworkConnectivityNoRemotePeer(t *testing.T) {
 	cfg := testConfig(t)
 	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true}}, peerOutput: "local Local 0", routeOutput: ""}
 	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_network_connectivity", Payload: map[string]any{}})
-	if result.Status != "failed" || !strings.Contains(result.Result, `"network_ok":false`) || !strings.Contains(result.Error, "没有发现远端 Peer") {
+	if result.Status != "failed" || !strings.Contains(result.Result, `"network_ok":false`) || !strings.Contains(result.Error, "no remote Peer") {
 		t.Fatalf("expected no remote peer failure: %+v", result)
 	}
 }
 
 func TestAgentReportIncludesEasyTierPeerFields(t *testing.T) {
 	cfg := testConfig(t)
-	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true, "nft": true, "ip": true}}, peerOutput: samplePeerOutput, routeOutput: sampleRouteOutput}
+	_ = writeJSONFile(networkProfilePath(cfg), map[string]any{"cidr": "10.144.0.0/16", "dhcp": true}, 0o600)
+	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true, "nft": true, "ip": true}}, peerOutput: samplePeerOutput, routeOutput: sampleRouteOutput, nodeOutput: "Virtual IP 10.144.0.23/16"}
 	status := CollectStatus(context.Background(), cfg, runner)
 	report := ReportFromStatus(cfg, status)
 	if report.EasyTierPeerCount != 1 || !report.EasyTierHasRemotePeer || !report.EasyTierNetworkOK || report.EasyTierBestLatencyMS != 146.8 || report.EasyTierRouteType != "DIRECT" {
 		t.Fatalf("report missing peer details: %+v", report)
+	}
+	if report.EasyTierIP != "10.144.0.23/16" || !report.EasyTierDHCPEnabled || report.EasyTierCIDR != "10.144.0.0/16" {
+		t.Fatalf("report missing virtual IP/DHCP details: %+v", report)
+	}
+}
+
+func TestVerifyForwardRules(t *testing.T) {
+	cfg := testConfig(t)
+	_ = writeJSONFile(forwardPath(cfg), map[string]any{"name": "ssh"}, 0o600)
+	_ = writeFile(forwardNFTPath(cfg), []byte("table inet edge_tunnel_forward {}"), 0o600)
+	runner := &fakeRunner{paths: map[string]bool{"nft": true}}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_forward_rules", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, "table_exists") {
+		t.Fatalf("verify forward failed: %+v", result)
+	}
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "nft list table inet edge_tunnel_forward") {
+		t.Fatalf("missing nft verify call: %s", strings.Join(runner.calls, "\n"))
 	}
 }
 

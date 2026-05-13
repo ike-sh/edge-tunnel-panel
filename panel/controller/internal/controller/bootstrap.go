@@ -5,14 +5,17 @@ import (
 	"strings"
 )
 
-const defaultAgentInstallVersion = "v0.2.2-test"
+const defaultAgentInstallVersion = "v0.2.3-test"
 
 func installScriptURL() string {
 	return "https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh"
 }
 
 func buildAgentInstallCommand(prefix, version, controllerURL, token, nodeName, role string, enableTasks, enableWrites bool) string {
-	args := fmt.Sprintf("--version %s --controller-url %s --token %s --node-name %s --role %s", version, controllerURL, token, nodeName, role)
+	args := fmt.Sprintf("--version %s --controller-url %s --token %s --node-name %s", version, controllerURL, token, nodeName)
+	if strings.TrimSpace(role) != "" {
+		args += " --role " + strings.TrimSpace(role)
+	}
 	if enableTasks {
 		args += " --enable-tasks"
 	}

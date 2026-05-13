@@ -1,31 +1,30 @@
-# Edge Tunnel Panel
+﻿# Edge Tunnel Panel
 
-Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
+Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发规则、任务和状态。
 
-当前版本：`v0.2.2-test`
+当前版本：`v0.2.3-test`
 
-## 典型场景
+## 适用场景
 
-- 被控服务器没有公网 IPv4。
-- 服务器只有 SSH NAT 端口，无法直接暴露业务端口。
-- 需要一台公网服务器作为入口节点。
-- 需要单节点直接转发，或多节点通过 EasyTier 隧道转发。
+- 被控服务器没有公网 IPv4，只能主动连接外部服务。
+- 服务器只有 SSH NAT 端口，业务端口无法直接暴露。
+- 需要一台公网服务器作为入口节点，把请求转发到后端节点。
+- 需要先通过 EasyTier 建立入口节点和后端节点之间的 overlay 网络。
+- 需要从 Web 面板查看节点在线状态、Peer、延迟、丢包、隧道和路由。
 
 ## 架构
 
-- **Controller**：主控 API、JSON 存储、任务下发、Web 静态文件服务。
-- **Agent**：安装在被控节点，主动注册、上报状态、轮询固定任务。
-- **Web**：浏览器面板，默认中文，提供“添加节点”一键命令入口。
-- **EasyTier**：节点间 overlay 组网。
-- **nftables**：结构化生成 TCP/UDP 转发规则。
-- **PBR**：结构化生成 Linux 出口策略。
-- **DDNS**：作为节点/公网入口的内置配置能力。
+- **Controller**：Go HTTP API、JSON 文件存储、任务下发、Web 静态文件服务。
+- **Agent**：安装在节点上，主动注册、心跳上报、轮询固定 action 任务。
+- **Web**：React + Vite 面板，默认中文界面。
+- **EasyTier**：负责入口节点和后端节点之间的 overlay 组网。
+- **nftables**：第一版转发规则由 Agent 结构化生成，不接受 raw nft。
 
 ## 快速安装 Controller
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.2-test
+  --version v0.2.3-test
 ```
 
 安装完成后打开：
@@ -34,53 +33,78 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 http://服务器IP:18080
 ```
 
+测试版默认不强制 Web Operator Token。生产环境可启用严格鉴权。
+
 ## 添加节点
 
-1. 打开 Web，保存安装输出中的 Operator Token。
-2. 进入“节点”页面，点击“添加节点”。
-3. 填写 Controller 地址、节点名称、角色和版本。
-4. 点击“生成一键命令”。
-5. 复制命令到被控服务器执行。
-6. 回到“节点”页面刷新，查看在线状态。
+1. 打开 Web，进入“节点”。
+2. 点击“添加节点”。
+3. 面板会显示一张“新节点接入”卡片。
+4. 通常只需要修改节点名称，然后点击“获取一键安装命令”。
+5. 复制 root 命令到被控服务器执行。
+6. 执行完成后回到“节点”页面，等待 30 秒或点击刷新。
 
 示例命令：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.2.2-test \
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- \
+  --version v0.2.3-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
-  --role backend \
   --enable-tasks \
   --enable-write-actions
 ```
 
-## 组网配置
+节点用途不再由“角色”字段决定，而是在组网和转发流程中选择入口节点、后端节点。
 
-1. 确认节点已上线。
+## 快速组网
+
+1. 确认至少两个节点在线。
 2. 进入“组网配置”。
-3. 使用上方“快速组网”，选择一个在线公网入口节点和一个在线后端节点。
-4. 面板会自动生成同一组网络名和网络密钥。
-5. 入口节点自动获得 listeners，peers 留空。
-6. 后端节点自动获得 listeners，并把 peers 指向入口节点公网 IP 的 `11010/tcp` 和 `11010/udp`。
-7. 点击“创建并应用组网”，Controller 会创建两个 `apply_network_profile` 任务。
-8. 进入“任务”页面按节点筛选查看结果。
-9. 回到“节点”页面刷新，查看 EasyTier 状态和 Peer 数量。
+3. 使用“快速组网”选择一个公网入口节点和一个后端节点。
+4. 面板自动生成同一组 `network_name`、`network_secret`、CIDR、listeners 和 peers。
+5. 入口节点 listeners 默认是 `tcp://0.0.0.0:11010` 和 `udp://0.0.0.0:11010`，peers 为空。
+6. 后端节点 peers 自动指向入口公网 IP：`tcp://入口公网IP:11010`、`udp://入口公网IP:11010`。
+7. Controller 创建两个 `apply_network_profile` 任务，并生成一张组网卡片。
+8. 等待 10~20 秒后点击“验证组网”，或到“任务”页面查看结果。
 
-如果 EasyTier 已运行但 Peer 数量仍为 0，请检查入口服务器安全组是否放行 `11010/tcp` 和 `11010/udp`，并确认两个节点使用同一网络名和网络密钥。
+组网卡片会展示入口节点、后端节点、Peer 数量、延迟、丢包、隧道、路由和状态。
+
+## EasyTier 虚拟 IP
+
+`v0.2.3-test` 生成的 EasyTier systemd 启动参数默认包含：
+
+```text
+-d -i 10.144.0.0/16
+```
+
+`-d` 用于启用 DHCP/虚拟 IP，`-i` 指定虚拟网段。Agent 会解析 `easytier-cli node` 输出并上报虚拟 IP。若组网已成功但虚拟 IP 仍显示“未分配”，请重新应用组网配置或检查 EasyTier 版本兼容性。
+
+## 转发规则 MVP
+
+当前版本开始提供单端口 TCP/UDP 转发规则 MVP：
+
+1. 先完成快速组网并确认后端节点有 EasyTier 虚拟 IP。
+2. 进入“转发规则”。
+3. 创建规则：选择入口节点、后端节点、监听端口、目标端口和协议。
+4. 默认目标 IP 使用后端节点的 EasyTier 虚拟 IP。
+5. 点击“应用规则”，Controller 会在入口节点创建 `apply_forward_config` 任务。
+6. Agent 写入 `/etc/edge-tunnel/agent/forward.json` 和 `/etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft`。
+7. Agent 先执行 `nft -c -f` 语法检查，通过后再执行 `nft -f` 加载规则。
+8. 可点击“验证规则”创建 `verify_forward_rules` 任务。
+
+限制：第一版只支持单端口规则，不支持端口池、限速、计费或用户系统。
 
 ## 如何确认组网成功
 
-面板会通过“验证组网”任务解析 `easytier-cli peer` 和 `easytier-cli route`：
-
-1. 节点页 EasyTier 状态为“运行中”。
-2. 组网状态为“组网成功”。
-3. Peer 数量大于 0。
-4. 延迟有数值，例如 `146.8 ms`。
-5. 丢包为 `0.0%` 或较低。
-6. 隧道显示 `udp,tcp` 等可用 tunnel。
-7. 路由显示 `DIRECT` 或可用路径。
+- 节点页 EasyTier 状态为“运行中”。
+- 组网状态为“组网成功”。
+- Peer 数量大于 0。
+- 延迟有数值，例如 `146.8 ms`。
+- 丢包较低，例如 `0.0%`。
+- 隧道显示 `udp,tcp` 或 `tcp,udp`。
+- 路由显示 `DIRECT` 或可用路径。
 
 命令行也可以在 Agent 服务器上验证：
 
@@ -88,24 +112,6 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 easytier-cli peer
 easytier-cli route
 ```
-
-如果 peer 显示远端节点、`lat(ms)` 有数值、`loss` 较低、`tunnel` 包含 `udp,tcp`，即表示 EasyTier peer 层已经连通。
-
-### EasyTier 安装预检
-
-`v0.2.2-test` 会在安装 EasyTier 前检查临时目录和 `/usr/local/bin` 所在分区空间，并优先使用 `/var/lib/edge-tunnel/agent/tmp` 作为工作目录。Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
-
-如果任务页出现 `no space left on device` 或“磁盘空间不足”，可先执行：
-
-```bash
-df -h
-du -sh /tmp/* 2>/dev/null | sort -h | tail
-journalctl --vacuum-size=100M
-apt clean
-rm -rf /tmp/edge-easytier-*
-```
-
-然后回到节点操作里重新执行“安装/更新 EasyTier”。
 
 ## 卸载
 
@@ -121,19 +127,13 @@ Controller 彻底删除：
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- --purge
 ```
 
-Agent 保留数据卸载：
+Agent 彻底删除并清理 EasyTier service/config：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge
 ```
 
-Agent 彻底删除：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- --purge
-```
-
-Agent 彻底删除并移除 EasyTier 二进制：
+如果要同时删除 `easytier-core` 和 `easytier-cli`：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge --remove-easytier-binaries
@@ -141,36 +141,11 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 安全边界
 
-- Agent 不接受任意 shell 命令。
-- Agent 只执行固定 action。
-- 拒绝危险字段：`command`、`cmd`、`shell`、`script`、`raw_nft`、`raw_iptables`、`raw_ip_route`。
-- Token 会在任务输出和错误中 redaction。
-- 写入动作需要显式启用 `EDGE_ENABLE_WRITE_ACTIONS=true`。
-
-## 当前限制
-
-- `v0.2.2-test` 是测试版。
-- EasyTier 自动下载/安装后续增强。
-- DDNS provider 后续增强。
-- PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
-
-## 后续规划
-
-参考成熟转发面板的设计思路，后续计划增强：
-
-- 节点管理体验增强。
-- 隧道/转发规则管理。
-- 端口转发 / 隧道转发两种模式。
-- 转发规则批量启停。
-- 节点批量下发。
-- TCP/UDP 转发状态检查。
-- 隧道/转发流量统计。
-- 转发规则分组。
-- 节点分组。
-- 分组权限。
-- 限速/配额。
-- 节点分享或多面板对接。
-- 动态最优路径。
+- Agent 不接受任意 `command`、`cmd`、`shell`、`script`。
+- Agent 不接受 `raw_nft`、`raw_iptables`、`raw_ip_route`。
+- 写入动作必须是固定 action 映射到固定 Go 函数和固定 argv。
+- Token、任务输出和错误信息会做 redaction。
+- 任务输出会限制大小。
 
 ## 开发验证
 
@@ -180,5 +155,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.2-test bash panel/scripts/build-release.sh
+VERSION=v0.2.3-test bash panel/scripts/build-release.sh
 ```

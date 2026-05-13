@@ -23,7 +23,7 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 	case "verify_network_connectivity":
 		return verifyNetworkConnectivity(ctx, cfg, runner)
 	case "verify_forward_rules":
-		return verifyFile(forwardNFTPath(cfg))
+		return verifyForwardRules(ctx, cfg, runner)
 	case "verify_pbr_rules":
 		return verifyPBR(ctx, cfg, runner)
 	case "verify_ddns_status":
@@ -37,7 +37,7 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 	case "apply_entry_config":
 		return writeJSONAction(entryPath(cfg), task.Payload)
 	case "apply_forward_config":
-		return applyForwardConfig(cfg, task.Payload)
+		return applyForwardConfig(ctx, cfg, runner, task.Payload)
 	case "apply_pbr_config":
 		return applyPBRConfig(cfg, task.Payload)
 	case "apply_ddns_config":

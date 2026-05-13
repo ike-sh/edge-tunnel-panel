@@ -70,6 +70,18 @@ func (s *Store) listNetworkProfiles() []NetworkProfile {
 	return append([]NetworkProfile(nil), s.data.NetworkProfiles...)
 }
 
+func (s *Store) listNetworkLinks() []NetworkLink {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := append([]NetworkLink(nil), s.data.NetworkLinks...)
+	nodes := append([]Node(nil), s.data.Nodes...)
+	at := now()
+	for i := range out {
+		out[i] = s.decorateNetworkLinkLocked(out[i], nodes, at)
+	}
+	return out
+}
+
 func applyNodeLiveness(node Node, at time.Time) Node {
 	node.Status, node.StatusReason = nodeStatusReason(node, at)
 	return node
@@ -242,6 +254,93 @@ func (s *Store) updateTaskResult(id string, req map[string]any) (Task, bool, err
 	return Task{}, false, nil
 }
 
+func (s *Store) listForwards() []Forward {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Forward(nil), s.data.Forwards...)
+}
+
+func (s *Store) getForward(id string) (Forward, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, forward := range s.data.Forwards {
+		if forward.ID == id {
+			return forward, true
+		}
+	}
+	return Forward{}, false
+}
+
+func (s *Store) createForward(req map[string]any) (Forward, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, err := forwardFromRequest(req, nil)
+	if err != nil {
+		return Forward{}, err
+	}
+	item.ID = newID()
+	n := now()
+	item.CreatedAt = n
+	item.UpdatedAt = n
+	item.Status = "draft"
+	s.data.Forwards = append(s.data.Forwards, item)
+	return item, s.saveLocked()
+}
+
+func (s *Store) updateForward(id string, req map[string]any) (Forward, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Forwards {
+		if s.data.Forwards[i].ID != id {
+			continue
+		}
+		item, err := forwardFromRequest(req, &s.data.Forwards[i])
+		if err != nil {
+			return Forward{}, true, err
+		}
+		item.ID = s.data.Forwards[i].ID
+		item.CreatedAt = s.data.Forwards[i].CreatedAt
+		item.UpdatedAt = now()
+		s.data.Forwards[i] = item
+		return item, true, s.saveLocked()
+	}
+	return Forward{}, false, nil
+}
+
+func (s *Store) deleteForward(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Forwards {
+		if s.data.Forwards[i].ID == id {
+			s.data.Forwards = append(s.data.Forwards[:i], s.data.Forwards[i+1:]...)
+			return true, s.saveLocked()
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) updateForwardTask(id, taskID, field, status string) (Forward, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Forwards {
+		if s.data.Forwards[i].ID != id {
+			continue
+		}
+		switch field {
+		case "apply":
+			s.data.Forwards[i].LastApplyTaskID = taskID
+		case "verify":
+			s.data.Forwards[i].LastVerifyTaskID = taskID
+		}
+		if status != "" {
+			s.data.Forwards[i].Status = status
+		}
+		s.data.Forwards[i].UpdatedAt = now()
+		return s.data.Forwards[i], true, s.saveLocked()
+	}
+	return Forward{}, false, nil
+}
+
 func (s *Store) getNetworkProfile(id string) (NetworkProfile, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,6 +363,101 @@ func (s *Store) createNetworkProfile(req map[string]any) (NetworkProfile, error)
 	item := NetworkProfile{ID: newID(), Name: name, NetworkName: stringValue(req["network_name"], "edge-net"), NetworkSecret: stringValue(req["network_secret"], randomSecret()), CIDR: stringValue(req["cidr"], "10.144.0.0/16"), ProtocolPreference: stringValue(req["protocol_preference"], "auto"), Listeners: defaultListeners(stringListValue(req["listeners"])), Peers: stringListValue(req["peers"]), CreatedAt: n, UpdatedAt: n}
 	s.data.NetworkProfiles = append(s.data.NetworkProfiles, item)
 	return item, s.saveLocked()
+}
+
+func (s *Store) createNetworkLink(link NetworkLink) (NetworkLink, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if link.ID == "" {
+		link.ID = newID()
+	}
+	n := now()
+	link.CreatedAt = n
+	link.UpdatedAt = n
+	if link.Status == "" {
+		link.Status = "pending"
+	}
+	s.data.NetworkLinks = append(s.data.NetworkLinks, link)
+	return s.decorateNetworkLinkLocked(link, s.data.Nodes, n), s.saveLocked()
+}
+
+func (s *Store) getNetworkLink(id string) (NetworkLink, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, link := range s.data.NetworkLinks {
+		if link.ID == id {
+			return s.decorateNetworkLinkLocked(link, s.data.Nodes, now()), true
+		}
+	}
+	return NetworkLink{}, false
+}
+
+func (s *Store) deleteNetworkLink(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.NetworkLinks {
+		if s.data.NetworkLinks[i].ID == id {
+			s.data.NetworkLinks = append(s.data.NetworkLinks[:i], s.data.NetworkLinks[i+1:]...)
+			return true, s.saveLocked()
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) updateNetworkLinkTasks(id, entryTaskID, backendTaskID string, verified bool) (NetworkLink, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.NetworkLinks {
+		if s.data.NetworkLinks[i].ID != id {
+			continue
+		}
+		if entryTaskID != "" {
+			s.data.NetworkLinks[i].EntryTaskID = entryTaskID
+		}
+		if backendTaskID != "" {
+			s.data.NetworkLinks[i].BackendTaskID = backendTaskID
+		}
+		if verified {
+			s.data.NetworkLinks[i].LastVerifyAt = now()
+		}
+		s.data.NetworkLinks[i].UpdatedAt = now()
+		return s.decorateNetworkLinkLocked(s.data.NetworkLinks[i], s.data.Nodes, now()), true, s.saveLocked()
+	}
+	return NetworkLink{}, false, nil
+}
+
+func (s *Store) decorateNetworkLinkLocked(link NetworkLink, nodes []Node, at time.Time) NetworkLink {
+	var entry, backend *Node
+	for i := range nodes {
+		node := applyNodeLiveness(nodes[i], at)
+		if node.ID == link.EntryNodeID {
+			entry = &node
+		}
+		if node.ID == link.BackendNodeID {
+			backend = &node
+		}
+	}
+	link.Status = "pending"
+	if entry != nil {
+		link.EntryPeerCount = entry.EasyTierPeerCount
+	}
+	if backend != nil {
+		link.BackendPeerCount = backend.EasyTierPeerCount
+	}
+	if entry != nil && backend != nil {
+		link.BestLatencyMS = firstPositive(entry.EasyTierBestLatencyMS, backend.EasyTierBestLatencyMS)
+		link.PacketLoss = firstString(entry.EasyTierPacketLoss, backend.EasyTierPacketLoss)
+		link.Tunnels = firstStringList(entry.EasyTierTunnels, backend.EasyTierTunnels)
+		link.RouteType = firstString(entry.EasyTierRouteType, backend.EasyTierRouteType)
+		if entry.EasyTierStatus == "active" && backend.EasyTierStatus == "active" && (entry.EasyTierNetworkOK || backend.EasyTierNetworkOK || entry.EasyTierPeerCount > 0 || backend.EasyTierPeerCount > 0) {
+			link.Status = "connected"
+		} else if entry.EasyTierStatus == "active" || backend.EasyTierStatus == "active" {
+			link.Status = "partial"
+		} else {
+			link.Status = "pending"
+		}
+	}
+	return link
 }
 
 func (s *Store) updateNetworkProfile(id string, req map[string]any) (NetworkProfile, bool, error) {
@@ -328,6 +522,99 @@ type validationError string
 
 func (e validationError) Error() string  { return string(e) }
 func errValidation(message string) error { return validationError(message) }
+
+func firstPositive(values ...float64) float64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstStringList(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) > 0 {
+			return append([]string(nil), value...)
+		}
+	}
+	return nil
+}
+
+func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) {
+	item := Forward{Enabled: true, Protocol: "tcp", ListenHost: "0.0.0.0", TargetNodeIPSource: "easytier_ip", Status: "draft"}
+	if existing != nil {
+		item = *existing
+	}
+	if value := stringValue(req["name"], item.Name); value != "" {
+		item.Name = value
+	}
+	item.EntryID = stringValue(req["entry_id"], item.EntryID)
+	item.EntryNodeID = stringValue(req["entry_node_id"], item.EntryNodeID)
+	item.BackendNodeID = stringValue(req["backend_node_id"], stringValue(req["target_node_id"], item.BackendNodeID))
+	item.Protocol = strings.ToLower(stringValue(req["protocol"], item.Protocol))
+	item.ListenHost = stringValue(req["listen_host"], item.ListenHost)
+	if port := intValue(req["listen_port"]); port != 0 {
+		item.ListenPort = port
+	}
+	item.TargetIP = stringValue(req["target_ip"], stringValue(req["target_host"], item.TargetIP))
+	if port := intValue(req["target_port"]); port != 0 {
+		item.TargetPort = port
+	}
+	item.TargetNodeIPSource = stringValue(req["target_node_ip_source"], item.TargetNodeIPSource)
+	item.Remark = stringValue(req["remark"], item.Remark)
+	if value, ok := req["enabled"]; ok {
+		item.Enabled = boolValue(value)
+	}
+	item.TargetMode = stringValue(req["target_mode"], item.TargetMode)
+	item.TargetNodeID = stringValue(req["target_node_id"], item.TargetNodeID)
+	item.TargetHost = item.TargetIP
+	if item.Name == "" {
+		return Forward{}, errValidation("name is required")
+	}
+	if !validForwardProtocol(item.Protocol) {
+		return Forward{}, errValidation("protocol must be tcp, udp, or both")
+	}
+	if item.EntryNodeID == "" {
+		return Forward{}, errValidation("entry_node_id is required")
+	}
+	if item.BackendNodeID == "" {
+		return Forward{}, errValidation("backend_node_id is required")
+	}
+	if !validPort(item.ListenPort) {
+		return Forward{}, errValidation("listen_port must be 1-65535")
+	}
+	if !validPort(item.TargetPort) {
+		return Forward{}, errValidation("target_port must be 1-65535")
+	}
+	if item.ListenHost == "" {
+		item.ListenHost = "0.0.0.0"
+	}
+	if item.TargetNodeIPSource == "" {
+		item.TargetNodeIPSource = "easytier_ip"
+	}
+	return item, nil
+}
+
+func validForwardProtocol(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "tcp", "udp", "both":
+		return true
+	default:
+		return false
+	}
+}
+
+func validPort(port int) bool { return port >= 1 && port <= 65535 }
 
 func stringListValue(value any) []string {
 	switch list := value.(type) {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"runtime"
@@ -82,6 +83,7 @@ func CollectStatus(ctx context.Context, cfg Config, runner CommandRunner) AgentS
 		status.AgentServiceActive = true
 	}
 	diagnostics := easyTierConnectivitySummary(ctx, runner, status.EasyTierServiceActive)
+	status.EasyTierIP = diagnostics.VirtualIP
 	status.EasyTierPeerCount = diagnostics.PeerCount
 	status.EasyTierHasRemotePeer = diagnostics.HasRemotePeer
 	status.EasyTierBestLatencyMS = diagnostics.BestLatencyMS
@@ -90,6 +92,7 @@ func CollectStatus(ctx context.Context, cfg Config, runner CommandRunner) AgentS
 	status.EasyTierRouteType = diagnostics.RouteType
 	status.EasyTierNetworkOK = diagnostics.NetworkOK
 	status.EasyTierNetworkReason = diagnostics.Reason
+	status.EasyTierDHCPEnabled, status.EasyTierCIDR = easyTierDHCPInfo(cfg)
 	return status
 }
 
@@ -113,6 +116,8 @@ func ReportFromStatus(cfg Config, status AgentStatus) ReportRequest {
 		EasyTierRouteType:     status.EasyTierRouteType,
 		EasyTierNetworkOK:     status.EasyTierNetworkOK,
 		EasyTierNetworkReason: status.EasyTierNetworkReason,
+		EasyTierDHCPEnabled:   status.EasyTierDHCPEnabled,
+		EasyTierCIDR:          status.EasyTierCIDR,
 		Capabilities:          status.Capabilities,
 		Warnings:              status.Warnings,
 	}
@@ -137,9 +142,37 @@ func easyTierStatus(cfg Config, status AgentStatus) string {
 func easyTierConnectivitySummary(ctx context.Context, runner CommandRunner, serviceActive bool) EasyTierDiagnostics {
 	cli, err := findEasyTierCLI(runner)
 	if err != nil {
-		return EasyTierDiagnostics{EasyTierStatus: "unknown", NetworkOK: false, Reason: "easytier-cli 不存在"}
+		return EasyTierDiagnostics{EasyTierStatus: "unknown", NetworkOK: false, Reason: "easytier-cli not found"}
 	}
 	return easyTierDiagnosticsFromCLI(ctx, runner, cli, serviceActive)
+}
+
+func easyTierDHCPInfo(cfg Config) (bool, string) {
+	raw, err := os.ReadFile(networkProfilePath(cfg))
+	if err != nil {
+		raw, err = os.ReadFile(easyTierPath(cfg))
+		if err != nil {
+			return false, ""
+		}
+	}
+	text := string(raw)
+	enabled := strings.Contains(text, `"dhcp"`) || strings.Contains(text, "dhcp = true") || strings.Contains(text, " -d ")
+	cidr := ""
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) == nil {
+		cidr = stringField(payload, "cidr", "")
+	}
+	if cidr == "" {
+		for _, line := range strings.Split(text, "\n") {
+			if strings.Contains(line, "cidr") || strings.Contains(line, "ipv4") {
+				parts := strings.Split(line, "=")
+				if len(parts) == 2 {
+					cidr = strings.Trim(strings.TrimSpace(parts[1]), `"`)
+				}
+			}
+		}
+	}
+	return enabled, cidr
 }
 
 func privateIP() string {

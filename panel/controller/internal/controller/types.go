@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.2.2-test"
+	Version = "v0.2.3-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -52,6 +52,8 @@ type Node struct {
 	EasyTierRouteType     string            `json:"easytier_route_type,omitempty"`
 	EasyTierNetworkOK     bool              `json:"easytier_network_ok"`
 	EasyTierNetworkReason string            `json:"easytier_network_reason,omitempty"`
+	EasyTierDHCPEnabled   bool              `json:"easytier_dhcp_enabled"`
+	EasyTierCIDR          string            `json:"easytier_cidr,omitempty"`
 	LastSeenAt            time.Time         `json:"last_seen_at"`
 	Status                string            `json:"status"`
 	StatusReason          string            `json:"status_reason"`
@@ -75,6 +77,29 @@ type NetworkProfile struct {
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
+type NetworkLink struct {
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	NetworkName      string    `json:"network_name"`
+	CIDR             string    `json:"cidr"`
+	Port             int       `json:"port"`
+	Protocols        []string  `json:"protocols"`
+	EntryNodeID      string    `json:"entry_node_id"`
+	BackendNodeID    string    `json:"backend_node_id"`
+	EntryTaskID      string    `json:"entry_task_id"`
+	BackendTaskID    string    `json:"backend_task_id"`
+	LastVerifyAt     time.Time `json:"last_verify_at,omitempty"`
+	Status           string    `json:"status"`
+	EntryPeerCount   int       `json:"entry_peer_count"`
+	BackendPeerCount int       `json:"backend_peer_count"`
+	BestLatencyMS    float64   `json:"best_latency_ms,omitempty"`
+	PacketLoss       string    `json:"packet_loss,omitempty"`
+	Tunnels          []string  `json:"tunnels,omitempty"`
+	RouteType        string    `json:"route_type,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 type Entry struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
@@ -93,20 +118,27 @@ type Entry struct {
 }
 
 type Forward struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	EntryID      string    `json:"entry_id"`
-	EntryNodeID  string    `json:"entry_node_id"`
-	Protocol     string    `json:"protocol"`
-	ListenPort   int       `json:"listen_port"`
-	TargetMode   string    `json:"target_mode"`
-	TargetNodeID string    `json:"target_node_id"`
-	TargetHost   string    `json:"target_host"`
-	TargetPort   int       `json:"target_port"`
-	Enabled      bool      `json:"enabled"`
-	Remark       string    `json:"remark"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Enabled            bool      `json:"enabled"`
+	Protocol           string    `json:"protocol"`
+	EntryID            string    `json:"entry_id,omitempty"`
+	EntryNodeID        string    `json:"entry_node_id"`
+	BackendNodeID      string    `json:"backend_node_id"`
+	ListenHost         string    `json:"listen_host"`
+	ListenPort         int       `json:"listen_port"`
+	TargetIP           string    `json:"target_ip"`
+	TargetPort         int       `json:"target_port"`
+	TargetNodeIPSource string    `json:"target_node_ip_source"`
+	Remark             string    `json:"remark"`
+	Status             string    `json:"status"`
+	LastApplyTaskID    string    `json:"last_apply_task_id,omitempty"`
+	LastVerifyTaskID   string    `json:"last_verify_task_id,omitempty"`
+	TargetMode         string    `json:"target_mode,omitempty"`
+	TargetNodeID       string    `json:"target_node_id,omitempty"`
+	TargetHost         string    `json:"target_host,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type PBRPolicy struct {
@@ -161,6 +193,7 @@ type Task struct {
 type StoreFile struct {
 	Nodes           []Node           `json:"nodes"`
 	NetworkProfiles []NetworkProfile `json:"network_profiles"`
+	NetworkLinks    []NetworkLink    `json:"network_links"`
 	Entries         []Entry          `json:"entries"`
 	Forwards        []Forward        `json:"forwards"`
 	PBRPolicies     []PBRPolicy      `json:"pbr_policies"`

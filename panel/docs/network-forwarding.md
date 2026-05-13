@@ -1,40 +1,42 @@
-# 网络转发
+﻿# 网络与转发
 
-## 组网配置
+## 快速组网
 
-`v0.2.2-test` 已支持把组网配置下发到节点：
+主流程是“快速组网”：选择一个公网入口节点和一个后端节点，面板自动生成入口 listeners 和后端 peers。
 
-- 推荐使用“快速组网”：选择公网入口节点和后端节点，面板自动生成 listeners 和 peers。
-- 入口节点 listeners 默认是 `tcp://0.0.0.0:11010`、`udp://0.0.0.0:11010`，peers 自动留空。
-- 后端节点 peers 自动指向入口公网 IP：`tcp://入口公网IP:11010`、`udp://入口公网IP:11010`。
-- Controller 创建 `apply_network_profile` 任务。
-- 任务 payload 包含完整 `network_profile` 和目标 `node`。
-- Agent 写入 `/etc/edge-tunnel/agent/network-profile.json`。
-- Agent 写入 `/etc/edge-tunnel/agent/easytier.toml`。
-- Agent 在缺少 `easytier-core` 时尝试自动安装 EasyTier v2.4.5。
-- Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
-- Agent 生成 `edge-tunnel-easytier.service`，并用固定 `systemctl` 参数启动。
+- 入口节点：监听 `tcp://0.0.0.0:11010`、`udp://0.0.0.0:11010`，peers 为空。
+- 后端节点：listeners 保持默认，peers 指向入口公网 IP。
+- 两端使用同一组 `network_name`、`network_secret` 和 CIDR。
+- 完成后会生成组网卡片，用于查看状态、Peer、延迟、丢包、隧道和路由。
 
-如果 GitHub 下载失败，任务会明确返回 URL 和错误原因；如果磁盘空间不足，任务会提示清理空间或调整 Agent 状态目录。可以配置代理、手动安装 EasyTier，或稍后重试。
+## EasyTier 虚拟 IP
 
-## 组网成功判定
+Agent 生成的 EasyTier 启动参数包含 `-d` 和 `-i CIDR`，用于启用 DHCP/虚拟 IP。后续转发规则默认使用后端节点的 EasyTier 虚拟 IP 作为目标地址。
 
-执行“验证组网”后，Agent 会固定调用：
+## 转发规则 MVP
 
-- `systemctl is-active edge-tunnel-easytier.service`
-- `easytier-cli node`
-- `easytier-cli peer`
-- `easytier-cli route`
+`v0.2.3-test` 支持单端口 TCP/UDP 转发规则：
 
-面板会展示远端 Peer 数量、最佳延迟、丢包、隧道类型和路由类型。`peer_count > 0` 且路由为 `DIRECT` 或可用路径时，可认为 EasyTier peer 层已经连通。
+- 协议：`tcp`、`udp`、`both`。
+- 入口节点：接收公网请求。
+- 后端节点：提供目标服务。
+- 目标 IP：默认使用后端节点 EasyTier 虚拟 IP，也可以手动填写。
+- 目标端口：后端服务端口。
 
-## 公网入口
+应用规则时 Controller 只向入口节点下发 `apply_forward_config` 任务。Agent 会写入：
 
-公网入口定义节点上的监听地址、端口范围、协议、域名和 DDNS 配置。
+- `/etc/edge-tunnel/agent/forward.json`
+- `/etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft`
 
-## 转发规则
+Agent 使用固定 argv 执行：
 
-- `target_mode=local`：入口节点本地或可直连地址。
-- `target_mode=overlay`：通过 EasyTier overlay 到后端节点。
+```bash
+nft -c -f /etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft
+nft -f /etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft
+```
 
-Agent 后续会根据结构化配置生成 nftables 规则，不接受 raw nftables payload。
+不支持 raw nft payload。
+
+## 验证规则
+
+点击“验证规则”会创建 `verify_forward_rules` 任务，检查 nftables table 是否存在、规则是否包含目标、以及 IPv4 forwarding 状态。

@@ -1,67 +1,47 @@
-# systemd
+﻿# systemd
 
-## 主控服务
-
-```bash
-sudo systemctl status edge-tunnel-controller.service
-sudo journalctl -u edge-tunnel-controller.service -f
-sudo systemctl restart edge-tunnel-controller.service
-```
-
-## Agent 服务
+## Controller
 
 ```bash
-sudo systemctl status edge-tunnel-agent.service
-sudo journalctl -u edge-tunnel-agent.service -f
-sudo systemctl restart edge-tunnel-agent.service
+systemctl status edge-tunnel-controller --no-pager
+journalctl -u edge-tunnel-controller -n 100 --no-pager
 ```
 
-## EasyTier 服务
+默认路径：
+
+- 二进制：`/usr/local/bin/edge-tunnel-controller`
+- 环境文件：`/etc/edge-tunnel/controller/controller.env`
+- 数据目录：`/var/lib/edge-tunnel/controller`
+- Web 目录：`/var/lib/edge-tunnel/controller/web`
+
+## Agent
 
 ```bash
-sudo systemctl status edge-tunnel-easytier.service
-sudo journalctl -u edge-tunnel-easytier.service -f
-sudo systemctl restart edge-tunnel-easytier.service
+systemctl status edge-tunnel-agent --no-pager
+journalctl -u edge-tunnel-agent -n 100 --no-pager
 ```
 
-EasyTier 配置默认在 `/etc/edge-tunnel/agent/easytier.toml`。
+默认路径：
 
-Agent 应用组网配置时会写入：
+- 二进制：`/usr/local/bin/edge-tunnel-agent`
+- 环境文件：`/etc/edge-tunnel/agent/agent.env`
+- 配置目录：`/etc/edge-tunnel/agent`
+- 状态目录：`/var/lib/edge-tunnel/agent`
+
+## EasyTier
+
+Agent 管理的 EasyTier service：
+
+```bash
+systemctl status edge-tunnel-easytier --no-pager
+journalctl -u edge-tunnel-easytier -n 100 --no-pager
+easytier-cli peer
+easytier-cli route
+```
+
+配置文件：
 
 - `/etc/edge-tunnel/agent/easytier.toml`
-- `/etc/edge-tunnel/agent/systemd/edge-tunnel-easytier.service`
 - `/etc/systemd/system/edge-tunnel-easytier.service`
 
-随后使用固定参数执行：
-
-```bash
-systemctl daemon-reload
-systemctl enable edge-tunnel-easytier.service
-systemctl restart edge-tunnel-easytier.service
-systemctl is-active edge-tunnel-easytier.service
-```
-
-## EasyTier 启动参数
-
-`edge-tunnel-easytier.service` 的 `ExecStart` 使用 `easytier-core` CLI 参数生成：`--network-name`、`--network-secret`、多个 `-l` listeners，以及多个 `-p` peers。`/etc/edge-tunnel/agent/easytier.toml` 仍会写入，方便审计和后续模板调整。
-
-## 空间不足排障
-
-EasyTier 安装临时目录优先使用 `/var/lib/edge-tunnel/agent/tmp`，也会清理旧的 `edge-easytier-*` 临时目录。如果任务提示空间不足：
-
-```bash
-df -h
-journalctl --vacuum-size=100M
-apt clean
-rm -rf /tmp/edge-easytier-*
-```
-
-## Agent purge
-
-`install-agent.sh --purge` 会停止并删除 `edge-tunnel-agent.service`，同时清理 `edge-tunnel-easytier.service` 和 Agent 写入的 EasyTier 配置。默认不会删除 `/usr/local/bin/easytier-core` 与 `/usr/local/bin/easytier-cli`。
-
-如需同时删除 EasyTier 二进制：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge --remove-easytier-binaries
-```
+Agent purge 会清理 EasyTier service/config；如需删除 `easytier-core` 和 `easytier-cli`，额外使用 `--remove-easytier-binaries`。
