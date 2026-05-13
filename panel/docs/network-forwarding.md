@@ -2,8 +2,11 @@
 
 ## 组网配置
 
-`v0.2.0-test` 已支持把组网配置下发到节点：
+`v0.2.1-hotfix` 已支持把组网配置下发到节点：
 
+- 推荐使用“快速组网”：选择公网入口节点和后端节点，面板自动生成 listeners 和 peers。
+- 入口节点 listeners 默认是 `tcp://0.0.0.0:11010`、`udp://0.0.0.0:11010`，peers 自动留空。
+- 后端节点 peers 自动指向入口公网 IP：`tcp://入口公网IP:11010`、`udp://入口公网IP:11010`。
 - Controller 创建 `apply_network_profile` 任务。
 - 任务 payload 包含完整 `network_profile` 和目标 `node`。
 - Agent 写入 `/etc/edge-tunnel/agent/network-profile.json`。

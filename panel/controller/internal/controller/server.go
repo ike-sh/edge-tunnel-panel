@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -393,6 +394,10 @@ func (s *Server) handleNetworkProfiles(w http.ResponseWriter, r *http.Request) {
 		writeOK(w, 200, s.store.listNetworkProfiles())
 		return
 	}
+	if r.URL.Path == "/api/v1/network-profiles/quick-apply" && r.Method == http.MethodPost {
+		s.handleNetworkProfileQuickApply(w, r)
+		return
+	}
 	id, action := splitCollectionPath(r.URL.Path, "/api/v1/network-profiles/")
 	if action == "apply" && r.Method == http.MethodPost {
 		s.handleNetworkProfileApply(w, r, id)
@@ -452,6 +457,102 @@ func (s *Server) handleNetworkProfiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, 200, item)
+}
+
+func (s *Server) handleNetworkProfileQuickApply(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBody(w, r)
+	if !ok {
+		return
+	}
+	if payloadHasDangerousKeys(req) {
+		writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+		return
+	}
+	entryNodeID := stringValue(req["entry_node_id"], "")
+	backendNodeID := stringValue(req["backend_node_id"], "")
+	if entryNodeID == "" || backendNodeID == "" {
+		writeErr(w, 400, "BAD_REQUEST", "entry_node_id and backend_node_id are required")
+		return
+	}
+	if entryNodeID == backendNodeID {
+		writeErr(w, 400, "BAD_REQUEST", "entry and backend nodes must be different")
+		return
+	}
+	entryNode, found := s.store.getNode(entryNodeID)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "entry node not found")
+		return
+	}
+	backendNode, found := s.store.getNode(backendNodeID)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "backend node not found")
+		return
+	}
+	if entryNode.Status != "online" {
+		writeErr(w, 400, "BAD_REQUEST", "entry node must be online")
+		return
+	}
+	if backendNode.Status != "online" {
+		writeErr(w, 400, "BAD_REQUEST", "backend node must be online")
+		return
+	}
+	if strings.TrimSpace(entryNode.PublicIP) == "" {
+		writeErr(w, 400, "BAD_REQUEST", "entry node public_ip is required")
+		return
+	}
+	port := intValue(req["port"])
+	if port <= 0 {
+		port = 11010
+	}
+	protocols := stringListValue(req["protocols"])
+	if len(protocols) == 0 {
+		protocols = []string{"tcp", "udp"}
+	}
+	listeners := networkURLs(protocols, "0.0.0.0", port)
+	backendPeers := networkURLs(protocols, entryNode.PublicIP, port)
+	name := stringValue(req["name"], stringValue(req["network_name"], "edge-net"))
+	profile, err := s.store.createNetworkProfile(map[string]any{
+		"name":                name,
+		"network_name":        stringValue(req["network_name"], name),
+		"network_secret":      stringValue(req["network_secret"], ""),
+		"cidr":                stringValue(req["cidr"], "10.144.0.0/16"),
+		"protocol_preference": "auto",
+		"listeners":           listeners,
+		"peers":               backendPeers,
+	})
+	if err != nil {
+		writeErr(w, 400, "BAD_REQUEST", err.Error())
+		return
+	}
+	entryProfile := profile
+	entryProfile.Peers = []string{}
+	backendProfile := profile
+	backendProfile.Peers = backendPeers
+	entryTask, err := s.store.createTask(Task{NodeID: entryNode.ID, Action: "apply_network_profile", Payload: map[string]any{"target_mode": "entry", "network_profile": entryProfile, "node": entryNode}})
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	backendTask, err := s.store.createTask(Task{NodeID: backendNode.ID, Action: "apply_network_profile", Payload: map[string]any{"target_mode": "backend", "network_profile": backendProfile, "node": backendNode}})
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	writeOK(w, 202, map[string]any{"profile": profile, "entry_task": entryTask, "backend_task": backendTask, "entry_peers": []string{}, "backend_peers": backendPeers})
+}
+
+func networkURLs(protocols []string, host string, port int) []string {
+	out := make([]string, 0, len(protocols))
+	for _, protocol := range protocols {
+		switch strings.ToLower(strings.TrimSpace(protocol)) {
+		case "tcp", "udp":
+			out = append(out, protocol+"://"+host+":"+strconv.Itoa(port))
+		}
+	}
+	if len(out) == 0 {
+		return []string{"tcp://" + host + ":" + strconv.Itoa(port), "udp://" + host + ":" + strconv.Itoa(port)}
+	}
+	return out
 }
 func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) {
 	s.handleGenericCollection(w, r, "entries")

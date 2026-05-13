@@ -27,11 +27,14 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-VERSION=v0.2.0-test bash panel/scripts/build-release.sh
+VERSION=v0.2.1-hotfix bash panel/scripts/build-release.sh
 ```
 
-## v0.2.0-test 重点
+## v0.2.1-hotfix 重点
 
+- 修复 Web 中文文案显示为问号的问题。
+- 组网配置新增“快速组网”：选择入口节点和后端节点后自动创建两个下发任务。
+- 节点操作改为卡片内紧凑横向操作区，不再使用抽屉。
 - HTTP 环境下复制命令使用 clipboard fallback。
 - EasyTier 安装前检查磁盘空间。
 - EasyTier 安装优先使用 Agent 状态目录下的临时目录。

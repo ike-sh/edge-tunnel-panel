@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const defaultAgentInstallVersion = "v0.2.0-test"
+const defaultAgentInstallVersion = "v0.2.1-hotfix"
 
 func installScriptURL() string {
 	return "https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh"

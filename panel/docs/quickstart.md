@@ -4,7 +4,7 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.0-test
+  --version v0.2.1-hotfix
 ```
 
 打开 `http://服务器IP:18080`。
@@ -13,16 +13,19 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 进入 Web 的“节点”页面，点击“添加节点”，生成一键 Agent 命令，复制到被控服务器执行。
 
-## 创建并应用组网配置
+## 快速组网
 
 1. 确认节点已上线。
 2. 进入“组网配置”。
-3. 创建组网配置。
-4. 在配置卡片中选择目标节点。
-5. 点击“应用到节点”。
-6. 到“任务”页面查看 `apply_network_profile` 结果。
-7. 如果提示下载失败或磁盘空间不足，请按任务页提示处理后重试。
-8. 回到“节点”页面刷新查看 EasyTier 状态。
+3. 在“快速组网”里选择公网入口节点和后端节点。
+4. 监听端口默认 `11010`，协议默认 `tcp+udp`。
+5. 点击“创建并应用组网”。
+6. Controller 会自动创建入口节点和后端节点两个 `apply_network_profile` 任务。
+7. 到“任务”页面按节点筛选查看结果。
+8. 如果提示下载失败或磁盘空间不足，请按任务页提示处理后重试。
+9. 回到“节点”页面刷新查看 EasyTier 状态和 Peer 数量。
+
+入口节点 peers 会自动留空；后端节点 peers 会自动指向入口公网 IP 的 `11010/tcp` 和 `11010/udp`。
 
 ## 节点预检
 

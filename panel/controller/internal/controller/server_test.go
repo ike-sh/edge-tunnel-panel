@@ -266,12 +266,12 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.2.0-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.2.1-hotfix"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.2.0-test") ||
+		!strings.Contains(body, "--version v0.2.1-hotfix") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||
@@ -476,6 +476,58 @@ func TestApplyPayloadPreservesPeers(t *testing.T) {
 	body := apply.Body.String()
 	if apply.Code != 202 || !strings.Contains(body, "tcp://1.2.3.4:11010") || !strings.Contains(body, "udp://1.2.3.4:11010") {
 		t.Fatalf("apply payload should preserve peers: %d %s", apply.Code, body)
+	}
+}
+
+func TestQuickApplyCreatesEntryAndBackendTasks(t *testing.T) {
+	h := testServer(t)
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.10:12345", map[string]any{"id": "entry-a", "node_name": "entry", "role": "entry"})
+	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-a", "node_name": "backend", "role": "backend"})
+	rr := post(t, h, "/api/v1/network-profiles/quick-apply", "operator-token", map[string]any{"name": "edge-net", "entry_node_id": "entry-a", "backend_node_id": "backend-a", "port": 11010, "protocols": []any{"tcp", "udp"}})
+	body := rr.Body.String()
+	if rr.Code != 202 || !strings.Contains(body, `"entry_task"`) || !strings.Contains(body, `"backend_task"`) || !strings.Contains(body, "tcp://203.0.113.10:11010") {
+		t.Fatalf("quick apply failed: %d %s", rr.Code, body)
+	}
+}
+
+func TestQuickApplyRejectsSameNode(t *testing.T) {
+	h := testServer(t)
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.10:12345", map[string]any{"id": "node-a", "node_name": "entry", "role": "entry"})
+	rr := post(t, h, "/api/v1/network-profiles/quick-apply", "operator-token", map[string]any{"entry_node_id": "node-a", "backend_node_id": "node-a"})
+	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "different") {
+		t.Fatalf("same node should be rejected: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestQuickApplyRejectsMissingEntryPublicIP(t *testing.T) {
+	h := testServer(t)
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "10.0.0.10:12345", map[string]any{"id": "entry-no-ip", "node_name": "entry", "role": "entry"})
+	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-a", "node_name": "backend", "role": "backend"})
+	rr := post(t, h, "/api/v1/network-profiles/quick-apply", "operator-token", map[string]any{"entry_node_id": "entry-no-ip", "backend_node_id": "backend-a"})
+	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "public_ip") {
+		t.Fatalf("missing public ip should be rejected: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestQuickApplyPayloadHasBackendPeers(t *testing.T) {
+	h := testServer(t)
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.11:12345", map[string]any{"id": "entry-b", "node_name": "entry", "role": "entry"})
+	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-b", "node_name": "backend", "role": "backend"})
+	rr := post(t, h, "/api/v1/network-profiles/quick-apply", "operator-token", map[string]any{"entry_node_id": "entry-b", "backend_node_id": "backend-b", "protocols": []any{"tcp", "udp"}})
+	body := rr.Body.String()
+	if rr.Code != 202 || !strings.Contains(body, `"target_mode":"backend"`) || !strings.Contains(body, "tcp://203.0.113.11:11010") || !strings.Contains(body, "udp://203.0.113.11:11010") {
+		t.Fatalf("backend peers missing: %d %s", rr.Code, body)
+	}
+}
+
+func TestQuickApplyPayloadHasEntryPeersEmpty(t *testing.T) {
+	h := testServer(t)
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.12:12345", map[string]any{"id": "entry-c", "node_name": "entry", "role": "entry"})
+	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-c", "node_name": "backend", "role": "backend"})
+	rr := post(t, h, "/api/v1/network-profiles/quick-apply", "operator-token", map[string]any{"entry_node_id": "entry-c", "backend_node_id": "backend-c"})
+	body := rr.Body.String()
+	if rr.Code != 202 || !strings.Contains(body, `"target_mode":"entry"`) || !strings.Contains(body, `"entry_peers":[]`) {
+		t.Fatalf("entry peers should be empty: %d %s", rr.Code, body)
 	}
 }
 

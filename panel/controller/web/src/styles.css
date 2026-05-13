@@ -195,10 +195,9 @@ button.danger {
 }
 
 .action-panel {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(140px, 1fr));
-  gap: 8px;
-  min-width: 340px;
+  display: block;
+  max-height: 360px;
+  overflow: auto;
   margin-top: 10px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -206,29 +205,9 @@ button.danger {
   background: #0c1326;
 }
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  justify-content: flex-end;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(3px);
-}
-
-.modal {
-  width: min(720px, 100vw);
-  height: 100vh;
-  overflow: auto;
-  border-left: 1px solid var(--line);
-  background: rgba(18, 26, 47, 0.98);
-  box-shadow: var(--shadow);
-  padding: 22px;
-}
-
 .action-section {
-  margin-top: 16px;
-  padding: 14px;
+  margin-top: 10px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: rgba(12, 19, 38, 0.72);
@@ -236,12 +215,14 @@ button.danger {
 
 .action-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .action-grid button {
   width: 100%;
+  min-height: 42px;
+  padding: 9px 10px;
 }
 
 .danger-section {
@@ -543,14 +524,14 @@ details summary {
   main {
     width: min(100vw - 20px, 1500px);
   }
+
+  .action-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
   .action-grid {
     grid-template-columns: 1fr;
-  }
-
-  .modal {
-    width: 100vw;
   }
 }

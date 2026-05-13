@@ -2,7 +2,7 @@
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
 
-当前版本：`v0.2.0-test`
+当前版本：`v0.2.1-hotfix`
 
 ## 典型场景
 
@@ -25,7 +25,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.0-test
+  --version v0.2.1-hotfix
 ```
 
 安装完成后打开：
@@ -47,7 +47,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.2.0-test \
+  --version v0.2.1-hotfix \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -60,15 +60,19 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 1. 确认节点已上线。
 2. 进入“组网配置”。
-3. 创建组网配置，填写名称、网络名、CIDR、协议偏好和可选 peers/listeners。
-4. 在配置卡片中选择目标节点，点击“应用到节点”。
-5. 进入“任务”页面查看 `apply_network_profile` 结果。
-6. 如果任务提示下载失败或磁盘空间不足，请按任务页提示处理后重试。
-7. 回到“节点”页面刷新，查看 EasyTier 状态。
+3. 使用上方“快速组网”，选择一个在线公网入口节点和一个在线后端节点。
+4. 面板会自动生成同一组网络名和网络密钥。
+5. 入口节点自动获得 listeners，peers 留空。
+6. 后端节点自动获得 listeners，并把 peers 指向入口节点公网 IP 的 `11010/tcp` 和 `11010/udp`。
+7. 点击“创建并应用组网”，Controller 会创建两个 `apply_network_profile` 任务。
+8. 进入“任务”页面按节点筛选查看结果。
+9. 回到“节点”页面刷新，查看 EasyTier 状态和 Peer 数量。
+
+如果 EasyTier 已运行但 Peer 数量仍为 0，请检查入口服务器安全组是否放行 `11010/tcp` 和 `11010/udp`，并确认两个节点使用同一网络名和网络密钥。
 
 ### EasyTier 安装预检
 
-`v0.2.0-test` 会在安装 EasyTier 前检查临时目录和 `/usr/local/bin` 所在分区空间，并优先使用 `/var/lib/edge-tunnel/agent/tmp` 作为工作目录。Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
+`v0.2.1-hotfix` 会在安装 EasyTier 前检查临时目录和 `/usr/local/bin` 所在分区空间，并优先使用 `/var/lib/edge-tunnel/agent/tmp` 作为工作目录。Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
 
 如果任务页出现 `no space left on device` 或“磁盘空间不足”，可先执行：
 
@@ -124,7 +128,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 当前限制
 
-- `v0.2.0-test` 是测试版。
+- `v0.2.1-hotfix` 是测试版。
 - EasyTier 自动下载/安装后续增强。
 - DDNS provider 后续增强。
 - PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
@@ -155,5 +159,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.0-test bash panel/scripts/build-release.sh
+VERSION=v0.2.1-hotfix bash panel/scripts/build-release.sh
 ```
