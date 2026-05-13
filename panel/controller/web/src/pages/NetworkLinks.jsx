@@ -20,7 +20,7 @@ export default function NetworkLinks({ nodes, nodeMap, networkLinks, networkProf
     <div className="page-stack">
       <Card
         title="组网链路"
-        description="选择 A 公网入口节点和 B 落地节点，系统自动下发 EasyTier 配置并自动验证。"
+        description="选择 A 公网入口节点和 B 落地节点。可创建 EasyTier 隧道链路，也可创建前海 IX / IPLC 等 A 到 B 的直连链路。"
         actions={<><button className="secondary" onClick={onRefresh}>刷新</button><button onClick={() => setDrawerOpen(true)}>快速创建链路</button></>}
       >
         {networkLinks.length === 0 ? (
@@ -30,6 +30,7 @@ export default function NetworkLinks({ nodes, nodeMap, networkLinks, networkProf
             rows={networkLinks}
             columns={[
               { key: 'name', title: '名称', render: (link) => <strong>{link.name || link.network_name || 'edge-net'}</strong> },
+              { key: 'type', title: '类型', render: (link) => link.link_type === 'direct' ? '直连' : 'EasyTier' },
               { key: 'nodes', title: '链路', render: (link) => linkNodeNames(link, nodeMap) },
               { key: 'status', title: '状态', render: (link) => <StatusBadge status={['active', 'connected'].includes(link.status) ? 'succeeded' : link.status}>{linkStatusText(link)}</StatusBadge> },
               { key: 'peer', title: 'Peer', render: (link) => `入口 ${link.entry_peer_count || 0} / 后端 ${link.backend_peer_count || 0}` },
@@ -45,15 +46,17 @@ export default function NetworkLinks({ nodes, nodeMap, networkLinks, networkProf
         {networkLinks.map((link) => <NetworkLinkSummary key={link.id} link={link} nodeMap={nodeMap} onCopy={onCopy} />)}
       </div>
 
-      <DetailDrawer open={drawerOpen} title="快速组网" subtitle="普通测试建议只填写基础字段，高级参数按需展开。" onClose={() => setDrawerOpen(false)} wide>
+      <DetailDrawer open={drawerOpen} title="快速创建链路" subtitle="EasyTier 用于无公网节点；直连用于 A/B 已经通过公网、专线或内网互通。" onClose={() => setDrawerOpen(false)} wide>
         <div className="form-grid drawer-form">
+          <label>链路类型<select value={quickForm.link_type} onChange={(event) => setQuickForm({ ...quickForm, link_type: event.target.value })}><option value="easytier">EasyTier 隧道</option><option value="direct">A 到 B 直连</option></select></label>
           <label>组网名称<input value={quickForm.name} onChange={(event) => setQuickForm({ ...quickForm, name: event.target.value })} /></label>
-          <label>网络名<input value={quickForm.network_name} onChange={(event) => setQuickForm({ ...quickForm, network_name: event.target.value })} /></label>
-          <label>网络密钥<div className="input-with-button"><input value={quickForm.network_secret} onChange={(event) => setQuickForm({ ...quickForm, network_secret: event.target.value })} placeholder="留空由 Controller 自动生成" /><button className="secondary small" onClick={() => setQuickForm({ ...quickForm, network_secret: randomSecret() })}>生成</button></div></label>
-          <label>CIDR<input value={quickForm.cidr} onChange={(event) => setQuickForm({ ...quickForm, cidr: event.target.value })} /></label>
-          <label>监听端口<input type="number" value={quickForm.port} onChange={(event) => setQuickForm({ ...quickForm, port: event.target.value })} /></label>
+          {quickForm.link_type !== 'direct' && <label>网络名<input value={quickForm.network_name} onChange={(event) => setQuickForm({ ...quickForm, network_name: event.target.value })} /></label>}
+          {quickForm.link_type !== 'direct' && <label>网络密钥<div className="input-with-button"><input value={quickForm.network_secret} onChange={(event) => setQuickForm({ ...quickForm, network_secret: event.target.value })} placeholder="留空由 Controller 自动生成" /><button className="secondary small" onClick={() => setQuickForm({ ...quickForm, network_secret: randomSecret() })}>生成</button></div></label>}
+          {quickForm.link_type !== 'direct' && <label>CIDR<input value={quickForm.cidr} onChange={(event) => setQuickForm({ ...quickForm, cidr: event.target.value })} /></label>}
+          <label>{quickForm.link_type === 'direct' ? '默认中继端口' : '监听端口'}<input type="number" value={quickForm.port} onChange={(event) => setQuickForm({ ...quickForm, port: event.target.value })} /></label>
           <label>公网入口节点<select value={quickForm.entry_node_id} onChange={(event) => setQuickForm({ ...quickForm, entry_node_id: event.target.value })}><option value="">请选择在线入口节点</option>{onlineNodes.map((node) => <option key={node.id} value={node.id}>{nodeOptionLabel(node)}</option>)}</select></label>
-          <label>后端节点<select value={quickForm.backend_node_id} onChange={(event) => setQuickForm({ ...quickForm, backend_node_id: event.target.value })}><option value="">请选择在线后端节点</option>{onlineNodes.map((node) => <option key={node.id} value={node.id}>{nodeOptionLabel(node)}</option>)}</select></label>
+          <label>B 落地节点<select value={quickForm.backend_node_id} onChange={(event) => setQuickForm({ ...quickForm, backend_node_id: event.target.value })}><option value="">请选择在线 B 节点</option>{onlineNodes.map((node) => <option key={node.id} value={node.id}>{nodeOptionLabel(node)}</option>)}</select></label>
+          {quickForm.link_type === 'direct' && <label>B 可达地址<input value={quickForm.landing_reachable_host} onChange={(event) => setQuickForm({ ...quickForm, landing_reachable_host: event.target.value })} placeholder="例如 B 公网 IP / 专线 IP / 内网 IP" /></label>}
           <label className="check"><input type="checkbox" checked={quickForm.tcp} onChange={(event) => setQuickForm({ ...quickForm, tcp: event.target.checked })} />TCP</label>
           <label className="check"><input type="checkbox" checked={quickForm.udp} onChange={(event) => setQuickForm({ ...quickForm, udp: event.target.checked })} />UDP</label>
         </div>
@@ -71,7 +74,7 @@ export default function NetworkLinks({ nodes, nodeMap, networkLinks, networkProf
           <CodeBlock title="原始配置预览" value={{ ...quickForm, protocols: [quickForm.tcp && 'tcp', quickForm.udp && 'udp'].filter(Boolean) }} onCopy={onCopy} />
         </details>
         <div className="actions">
-          <button onClick={async () => { await onQuickApply(); setDrawerOpen(false); }}>创建并应用组网</button>
+          <button onClick={async () => { await onQuickApply(); setDrawerOpen(false); }}>{quickForm.link_type === 'direct' ? '创建直连链路' : '创建并应用组网'}</button>
         </div>
       </DetailDrawer>
 
@@ -94,6 +97,8 @@ function NetworkLinkSummary({ link, nodeMap, onCopy }) {
       <p className="route-line">{linkNodeNames(link, nodeMap)}</p>
       <div className="mini-metrics">
         <span>Peer {link.entry_peer_count || 0}/{link.backend_peer_count || 0}</span>
+        <span>类型 {link.link_type === 'direct' ? '直连' : 'EasyTier'}</span>
+        {link.link_type === 'direct' && <span>B 地址 {link.landing_reachable_host || '-'}</span>}
         <span>延迟 {displayLatency(link.best_latency_ms)}</span>
         <span>丢包 {cleanLoss(link.packet_loss)}</span>
         <span>隧道 {displayTunnels(link.tunnels)}</span>

@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.3.0-ui-test"
+	Version = "v0.3.1-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -82,31 +82,34 @@ type NetworkProfile struct {
 }
 
 type NetworkLink struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	NetworkName      string    `json:"network_name"`
-	CIDR             string    `json:"cidr"`
-	Port             int       `json:"port"`
-	Protocols        []string  `json:"protocols"`
-	MTU              int       `json:"mtu"`
-	MSSClampEnabled  bool      `json:"mss_clamp_enabled"`
-	MSSMode          string    `json:"mss_mode"`
-	MSSValue         int       `json:"mss_value"`
-	EntryNodeID      string    `json:"entry_node_id"`
-	BackendNodeID    string    `json:"backend_node_id"`
-	EntryTaskID      string    `json:"entry_task_id"`
-	BackendTaskID    string    `json:"backend_task_id"`
-	LastVerifyAt     time.Time `json:"last_verify_at,omitempty"`
-	Status           string    `json:"status"`
-	StatusReason     string    `json:"status_reason,omitempty"`
-	EntryPeerCount   int       `json:"entry_peer_count"`
-	BackendPeerCount int       `json:"backend_peer_count"`
-	BestLatencyMS    float64   `json:"best_latency_ms,omitempty"`
-	PacketLoss       string    `json:"packet_loss,omitempty"`
-	Tunnels          []string  `json:"tunnels,omitempty"`
-	RouteType        string    `json:"route_type,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	LinkType             string    `json:"link_type"`
+	NetworkName          string    `json:"network_name"`
+	CIDR                 string    `json:"cidr"`
+	Port                 int       `json:"port"`
+	Protocols            []string  `json:"protocols"`
+	LandingReachableHost string    `json:"landing_reachable_host,omitempty"`
+	TransitPort          int       `json:"transit_port,omitempty"`
+	MTU                  int       `json:"mtu"`
+	MSSClampEnabled      bool      `json:"mss_clamp_enabled"`
+	MSSMode              string    `json:"mss_mode"`
+	MSSValue             int       `json:"mss_value"`
+	EntryNodeID          string    `json:"entry_node_id"`
+	BackendNodeID        string    `json:"backend_node_id"`
+	EntryTaskID          string    `json:"entry_task_id"`
+	BackendTaskID        string    `json:"backend_task_id"`
+	LastVerifyAt         time.Time `json:"last_verify_at,omitempty"`
+	Status               string    `json:"status"`
+	StatusReason         string    `json:"status_reason,omitempty"`
+	EntryPeerCount       int       `json:"entry_peer_count"`
+	BackendPeerCount     int       `json:"backend_peer_count"`
+	BestLatencyMS        float64   `json:"best_latency_ms,omitempty"`
+	PacketLoss           string    `json:"packet_loss,omitempty"`
+	Tunnels              []string  `json:"tunnels,omitempty"`
+	RouteType            string    `json:"route_type,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type Entry struct {

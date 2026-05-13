@@ -1,143 +1,225 @@
-﻿# Edge Tunnel Panel
+﻿# Edge Tunnel Panel v0.3.1-test
 
-当前版本：`v0.3.0-ui-test`
+Edge Tunnel Panel 是一个面向节点组网、端口转发和出口策略的轻量 Web 面板。它用于把外部访问流量从 A 公网入口节点转发到 B 落地节点，再转发到最终落地服务器 IP/域名和端口。
 
-Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网与转发管理面板。它面向没有公网 IPv4 的 NAT 后服务器，通过公网入口节点、EasyTier 隧道、nftables 转发和 PBR 出口策略，把外部访问转发到指定落地服务器。
+## 适用场景
 
+- B 节点没有公网 IPv4，需要通过 A 公网入口暴露服务。
+- A 与 B 已通过 EasyTier 建立隧道。
+- A 与 B 已经通过前海 IX、IPLC、公网或内网专线互通，不需要 EasyTier。
+- B 节点需要转发到第三方落地服务器 IP/域名。
+- B 节点具备多出口线路，需要通过 PBR 选择出口。
+- EasyTier / 多层转发出现大包异常时，需要 MSS/MTU 诊断和钳制。
 
-## Web UI
-
-v0.3.0-ui-test 将 Web 重构为侧栏、顶部状态栏、表格列表、详情抽屉和统一状态标签的管理面板体验。UI 布局和交互思路参考 bqlpfy/flux-panel，原项目使用 Apache-2.0 License；本项目仅借鉴 Web 面板体验，Controller/Agent API 与业务模型保持不变。
-## 典型链路
-
-```text
-外部客户端
--> A 公网服务器公网端口
--> A nftables
--> EasyTier 隧道或 B 公网直连
--> B 节点
--> B nftables
--> 落地服务器 IP/域名:端口
-```
-
-## 快速开始
-
-安装 Controller：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.3.0-ui-test
-```
-
-打开 Web：
+## 架构链路
 
 ```text
-http://服务器IP:18080
+外部用户
+  -> A 公网入口节点公网端口
+  -> A nftables
+  -> EasyTier 隧道 或 B 公网/专线直连
+  -> B 落地节点
+  -> B nftables
+  -> 落地服务器 IP/域名:端口
 ```
 
-在“节点”页面点击“添加节点”，生成 Agent 一键命令并复制到被控服务器执行。
-
-## 推荐流程
-
-1. 添加 A 公网入口节点和 B 落地执行节点。
-2. 进入“组网链路”，使用快速组网选择 A 和 B。
-3. 等待组网卡片显示“组网成功”。
-4. 进入“转发规则”，选择组网链路。
-5. 填写公网监听端口、落地服务器 IP/域名、落地服务器端口和协议。
-6. 点击“创建并应用转发”。
-7. 如需指定 B 节点出口线路，进入“出口策略 / PBR”。
-8. 点击“识别出口线路”，选择检测到的线路组和转发规则，创建并应用策略。
-
-## 转发 MVP
-
-转发规则会生成两阶段任务：
-
-- `apply_entry_forward_config`：运行在 A 节点，把公网端口转发到 B。
-- `apply_landing_forward_config`：运行在 B 节点，把内部端口转发到落地服务器。
-
-当前 nftables 模板使用：
-
-- `table ip edge_tunnel_entry_forward`
-- `table ip edge_tunnel_landing_forward`
-- numeric priority：`-100` / `100`
-- `dnat to IP:PORT`
-- 不生成 output chain
-
-## 出口策略 / PBR
-
-PBR 用于 B 落地执行节点上的转发流量出口选择，适合具备多出口线路组的节点。面板会先识别 `9929`、`CN2`、`JPSDWAN`、`DESDWAN`、`KRSDWAN` 等线路组，用户只选择线路，网关和路由表由系统自动带出。
-
-v0.3.0-ui-test 的限制：
-
-- 每个节点只允许一条启用中的 PBR 策略。`detect_pbr_route_groups` 会按本机 IPv4 地址匹配线路组。
-- 完整支持 `source_type=forward`。
-- `domain` / `static` 已保留模型，后续接入 DDNS/domain sync。
-- 不支持 IPv6 PBR。
-- 不接受任意 shell、命令字符串或 raw nft/raw route。
-
-PBR 会结构化生成：
-
-- `/etc/edge-tunnel/agent/pbr.d/{policy_id}.json`
-- `/etc/edge-tunnel/agent/nftables/edge-tunnel-pbr.nft`
-- `ip rule` / `ip route table`
-
-## MTU / MSS clamp
-
-EasyTier、tun、多层 NAT 和转发场景下，TCP 可能因为 MTU/MSS 不合适出现卡顿、部分网页打不开或大包异常。
-
-v0.3.0-ui-test 默认：
-
-- MTU：`1380`
-- MSS clamp：启用
-- MSS 模式：`auto`
-
-可在组网高级参数中调整为：
-
-- `auto`：优先使用 `rt mtu`
-- `fixed`：固定 MSS 值，未填写时按 `MTU - 40`
-- `disabled`：不生成 MSS clamp
-
-## 常用验证
-
-A 节点：
+## 快速安装 Controller
 
 ```bash
-nft list table ip edge_tunnel_entry_forward
-cat /proc/sys/net/ipv4/ip_forward
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- \
+  --version v0.3.1-test
 ```
 
-B 节点：
+安装完成后打开：
 
-```bash
-nft list table ip edge_tunnel_landing_forward
-nft list table ip edge_tunnel_pbr
-ip rule show
-ip route show table 20000
-cat /proc/sys/net/ipv4/ip_forward
+```text
+http://服务器公网IP:18080
 ```
 
-落地服务测试：
+测试模式默认关闭 Operator Token 鉴权。如需开启：
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- \
+  --version v0.3.1-test \
+  --strict-auth
+```
+
+## 卸载 Controller
+
+保留配置和数据：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- --uninstall
+```
+
+彻底删除配置、数据和日志：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- --purge
+```
+
+## 添加 Agent
+
+进入 Web 的“节点”页面，点击“添加节点”，选择下载源并生成一键命令。root 登录服务器时使用 root 命令，普通用户使用 sudo 命令。
+
+国内机器可使用镜像轮询：
+
+```bash
+EDGE_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/" \
+curl -fsSL https://gh.llkk.cc/https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- \
+  --version v0.3.1-test \
+  --controller-url http://YOUR_CONTROLLER:18080 \
+  --token YOUR_AGENT_TOKEN \
+  --node-name edge-node-1 \
+  --enable-tasks \
+  --enable-write-actions
+```
+
+`EDGE_GITHUB_MIRRORS` 同时用于安装脚本下载 release 包和 Agent 下载 EasyTier release。
+
+## 卸载 Agent
+
+保留配置和状态：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --uninstall
+```
+
+彻底删除 Agent、EasyTier service/config、状态和日志：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge
+```
+
+同时删除 easytier-core/easytier-cli：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge --remove-easytier-binaries
+```
+
+## Web 使用流程
+
+1. “节点”页添加 A 节点和 B 节点。
+2. “组网链路”页创建链路：
+   - EasyTier 链路：自动安装/启动 EasyTier，A 与 B 建立 peer。
+   - 直连链路：填写 A 可访问的 B 公网 IP、专线 IP 或内网 IP，不安装 EasyTier。
+3. “转发规则”页选择链路，填写公网监听端口、落地服务器 IP/域名、落地端口，点击“创建并应用转发”。
+4. “出口策略 / PBR”页选择 B 落地节点，先识别出口线路，再选择线路组和转发规则创建策略。
+5. 需要暂停时，对组网链路、转发规则或 PBR 策略执行“停用”；需要恢复时执行“启用/应用”。
+6. 出现问题时进入“诊断”，运行一键诊断并复制报告。
+
+## 直连链路
+
+直连链路适合前海 IX、IPLC、A/B 公网互通或内网专线互通场景。它不依赖 EasyTier：
+
+```text
+外部用户 -> A 公网端口 -> A nftables -> B 可达地址:中继端口 -> B nftables -> 落地服务器:端口
+```
+
+创建直连链路时需要填写：
+
+- A 公网入口节点
+- B 落地节点
+- B 可达地址
+- 默认中继端口
+- TCP / UDP 协议
+
+## 转发规则
+
+当前 MVP 使用两段 nftables：
+
+- A 侧：公网监听端口 -> B 的 EasyTier IP 或直连可达地址。
+- B 侧：中继端口 -> 落地服务器 IP/域名:端口。
+
+测试示例：
+
+```bash
+# B 或落地服务器上
 python3 -m http.server 8080 --bind 0.0.0.0
+
+# 外部客户端
 curl -v http://A公网IP:18081/
 ```
 
-## 安全边界
-
-- Agent 不接受任意 shell。
-- 只执行固定 action。
-- payload 中拒绝危险字段。
-- token 和任务输出会做 redaction 与长度限制。
-- 所有 nft/ip/systemctl 操作使用固定 argv。
-
-## 开发验证
+排查命令：
 
 ```bash
-cd panel/controller && go test ./... -v -count=1 -timeout=30s
-cd ../agent && go test ./... -v -count=1 -timeout=30s
-cd ../..
-npm --prefix panel/controller/web ci
-npm --prefix panel/controller/web run build
-VERSION=v0.3.0-ui-test bash panel/scripts/build-release.sh
+nft list table ip edge_tunnel_entry_forward
+nft list table ip edge_tunnel_landing_forward
+cat /proc/sys/net/ipv4/ip_forward
+journalctl -u edge-tunnel-agent -n 100 --no-pager
 ```
+
+## 出口策略 / PBR
+
+PBR 主要用于具备多出口线路的 B 落地节点。面板不会让用户手填出口接口和网关，而是让 Agent 识别线路组，例如 9929、CN2、JPSDWAN、DESDWAN、KRSDWAN 等。识别成功后选择线路组，网关、table、fwmark、priority 自动带出。
+
+推荐流程：
+
+1. 确认转发已跑通。
+2. 进入“出口策略 / PBR”。
+3. 选择 B 落地节点。
+4. 点击“识别出口线路”。
+5. 选择识别到的线路组。
+6. 选择转发规则。
+7. 创建并应用策略。
+8. 验证策略。
+
+如果没有识别到线路组，说明该节点可能不是多出口节点，不建议创建 PBR。
+
+## MSS / MTU
+
+默认 MTU 为 1380，默认启用 MSS clamp。它用于缓解 EasyTier、tun、多层 NAT 转发下的大包异常、网页卡顿或 TLS 握手后无响应问题。
+
+可在组网高级参数中调整：
+
+- MTU
+- MSS clamp 开关
+- auto / fixed / disabled 模式
+- 固定 MSS 值
+
+## 删除节点与远程清理
+
+删除节点支持三种模式：
+
+- `record_only`：仅删除 Controller 记录。
+- `clean_deployed`：远程清理 EasyTier、nftables 转发表、PBR、MSS、转发配置和组网配置，保留 Agent。
+- `purge_agent`：清理部署内容并卸载 Agent。
+
+如果节点离线，Controller 无法远程清理，只能删除面板记录或等待节点上线后再清理。
+
+## 一键诊断
+
+诊断会创建只读任务，收集：
+
+- Controller 版本和存储摘要
+- 节点在线状态
+- Agent 状态
+- EasyTier 状态和 peer/route
+- nftables 转发表
+- PBR 线路组和策略
+- MSS/MTU 状态
+- 最近失败任务
+
+诊断报告可复制为 Markdown，方便粘贴排查。
+
+## 国内安装加速
+
+设置 `EDGE_GITHUB_MIRRORS` 后，安装脚本会按顺序尝试官方源和镜像源：
+
+```bash
+export EDGE_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+```
+
+Web 添加节点时也可以选择“国内加速轮询”，面板会生成官方命令和多个备用镜像命令。
+
+## 安全边界
+
+- Agent 不接受任意 shell/cmd/script/raw 命令。
+- 所有写入动作必须是固定 allowlist action。
+- nftables、ip rule、ip route、systemctl 均由结构化配置渲染并用固定 argv 执行。
+- Token 在任务结果中会被裁剪和脱敏。
+
+## Credits / License
+
+Web UI 布局和交互体验参考 [bqlpfy/flux-panel](https://github.com/bqlpfy/flux-panel) 的面板思路，原项目使用 Apache-2.0 License。本项目仅借鉴 UI/UX，不接入其后端、隧道或计费业务。

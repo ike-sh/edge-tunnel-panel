@@ -7,6 +7,7 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/edge-tunnel/agent}"
 STATE_DIR="${STATE_DIR:-/var/lib/edge-tunnel/agent}"
 LOG_DIR="${LOG_DIR:-/var/log/edge-tunnel}"
+EDGE_GITHUB_MIRRORS="${EDGE_GITHUB_MIRRORS:-}"
 CONTROLLER_URL="${EDGE_CONTROLLER_URL:-}"
 CONTROLLER_TOKEN="${EDGE_CONTROLLER_TOKEN:-}"
 NODE_ID="${EDGE_NODE_ID:-}"
@@ -188,15 +189,44 @@ detect_arch() {
   esac
 }
 
-download_file() {
+mirror_url() {
+  local mirror="$1" url="$2"
+  mirror="${mirror%/}"
+  if [ -z "$mirror" ]; then
+    printf '%s' "$url"
+  else
+    printf '%s/%s' "$mirror" "$url"
+  fi
+}
+
+download_file_once() {
   local url="$1" dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fL "$url" -o "$dest"
+    curl -fL --connect-timeout 10 --max-time 180 "$url" -o "$dest"
   elif command -v wget >/dev/null 2>&1; then
-    wget -O "$dest" "$url"
+    wget --timeout=30 --tries=2 -O "$dest" "$url"
   else
     fail "curl or wget is required"
   fi
+}
+
+download_file() {
+  local url="$1" dest="$2" candidate mirror
+  log "downloading $url"
+  if download_file_once "$url" "$dest"; then
+    return 0
+  fi
+  IFS=',' read -r -a mirrors <<<"$EDGE_GITHUB_MIRRORS"
+  for mirror in "${mirrors[@]:-}"; do
+    mirror="$(printf '%s' "$mirror" | xargs)"
+    [ -n "$mirror" ] || continue
+    candidate="$(mirror_url "$mirror" "$url")"
+    log "retry with mirror $candidate"
+    if download_file_once "$candidate" "$dest"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 resolve_version() {
@@ -220,7 +250,6 @@ install_from_release() {
   asset="edge-tunnel-panel-${version}-linux-${arch}.tar.gz"
   url="https://github.com/${REPO}/releases/download/${version}/${asset}"
   tmp="$(mktemp -d)"
-  log "downloading $url"
   if ! download_file "$url" "$tmp/$asset"; then
     fail "release asset not available; use --source-build or run panel/scripts/build-release.sh first"
   fi

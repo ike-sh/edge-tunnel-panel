@@ -252,10 +252,14 @@ func (s *Store) updateTaskResult(id string, req map[string]any) (Task, bool, err
 			t.Stderr = capText(stringValue(req["stderr"], stringValue(req["result_stderr"], "")))
 			t.Error = capText(stringValue(req["error"], ""))
 			switch t.Action {
-			case "apply_forward_config", "apply_entry_forward_config", "apply_landing_forward_config", "verify_forward_rules", "verify_entry_forward_rules", "verify_landing_forward_rules":
+			case "apply_forward_config", "apply_entry_forward_config", "apply_landing_forward_config", "disable_entry_forward_config", "disable_landing_forward_config", "verify_forward_rules", "verify_entry_forward_rules", "verify_landing_forward_rules":
 				s.updateForwardStatusForTaskLocked(*t)
 			case "verify_network_connectivity":
 				s.updateNetworkLinkStatusForTaskLocked(*t)
+			case "verify_direct_link":
+				s.updateNetworkLinkStatusForTaskLocked(*t)
+			case "apply_pbr_policy", "verify_pbr_policy", "disable_pbr_policy":
+				s.updatePBRStatusForTaskLocked(*t)
 			}
 			return *t, true, s.saveLocked()
 		}
@@ -273,7 +277,18 @@ func (s *Store) updateForwardStatusForTaskLocked(task Task) {
 			continue
 		}
 		stage := stringValue(task.Payload["stage"], "")
-		if task.Action == "apply_entry_forward_config" || stage == "entry" {
+		if task.Action == "disable_entry_forward_config" || task.Action == "disable_landing_forward_config" {
+			if task.Action == "disable_entry_forward_config" || stage == "entry" {
+				s.data.Forwards[i].EntryStageStatus = "disabled"
+			}
+			if task.Action == "disable_landing_forward_config" || stage == "landing" {
+				s.data.Forwards[i].LandingStageStatus = "disabled"
+			}
+			if s.data.Forwards[i].EntryStageStatus == "disabled" && s.data.Forwards[i].LandingStageStatus == "disabled" {
+				s.data.Forwards[i].Status = "disabled"
+				s.data.Forwards[i].Enabled = false
+			}
+		} else if task.Action == "apply_entry_forward_config" || stage == "entry" {
 			if task.Status == "succeeded" {
 				s.data.Forwards[i].EntryStageStatus = "succeeded"
 			} else {
@@ -594,6 +609,12 @@ func (s *Store) createNetworkLink(link NetworkLink) (NetworkLink, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	applyMSSDefaults(&link)
+	if link.LinkType == "" {
+		link.LinkType = "easytier"
+	}
+	if link.TransitPort == 0 {
+		link.TransitPort = link.Port
+	}
 	if link.ID == "" {
 		link.ID = newID()
 	}
@@ -673,6 +694,12 @@ func (s *Store) updateNetworkLinkStatus(id, status, reason string) (NetworkLink,
 }
 
 func (s *Store) decorateNetworkLinkLocked(link NetworkLink, nodes []Node, at time.Time) NetworkLink {
+	if link.LinkType == "" {
+		link.LinkType = "easytier"
+	}
+	if link.TransitPort == 0 {
+		link.TransitPort = link.Port
+	}
 	var entry, backend *Node
 	for i := range nodes {
 		node := applyNodeLiveness(nodes[i], at)
@@ -687,6 +714,13 @@ func (s *Store) decorateNetworkLinkLocked(link NetworkLink, nodes []Node, at tim
 	storedReason := link.StatusReason
 	link.Status = firstString(storedStatus, "pending")
 	link.StatusReason = storedReason
+	if link.LinkType == "direct" {
+		if link.Status == "" || link.Status == "pending" {
+			link.Status = "active"
+			link.StatusReason = firstString(link.StatusReason, "direct link configured")
+		}
+		return link
+	}
 	if entry != nil && entry.EasyTierPeerCount > 0 {
 		link.EntryPeerCount = entry.EasyTierPeerCount
 	}
@@ -885,14 +919,14 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 	if item.LandingHostRaw == "" {
 		return Forward{}, errValidation("landing_host is required")
 	}
-	if item.TransportMode != "easytier" && item.TransportMode != "public" {
-		return Forward{}, errValidation("transport_mode must be easytier or public")
+	if item.TransportMode != "easytier" && item.TransportMode != "public" && item.TransportMode != "direct" {
+		return Forward{}, errValidation("transport_mode must be easytier, direct, or public")
 	}
 	if strings.Contains(item.LandingHostRaw, "/") {
 		return Forward{}, errValidation("landing_host must not be CIDR")
 	}
 	if addr, err := netip.ParseAddr(item.LandingHostRaw); err == nil && addr.Is6() {
-		return Forward{}, errValidation("v0.3.0-ui-test does not support IPv6 landing targets")
+		return Forward{}, errValidation("v0.3.1-test does not support IPv6 landing targets")
 	}
 	if item.PublicListenHost == "" {
 		item.PublicListenHost = "0.0.0.0"
@@ -913,6 +947,8 @@ func normalizeTransportMode(mode string) string {
 		return "easytier"
 	case "public":
 		return "public"
+	case "direct":
+		return "direct"
 	default:
 		return strings.TrimSpace(strings.ToLower(mode))
 	}

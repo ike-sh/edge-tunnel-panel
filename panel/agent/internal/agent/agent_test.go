@@ -1365,3 +1365,43 @@ func TestDetectMTUStatus(t *testing.T) {
 		t.Fatalf("detect mtu failed: %+v", result)
 	}
 }
+
+func TestVerifyDirectLink(t *testing.T) {
+	runner := &fakeRunner{paths: map[string]bool{"nc": true}}
+	result := ExecuteTask(context.Background(), testConfig(t), runner, Task{Action: "verify_direct_link", Payload: map[string]any{"target_host": "10.10.10.2", "target_port": 18081}})
+	if result.Status != "succeeded" {
+		t.Fatalf("direct link verify failed: %+v", result)
+	}
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "ip route get 10.10.10.2") {
+		t.Fatalf("route get not called: %#v", runner.calls)
+	}
+}
+
+func TestDisableForwardStagesDeleteTables(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	runner := &fakeRunner{}
+	entry := ExecuteTask(context.Background(), cfg, runner, Task{Action: "disable_entry_forward_config", Payload: map[string]any{"forward_id": "f1"}})
+	landing := ExecuteTask(context.Background(), cfg, runner, Task{Action: "disable_landing_forward_config", Payload: map[string]any{"forward_id": "f1"}})
+	if entry.Status != "succeeded" || landing.Status != "succeeded" {
+		t.Fatalf("disable stages failed: %+v %+v", entry, landing)
+	}
+	calls := strings.Join(runner.calls, "\n")
+	if !strings.Contains(calls, "nft delete table ip edge_tunnel_entry_forward") || !strings.Contains(calls, "nft delete table ip edge_tunnel_landing_forward") {
+		t.Fatalf("expected nft table deletes: %s", calls)
+	}
+}
+
+func TestCleanupNodeDeploymentAction(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	runner := &fakeRunner{}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "cleanup_node_deployment", Payload: map[string]any{}})
+	if result.Status != "succeeded" {
+		t.Fatalf("cleanup failed: %+v", result)
+	}
+	calls := strings.Join(runner.calls, "\n")
+	if !strings.Contains(calls, "systemctl stop edge-tunnel-easytier.service") || !strings.Contains(calls, "nft delete table ip edge_tunnel_pbr") {
+		t.Fatalf("cleanup calls missing: %s", calls)
+	}
+}

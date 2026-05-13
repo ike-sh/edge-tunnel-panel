@@ -7,7 +7,7 @@ import CodeBlock from '../components/CodeBlock.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { linkOptionLabel, labelStatus, nodeLabel, publicIP, ruleListenPort, ruleLandingPort, landingHost, transportModeLabel, shortID, pretty } from '../utils/format.js';
 
-export default function Forwards({ forwards, networkLinks, nodeMap, forwardForm, setForwardForm, onCreateForward, onApplyForward, onVerifyForward, onDeleteForward, onRefresh, onCopy }) {
+export default function Forwards({ forwards, networkLinks, nodeMap, forwardForm, setForwardForm, onCreateForward, onApplyForward, onVerifyForward, onDisableForward, onDeleteForward, onRefresh, onCopy }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const readyLinks = networkLinks.filter((link) => link.status === 'connected' || link.status === 'active');
   const selectedLink = networkLinks.find((item) => item.id === forwardForm.network_link_id);
@@ -38,7 +38,7 @@ export default function Forwards({ forwards, networkLinks, nodeMap, forwardForm,
               { key: 'landing_port', title: '落地端口', render: (rule) => ruleLandingPort(rule) },
               { key: 'status', title: '状态', render: (rule) => <StatusBadge status={rule.status}>{labelStatus(rule.status)}</StatusBadge> },
               { key: 'stages', title: '阶段', render: (rule) => <span>A {labelStatus(rule.entry_stage_status || 'pending')} / B {labelStatus(rule.landing_stage_status || 'pending')}</span> },
-              { key: 'actions', title: '操作', render: (rule) => <div className="row-actions"><button className="small" onClick={() => onApplyForward(rule)}>应用</button><button className="secondary small" onClick={() => onVerifyForward(rule)}>验证</button><button className="danger small" onClick={() => onDeleteForward(rule)}>删除</button></div> },
+              { key: 'actions', title: '操作', render: (rule) => <div className="row-actions"><button className="small" onClick={() => onApplyForward(rule)}>启用/应用</button><button className="secondary small" onClick={() => onVerifyForward(rule)}>验证</button><button className="secondary small" onClick={() => onDisableForward(rule)}>停用</button><button className="danger small" onClick={() => onDeleteForward(rule)}>删除</button></div> },
             ]}
           />
         )}
@@ -56,13 +56,13 @@ export default function Forwards({ forwards, networkLinks, nodeMap, forwardForm,
           <label>公网监听端口<input type="number" min="1" max="65535" value={forwardForm.public_listen_port} onChange={(event) => setForwardForm({ ...forwardForm, public_listen_port: event.target.value })} placeholder="例如 18081" /></label>
           <label>落地服务器地址<input value={forwardForm.landing_host} onChange={(event) => setForwardForm({ ...forwardForm, landing_host: event.target.value })} placeholder="例如 1.2.3.4 或 backend.example.com" /></label>
           <label>落地服务器端口<input type="number" min="1" max="65535" value={forwardForm.landing_port} onChange={(event) => setForwardForm({ ...forwardForm, landing_port: event.target.value })} placeholder="例如 8080" /></label>
-          <label>A 到 B 的传输方式<select value={forwardForm.transport_mode} onChange={(event) => setForwardForm({ ...forwardForm, transport_mode: event.target.value })}><option value="easytier">EasyTier 隧道</option><option value="public">B 公网直连</option></select></label>
+          {selectedLink?.link_type === 'direct' ? <label>A 到 B 的传输方式<input value="直连链路" readOnly /></label> : <label>A 到 B 的传输方式<select value={forwardForm.transport_mode} onChange={(event) => setForwardForm({ ...forwardForm, transport_mode: event.target.value })}><option value="easytier">EasyTier 隧道</option><option value="public">B 公网直连</option></select></label>}
           <label className="check"><input type="checkbox" checked={forwardForm.enabled} onChange={(event) => setForwardForm({ ...forwardForm, enabled: event.target.checked })} />启用规则</label>
         </div>
         <div className="route-preview">
           <strong>链路预览</strong>
           <p>{previewRoute(selectedLink, nodeMap, forwardForm)}</p>
-          <small>{forwardForm.transport_mode === 'public' ? 'B 公网直连：A 通过 B 的公网 IP 转发，再由 B 落地到目标服务。' : 'EasyTier 隧道：A 通过 B 的 EasyTier 虚拟 IP 转发，再由 B 落地到目标服务。'}</small>
+          <small>{selectedLink?.link_type === 'direct' ? '直连链路：A 通过 B 可达地址转发，不依赖 EasyTier。' : (forwardForm.transport_mode === 'public' ? 'B 公网直连：A 通过 B 的公网 IP 转发，再由 B 落地到目标服务。' : 'EasyTier 隧道：A 通过 B 的 EasyTier 虚拟 IP 转发，再由 B 落地到目标服务。')}</small>
         </div>
         <details className="detail-box">
           <summary>高级设置</summary>
@@ -82,6 +82,9 @@ function previewRoute(link, nodeMap, form) {
   const landing = link ? nodeMap[link.backend_node_id] : null;
   const publicPort = form.public_listen_port || '公网端口';
   const landingAddr = `${form.landing_host || '落地服务器'}:${form.landing_port || '落地端口'}`;
+  if (link?.link_type === 'direct') {
+    return `外部客户端 → ${publicIP(entry)}:${publicPort} → A nftables → ${link.landing_reachable_host || 'B 可达地址'}:${publicPort} → B nftables → ${landingAddr}`;
+  }
   if (form.transport_mode === 'public') {
     return `外部客户端 → ${publicIP(entry)}:${publicPort} → A nftables → ${publicIP(landing)}:${publicPort} → B nftables → ${landingAddr}`;
   }

@@ -44,6 +44,8 @@ func NewServer(store *Store, agentToken, operatorToken string, strictAuth bool, 
 	mux.HandleFunc("/api/v1/forwards/", s.handleForwards)
 	mux.HandleFunc("/api/v1/pbr-policies", s.handlePBRPolicies)
 	mux.HandleFunc("/api/v1/pbr-policies/", s.handlePBRPolicies)
+	mux.HandleFunc("/api/v1/diagnostics/run", s.handleDiagnosticsRun)
+	mux.HandleFunc("/api/v1/diagnostics/", s.handleDiagnostics)
 	mux.HandleFunc("/api/v1/tasks", s.handleTasks)
 	mux.HandleFunc("/api/v1/tasks/", s.handleTasks)
 	mux.HandleFunc("/api/v1/ddns", s.handleDDNS)
@@ -240,7 +242,7 @@ func (s *Server) handleBootstrapInfo(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
 		return
 	}
-	writeOK(w, 200, map[string]any{"install_script_url": installScriptURL(), "default_node_name": "edge-node-1", "default_version": defaultAgentInstallVersion, "repo": "ike-sh/edge-tunnel-panel"})
+	writeOK(w, 200, map[string]any{"install_script_url": installScriptURL(), "default_node_name": "edge-node-1", "default_version": defaultAgentInstallVersion, "default_github_mirrors": defaultGitHubMirrors, "repo": "ike-sh/edge-tunnel-panel"})
 }
 func (s *Server) handleBootstrapAgentInstall(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
@@ -256,8 +258,23 @@ func (s *Server) handleBootstrapAgentInstall(w http.ResponseWriter, r *http.Requ
 	role := stringValue(req["role"], "node")
 	enableTasks := boolRequestValue(req, "enable_tasks", true)
 	enableWrites := boolRequestValue(req, "enable_write_actions", true)
+	downloadSource := stringValue(req["download_source"], "official")
+	mirrors := stringValue(req["github_mirrors"], "")
+	if downloadSource == "mirror" && strings.TrimSpace(mirrors) == "" {
+		mirrors = defaultGitHubMirrors
+	}
 	rootCommand := buildAgentInstallCommand("", version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites)
 	sudoCommand := buildAgentInstallCommand("sudo", version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites)
+	mirrorRoots := []string{}
+	mirrorSudos := []string{}
+	for _, scriptURL := range mirrorScriptURLs(mirrors) {
+		mirrorRoots = append(mirrorRoots, buildAgentInstallCommandWithURL("", scriptURL, mirrors, version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites))
+		mirrorSudos = append(mirrorSudos, buildAgentInstallCommandWithURL("sudo", scriptURL, mirrors, version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites))
+	}
+	if downloadSource == "mirror" && len(mirrorRoots) > 0 {
+		rootCommand = mirrorRoots[0]
+		sudoCommand = mirrorSudos[0]
+	}
 	data := map[string]any{
 		"root_command":             rootCommand,
 		"sudo_command":             sudoCommand,
@@ -273,6 +290,10 @@ func (s *Server) handleBootstrapAgentInstall(w http.ResponseWriter, r *http.Requ
 		"node_name":                nodeName,
 		"enable_tasks":             enableTasks,
 		"enable_write_actions":     enableWrites,
+		"download_source":          downloadSource,
+		"github_mirrors":           mirrors,
+		"mirror_root_commands":     mirrorRoots,
+		"mirror_sudo_commands":     mirrorSudos,
 	}
 	writeOK(w, 200, data)
 }
@@ -287,6 +308,36 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodDelete {
+			mode := strings.TrimSpace(r.URL.Query().Get("mode"))
+			if mode == "" {
+				mode = "record_only"
+			}
+			if mode == "clean_deployed" || mode == "purge_agent" {
+				node, found := s.store.getNode(id)
+				if !found {
+					writeErr(w, 404, "NOT_FOUND", "node not found")
+					return
+				}
+				if node.Status != "online" {
+					writeErr(w, 409, "NODE_OFFLINE", "节点离线，无法远程清理；可以选择仅删除面板记录。")
+					return
+				}
+				action := "cleanup_node_deployment"
+				if mode == "purge_agent" {
+					action = "purge_agent_deployment"
+				}
+				task, err := s.store.createTask(Task{NodeID: id, Action: action, Payload: map[string]any{"node_id": id, "mode": mode}})
+				if err != nil {
+					writeErr(w, 500, "STORE_ERROR", err.Error())
+					return
+				}
+				writeOK(w, 202, map[string]any{"queued": true, "mode": mode, "task": task, "message": "已创建远程清理任务，节点上线时会执行。"})
+				return
+			}
+			if mode != "record_only" {
+				writeErr(w, 400, "BAD_REQUEST", "mode must be record_only, clean_deployed, or purge_agent")
+				return
+			}
 			deleted, err := s.store.deleteNode(id)
 			if err != nil {
 				writeErr(w, 500, "STORE_ERROR", err.Error())
@@ -592,16 +643,103 @@ func networkURLs(protocols []string, host string, port int) []string {
 	return out
 }
 
+func (s *Server) createNetworkLink(w http.ResponseWriter, req map[string]any) {
+	linkType := strings.ToLower(strings.TrimSpace(stringValue(req["link_type"], "direct")))
+	if linkType == "" {
+		linkType = "direct"
+	}
+	if linkType != "direct" && linkType != "easytier" {
+		writeErr(w, 400, "BAD_REQUEST", "link_type must be direct or easytier")
+		return
+	}
+	if linkType == "easytier" {
+		s.quickApplyNetwork(w, req)
+		return
+	}
+	entryNodeID := stringValue(req["entry_node_id"], "")
+	backendNodeID := stringValue(req["backend_node_id"], stringValue(req["landing_node_id"], ""))
+	if entryNodeID == "" || backendNodeID == "" {
+		writeErr(w, 400, "BAD_REQUEST", "entry_node_id and landing_node_id are required")
+		return
+	}
+	if entryNodeID == backendNodeID {
+		writeErr(w, 400, "BAD_REQUEST", "entry and landing nodes must be different")
+		return
+	}
+	entryNode, found := s.store.getNode(entryNodeID)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "entry node not found")
+		return
+	}
+	backendNode, found := s.store.getNode(backendNodeID)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "landing node not found")
+		return
+	}
+	host := normalizeHostIP(stringValue(req["landing_reachable_host"], stringValue(req["reachable_host"], "")))
+	if host == "" || strings.Contains(host, "/") || strings.Contains(host, ":") {
+		writeErr(w, 400, "BAD_REQUEST", "landing_reachable_host must be an IPv4 host reachable from entry node")
+		return
+	}
+	if ip := net.ParseIP(host); ip == nil || ip.To4() == nil {
+		writeErr(w, 400, "BAD_REQUEST", "landing_reachable_host must be IPv4 for direct links")
+		return
+	}
+	port := intValue(req["transit_port"])
+	if port == 0 {
+		port = intValue(req["port"])
+	}
+	if !validPort(port) {
+		writeErr(w, 400, "BAD_REQUEST", "transit_port must be 1-65535")
+		return
+	}
+	protocols := stringListValue(req["protocols"])
+	if len(protocols) == 0 {
+		protocols = []string{"tcp", "udp"}
+	}
+	name := stringValue(req["name"], "direct-link")
+	link, err := s.store.createNetworkLink(NetworkLink{
+		Name:                 name,
+		LinkType:             "direct",
+		NetworkName:          name,
+		Port:                 port,
+		TransitPort:          port,
+		Protocols:            protocols,
+		LandingReachableHost: host,
+		EntryNodeID:          entryNode.ID,
+		BackendNodeID:        backendNode.ID,
+		Status:               "active",
+		StatusReason:         "direct link configured",
+	})
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	writeOK(w, 200, map[string]any{"link": link, "message": "direct link created; no EasyTier tasks were created"})
+}
+
 func (s *Server) handleNetworkLinks(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
 		return
 	}
 	if r.URL.Path == "/api/v1/network-links" {
-		if r.Method != http.MethodGet {
-			writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+		if r.Method == http.MethodGet {
+			writeOK(w, 200, s.store.listNetworkLinks())
 			return
 		}
-		writeOK(w, 200, s.store.listNetworkLinks())
+		if r.Method == http.MethodPost {
+			req, ok := decodeBody(w, r)
+			if !ok {
+				return
+			}
+			if payloadHasDangerousKeys(req) {
+				writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+				return
+			}
+			s.createNetworkLink(w, req)
+			return
+		}
+		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
 	}
 	if r.URL.Path == "/api/v1/network-links/quick-apply" && r.Method == http.MethodPost {
@@ -643,16 +781,36 @@ func (s *Server) handleNetworkLinks(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && action == "enable":
 		s.handleNetworkLinkReapply(w, r, id)
 	case r.Method == http.MethodPost && action == "disable":
-		link, found, err := s.store.updateNetworkLinkStatus(id, "disabled", "disabled by operator")
-		if err != nil {
-			writeErr(w, 500, "STORE_ERROR", err.Error())
-			return
-		}
+		link, found := s.store.getNetworkLink(id)
 		if !found {
 			writeErr(w, 404, "NOT_FOUND", "network link not found")
 			return
 		}
-		writeOK(w, 200, link)
+		if link.LinkType == "easytier" {
+			entryTask, err := s.store.createTask(Task{NodeID: link.EntryNodeID, Action: "disable_network_link", Payload: map[string]any{"network_link_id": link.ID, "target_mode": "entry"}})
+			if err != nil {
+				writeErr(w, 500, "STORE_ERROR", err.Error())
+				return
+			}
+			backendTask, err := s.store.createTask(Task{NodeID: link.BackendNodeID, Action: "disable_network_link", Payload: map[string]any{"network_link_id": link.ID, "target_mode": "backend"}})
+			if err != nil {
+				writeErr(w, 500, "STORE_ERROR", err.Error())
+				return
+			}
+			updated, _, err := s.store.updateNetworkLinkStatus(id, "disabled", "disable tasks created")
+			if err != nil {
+				writeErr(w, 500, "STORE_ERROR", err.Error())
+				return
+			}
+			writeOK(w, 202, map[string]any{"link": updated, "entry_task": entryTask, "backend_task": backendTask})
+			return
+		}
+		updated, _, err := s.store.updateNetworkLinkStatus(id, "disabled", "direct link disabled")
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		writeOK(w, 200, updated)
 	default:
 		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
 	}
@@ -662,6 +820,24 @@ func (s *Server) handleNetworkLinkVerify(w http.ResponseWriter, r *http.Request,
 	link, found := s.store.getNetworkLink(id)
 	if !found {
 		writeErr(w, 404, "NOT_FOUND", "network link not found")
+		return
+	}
+	if link.LinkType == "direct" {
+		port := link.TransitPort
+		if port == 0 {
+			port = link.Port
+		}
+		task, err := s.store.createTask(Task{NodeID: link.EntryNodeID, Action: "verify_direct_link", Payload: map[string]any{"network_link_id": link.ID, "target_mode": "entry", "target_host": link.LandingReachableHost, "target_port": port}})
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		updated, _, err := s.store.updateNetworkLinkTasks(id, task.ID, "", true)
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		writeOK(w, 202, map[string]any{"link": updated, "task": task})
 		return
 	}
 	entryTask, err := s.store.createTask(Task{NodeID: link.EntryNodeID, Action: "verify_network_connectivity", Payload: map[string]any{"network_link_id": link.ID, "target_mode": "entry"}})
@@ -686,6 +862,15 @@ func (s *Server) handleNetworkLinkReapply(w http.ResponseWriter, r *http.Request
 	link, found := s.store.getNetworkLink(id)
 	if !found {
 		writeErr(w, 404, "NOT_FOUND", "network link not found")
+		return
+	}
+	if link.LinkType == "direct" {
+		updated, _, err := s.store.updateNetworkLinkStatus(id, "active", "direct link enabled")
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		writeOK(w, 200, map[string]any{"link": updated, "message": "direct link enabled"})
 		return
 	}
 	entryNode, found := s.store.getNode(link.EntryNodeID)
@@ -812,6 +997,10 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 		s.handleForwardApply(w, r, id)
 	case r.Method == http.MethodPost && action == "verify":
 		s.handleForwardVerify(w, r, id)
+	case r.Method == http.MethodPost && action == "enable":
+		s.handleForwardApply(w, r, id)
+	case r.Method == http.MethodPost && action == "disable":
+		s.handleForwardDisable(w, r, id)
 	case r.Method == http.MethodGet && action == "":
 		item, found := s.store.getForward(id)
 		if !found {
@@ -822,6 +1011,42 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
 	}
+}
+
+func (s *Server) handleForwardDisable(w http.ResponseWriter, r *http.Request, id string) {
+	req := map[string]any{}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	if payloadHasDangerousKeys(req) {
+		writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+		return
+	}
+	forward, found := s.store.getForward(id)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "forward not found")
+		return
+	}
+	entryTask, err := s.store.createTask(Task{NodeID: forward.EntryNodeID, Action: "disable_entry_forward_config", Payload: map[string]any{"stage": "entry", "forward_id": forward.ID, "rule_id": forward.ID, "forward_rule": forward}})
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	landingTask, err := s.store.createTask(Task{NodeID: forward.LandingNodeID, Action: "disable_landing_forward_config", Payload: map[string]any{"stage": "landing", "forward_id": forward.ID, "rule_id": forward.ID, "forward_rule": forward}})
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	if _, _, err := s.store.updateForwardTask(forward.ID, entryTask.ID, "entry_apply", "applying"); err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	updated, _, err := s.store.updateForwardTask(forward.ID, landingTask.ID, "landing_apply", "applying")
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	writeOK(w, 202, map[string]any{"forward": updated, "entry_task": entryTask, "landing_task": landingTask})
 }
 
 func (s *Server) handleForwardCreateAndApply(w http.ResponseWriter, r *http.Request) {
@@ -883,7 +1108,10 @@ func (s *Server) prepareForwardRequest(w http.ResponseWriter, req map[string]any
 		return false
 	}
 	mode := normalizeTransportMode(stringValue(req["transport_mode"], "easytier"))
-	tunnelTarget, err := resolveTunnelTargetHost(landingNode, mode)
+	if link.LinkType == "direct" {
+		mode = "direct"
+	}
+	tunnelTarget, err := resolveForwardTunnelTarget(link, landingNode, mode)
 	if err != nil {
 		writeErr(w, 400, "BAD_REQUEST", err.Error())
 		return false
@@ -909,21 +1137,28 @@ func (s *Server) prepareForwardRequest(w http.ResponseWriter, req map[string]any
 	return true
 }
 
-func resolveTunnelTargetHost(landingNode Node, mode string) (string, error) {
+func resolveForwardTunnelTarget(link NetworkLink, landingNode Node, mode string) (string, error) {
 	var target string
-	switch normalizeTransportMode(mode) {
-	case "easytier":
-		target = normalizeHostIP(landingNode.EasyTierIP)
+	if link.LinkType == "direct" || normalizeTransportMode(mode) == "direct" {
+		target = normalizeHostIP(link.LandingReachableHost)
 		if target == "" {
-			return "", errValidation("B \u8282\u70b9\u6682\u65e0 EasyTier \u865a\u62df IP\uff0c\u8bf7\u5148\u5b8c\u6210\u7ec4\u7f51\u9a8c\u8bc1")
+			return "", errValidation("直连链路缺少 B 可达地址")
 		}
-	case "public":
-		target = normalizeHostIP(firstString(landingNode.PublicIP, landingNode.ObservedIP))
-		if target == "" {
-			return "", errValidation("B \u8282\u70b9\u6682\u65e0\u516c\u7f51 IP\uff0c\u4e0d\u80fd\u4f7f\u7528\u516c\u7f51\u76f4\u8fde\u6a21\u5f0f")
+	} else {
+		switch normalizeTransportMode(mode) {
+		case "easytier":
+			target = normalizeHostIP(landingNode.EasyTierIP)
+			if target == "" {
+				return "", errValidation("B \u8282\u70b9\u6682\u65e0 EasyTier \u865a\u62df IP\uff0c\u8bf7\u5148\u5b8c\u6210\u7ec4\u7f51\u9a8c\u8bc1")
+			}
+		case "public":
+			target = normalizeHostIP(firstString(landingNode.PublicIP, landingNode.ObservedIP))
+			if target == "" {
+				return "", errValidation("B \u8282\u70b9\u6682\u65e0\u516c\u7f51 IP\uff0c\u4e0d\u80fd\u4f7f\u7528\u516c\u7f51\u76f4\u8fde\u6a21\u5f0f")
+			}
+		default:
+			return "", errValidation("transport_mode must be easytier, direct, or public")
 		}
-	default:
-		return "", errValidation("transport_mode must be easytier or public")
 	}
 	ip := net.ParseIP(target)
 	if ip == nil || ip.To4() == nil {
@@ -944,10 +1179,10 @@ func validateLandingHost(host string) error {
 		return errValidation("landing_host must be an IP address or domain")
 	}
 	if strings.Contains(host, ":") {
-		return errValidation("v0.3.0-ui-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("v0.3.1-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
-		return errValidation("v0.3.0-ui-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("v0.3.1-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	return nil
 }
@@ -970,7 +1205,12 @@ func (s *Server) createForwardApplyTask(w http.ResponseWriter, forward Forward) 
 		writeErr(w, 404, "NOT_FOUND", "landing node not found")
 		return
 	}
-	tunnelTarget, err := resolveTunnelTargetHost(landingNode, forward.TransportMode)
+	link, found := s.store.getNetworkLink(forward.NetworkLinkID)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "network link not found")
+		return
+	}
+	tunnelTarget, err := resolveForwardTunnelTarget(link, landingNode, forward.TransportMode)
 	if err != nil {
 		writeErr(w, 400, "BAD_REQUEST", err.Error())
 		return
@@ -1217,6 +1457,92 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) handleDDNS(w http.ResponseWriter, r *http.Request) { writeOK(w, 200, []DDNSProfile{}) }
 
+func (s *Server) handleDiagnosticsRun(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOperator(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	req, ok := decodeBody(w, r)
+	if !ok {
+		return
+	}
+	if payloadHasDangerousKeys(req) {
+		writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+		return
+	}
+	diagnosticID := "diag-" + newID()
+	nodeIDs := stringListValue(req["node_ids"])
+	if len(nodeIDs) == 0 {
+		for _, node := range s.store.listNodes() {
+			nodeIDs = append(nodeIDs, node.ID)
+		}
+	}
+	actions := []string{"collect_agent_status", "detect_network_interfaces", "detect_pbr_route_groups", "verify_easytier_status", "verify_network_connectivity", "verify_forward_rules", "verify_pbr_policy", "detect_mtu_status"}
+	tasks := []Task{}
+	for _, nodeID := range nodeIDs {
+		for _, action := range actions {
+			payload := map[string]any{"diagnostic_id": diagnosticID, "node_id": nodeID}
+			if action == "verify_forward_rules" {
+				payload["stage"] = "entry"
+			}
+			task, err := s.store.createTask(Task{NodeID: nodeID, Action: action, Payload: payload})
+			if err != nil {
+				writeErr(w, 500, "STORE_ERROR", err.Error())
+				return
+			}
+			tasks = append(tasks, task)
+		}
+	}
+	writeOK(w, 202, map[string]any{"diagnostic_id": diagnosticID, "controller": s.diagnosticControllerSummary(), "tasks": tasks})
+}
+
+func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOperator(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/diagnostics/"), "/")
+	if id == "" {
+		writeErr(w, 404, "NOT_FOUND", "diagnostic not found")
+		return
+	}
+	tasks := []Task{}
+	for _, task := range s.store.listTasks("", "") {
+		if stringValue(task.Payload["diagnostic_id"], "") == id {
+			tasks = append(tasks, task)
+		}
+	}
+	report := s.diagnosticMarkdown(id, tasks)
+	writeOK(w, 200, map[string]any{"diagnostic_id": id, "controller": s.diagnosticControllerSummary(), "tasks": tasks, "markdown": report})
+}
+
+func (s *Server) diagnosticControllerSummary() map[string]any {
+	nodes := s.store.listNodes()
+	tasks := s.store.listTasks("", "")
+	return map[string]any{"version": Version, "node_count": len(nodes), "task_count": len(tasks), "strict_auth": s.strictAuth, "web_dir": s.webDir}
+}
+
+func (s *Server) diagnosticMarkdown(id string, tasks []Task) string {
+	var b strings.Builder
+	b.WriteString("# Edge Tunnel Panel 诊断报告\n\n")
+	b.WriteString("诊断 ID：" + id + "\n\n")
+	b.WriteString("Controller 版本：" + Version + "\n\n")
+	for _, task := range tasks {
+		b.WriteString("- 节点 `" + task.NodeID + "` / `" + task.Action + "` / `" + task.Status + "`")
+		if task.Error != "" {
+			b.WriteString(" / 错误：" + task.Error)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func splitCollectionPath(requestPath, prefix string) (id string, action string) {
 	if !strings.HasPrefix(requestPath, prefix) {
 		return "", ""
@@ -1328,7 +1654,7 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 	if kind == "tasks" {
 		action := stringValue(req["action"], "collect_agent_status")
 		blocked := map[string]bool{"arbitrary_command": true, "shell_c": true, "bash_c": true, "ev" + "al": true, "raw_" + "nft": true, "raw_" + "iptables": true, "raw_" + "ip_route": true, "curl_pipe_bash": true}
-		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "detect_network_interfaces": true, "detect_pbr_route_groups": true, "detect_mtu_status": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_pbr_policy": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_entry_forward_config": true, "apply_landing_forward_config": true, "apply_pbr_config": true, "apply_pbr_policy": true, "disable_pbr_policy": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
+		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "detect_network_interfaces": true, "detect_pbr_route_groups": true, "detect_mtu_status": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_direct_link": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_pbr_policy": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_entry_forward_config": true, "apply_landing_forward_config": true, "disable_entry_forward_config": true, "disable_landing_forward_config": true, "disable_network_link": true, "cleanup_node_deployment": true, "purge_agent_deployment": true, "apply_pbr_config": true, "apply_pbr_policy": true, "disable_pbr_policy": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
 		if blocked[action] || !allowed[action] {
 			writeErr(w, 400, "BLOCKED_ACTION", "action is not allowed")
 			return

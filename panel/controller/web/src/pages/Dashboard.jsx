@@ -23,6 +23,7 @@ export default function Dashboard({ stats, nodes, networkLinks, forwards, pbrPol
           <button onClick={() => onNavigate('networks')}>快速组网</button>
           <button onClick={() => onNavigate('forwards')}>创建转发</button>
           <button onClick={() => onNavigate('pbr')}>创建 PBR</button>
+          <button onClick={() => onNavigate('diagnostics')}>一键诊断</button>
         </div>
       </Card>
 

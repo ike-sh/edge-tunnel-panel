@@ -28,6 +28,8 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		return verifyEasyTier(ctx, cfg, runner)
 	case "verify_network_connectivity":
 		return verifyNetworkConnectivity(ctx, cfg, runner)
+	case "verify_direct_link":
+		return verifyDirectLink(ctx, runner, task.Payload)
 	case "verify_forward_rules":
 		return verifyForwardRules(ctx, cfg, runner, task.Payload)
 	case "verify_pbr_rules":
@@ -50,6 +52,16 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		return applyEntryForwardConfig(ctx, cfg, runner, task.Payload)
 	case "apply_landing_forward_config":
 		return applyLandingForwardConfig(ctx, cfg, runner, task.Payload)
+	case "disable_entry_forward_config":
+		return disableForwardStage(ctx, cfg, runner, "entry", task.Payload)
+	case "disable_landing_forward_config":
+		return disableForwardStage(ctx, cfg, runner, "landing", task.Payload)
+	case "disable_network_link":
+		return disableNetworkLink(ctx, cfg, runner, task.Payload)
+	case "cleanup_node_deployment":
+		return cleanupNodeDeployment(ctx, cfg, runner, false)
+	case "purge_agent_deployment":
+		return cleanupNodeDeployment(ctx, cfg, runner, true)
 	case "apply_pbr_config":
 		return applyPBRConfig(cfg, task.Payload)
 	case "apply_pbr_policy":

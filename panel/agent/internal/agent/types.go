@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const Version = "v0.3.0-ui-test"
+const Version = "v0.3.1-test"
 
 type APIResponse struct {
 	OK    bool            `json:"ok"`

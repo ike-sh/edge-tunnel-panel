@@ -9,6 +9,7 @@ import Nodes from './pages/Nodes.jsx';
 import NetworkLinks from './pages/NetworkLinks.jsx';
 import Forwards from './pages/Forwards.jsx';
 import PBR from './pages/PBR.jsx';
+import Diagnostics from './pages/Diagnostics.jsx';
 import Tasks from './pages/Tasks.jsx';
 import Settings from './pages/Settings.jsx';
 import { copyText } from './utils/copy.js';
@@ -39,9 +40,9 @@ function App() {
   const [networkProfiles, setNetworkProfiles] = useState([]);
   const [forwards, setForwards] = useState([]);
   const [pbrPolicies, setPBRPolicies] = useState([]);
-  const [agentForm, setAgentForm] = useState({ controller_url: browserControllerURL(), node_name: 'edge-node-1', version: DEFAULT_VERSION, enable_tasks: true, enable_write_actions: true });
-  const [agentCommand, setAgentCommand] = useState({ root: '', sudo: '' });
-  const [quickForm, setQuickForm] = useState({ name: 'edge-net', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', port: 11010, mtu: 1380, mss_clamp_enabled: true, mss_mode: 'auto', mss_value: '', entry_node_id: '', backend_node_id: '', tcp: true, udp: true, showAdvanced: false, listeners: 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010', peers: '' });
+  const [agentForm, setAgentForm] = useState({ controller_url: browserControllerURL(), node_name: 'edge-node-1', version: DEFAULT_VERSION, enable_tasks: true, enable_write_actions: true, download_source: 'official', github_mirrors: 'https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/' });
+  const [agentCommand, setAgentCommand] = useState({ root: '', sudo: '', mirrorRoots: [], mirrorSudos: [] });
+  const [quickForm, setQuickForm] = useState({ link_type: 'easytier', name: 'edge-net', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', port: 11010, mtu: 1380, mss_clamp_enabled: true, mss_mode: 'auto', mss_value: '', entry_node_id: '', backend_node_id: '', landing_reachable_host: '', tcp: true, udp: true, showAdvanced: false, listeners: 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010', peers: '' });
   const [forwardForm, setForwardForm] = useState({ network_link_id: '', name: '', protocol: 'tcp', public_listen_port: '', landing_host: '', landing_port: '', transport_mode: 'easytier', enabled: true, remark: '' });
   const [pbrForm, setPBRForm] = useState({ node_id: '', forward_rule_id: '', name: '', route_group_name: '', route_group_gateway: '', route_group_table_id: '', route_group_table_name: '', route_group_matched_ip: '', source_type: 'forward', enabled: true });
   const [taskFilter, setTaskFilter] = useState('all');
@@ -109,9 +110,11 @@ function App() {
         enable_tasks: agentForm.enable_tasks,
         enable_write_actions: agentForm.enable_write_actions,
         show_full_token: true,
+        download_source: agentForm.download_source,
+        github_mirrors: agentForm.github_mirrors,
       },
     }));
-    if (data) setAgentCommand({ root: data.root_command || data.recommended_command || data.full_command || '', sudo: data.sudo_command || '' });
+    if (data) setAgentCommand({ root: data.root_command || data.recommended_command || data.full_command || '', sudo: data.sudo_command || '', mirrorRoots: data.mirror_root_commands || [], mirrorSudos: data.mirror_sudo_commands || [] });
   }
 
   async function copyCommand(kind, text) {
@@ -126,8 +129,10 @@ function App() {
   }
 
   async function deleteNode(node) {
-    if (!window.confirm('仅删除主控面板中的节点记录，不会卸载远端 Agent。\n如果远端 Agent 仍在运行，该节点会在下一次心跳后重新出现。\n确认删除？')) return;
-    await run('删除节点记录', async () => api(`/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' }));
+    const mode = window.prompt('删除模式：record_only=仅删除记录；clean_deployed=清理组网/转发/PBR/MSS；purge_agent=清理并卸载 Agent', 'clean_deployed');
+    if (!mode) return;
+    if (!window.confirm(`确认执行 ${mode}？\n离线节点无法远程清理；如果 Agent 仍运行，仅删记录后会重新上线。`)) return;
+    await run('删除 / 清理节点', async () => api(`/nodes/${encodeURIComponent(node.id)}?mode=${encodeURIComponent(mode)}`, { method: 'DELETE' }));
     await Promise.all([refreshNodes(), refreshTasks()]);
   }
 
@@ -144,6 +149,23 @@ function App() {
     const backendNode = nodeMap[quickForm.backend_node_id];
     if (!entryNode || !backendNode) { setAlert({ type: 'error', message: '请选择入口节点和后端节点' }); return null; }
     if (entryNode.id === backendNode.id) { setAlert({ type: 'error', message: '入口节点和后端节点不能相同' }); return null; }
+    if (quickForm.link_type === 'direct') {
+      if (!String(quickForm.landing_reachable_host || '').trim()) { setAlert({ type: 'error', message: '请填写 B 可达地址。' }); return null; }
+      const data = await run('创建直连链路', async () => api('/network-links', {
+        body: {
+          link_type: 'direct',
+          name: quickForm.name || 'direct-link',
+          entry_node_id: quickForm.entry_node_id,
+          landing_node_id: quickForm.backend_node_id,
+          landing_reachable_host: quickForm.landing_reachable_host,
+          transit_port: Number(quickForm.port || 11010),
+          port: Number(quickForm.port || 11010),
+          protocols,
+        },
+      }));
+      if (data) await Promise.all([refreshNetworkLinks(), refreshTasks()]);
+      return data;
+    }
     if (!entryNode.public_ip && !entryNode.observed_ip) { setAlert({ type: 'error', message: '入口节点缺少公网 IP，无法生成后端 peers' }); return null; }
     const protocols = [];
     if (quickForm.tcp) protocols.push('tcp');
@@ -189,10 +211,12 @@ function App() {
       ...old,
       name: link.name || old.name,
       network_name: link.network_name || old.network_name,
+      link_type: link.link_type || 'easytier',
       cidr: link.cidr || old.cidr,
-      port: link.port || old.port,
+      port: link.transit_port || link.port || old.port,
       entry_node_id: link.entry_node_id || '',
       backend_node_id: link.backend_node_id || '',
+      landing_reachable_host: link.landing_reachable_host || '',
       tcp: safeList(link.protocols).includes('tcp') || safeList(link.protocols).length === 0,
       udp: safeList(link.protocols).includes('udp') || safeList(link.protocols).length === 0,
     }));
@@ -216,7 +240,7 @@ function App() {
       public_listen_port: Number(forwardForm.public_listen_port),
       landing_host: forwardForm.landing_host.trim(),
       landing_port: Number(forwardForm.landing_port),
-      transport_mode: forwardForm.transport_mode || 'easytier',
+      transport_mode: link.link_type === 'direct' ? 'direct' : (forwardForm.transport_mode || 'easytier'),
       enabled: forwardForm.enabled,
       remark: forwardForm.remark,
     };
@@ -241,6 +265,10 @@ function App() {
   }
   async function verifyForward(rule) {
     await run('验证转发规则', async () => api(`/forwards/${encodeURIComponent(rule.id)}/verify`, { body: {} }));
+    await Promise.all([refreshForwards(), refreshTasks()]);
+  }
+  async function disableForward(rule) {
+    await run('停用转发规则', async () => api(`/forwards/${encodeURIComponent(rule.id)}/disable`, { body: {} }));
     await Promise.all([refreshForwards(), refreshTasks()]);
   }
 
@@ -303,6 +331,15 @@ function App() {
     await refreshPBRPolicies();
   }
 
+  async function runDiagnostics(nodeIDs = []) {
+    const data = await run('运行一键诊断', async () => api('/diagnostics/run', { body: { node_ids: nodeIDs, include_controller: true } }));
+    if (data) await refreshTasks();
+    return data;
+  }
+  async function getDiagnostics(id) {
+    return run('读取诊断报告', async () => api(`/diagnostics/${encodeURIComponent(id)}`));
+  }
+
   function saveSettings() {
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(API_BASE_KEY, apiBase);
@@ -345,11 +382,13 @@ function App() {
       case 'networks':
         return <NetworkLinks nodes={nodes} nodeMap={nodeMap} networkLinks={networkLinks} networkProfiles={networkProfiles} quickForm={quickForm} setQuickForm={setQuickForm} onQuickApply={quickApplyNetwork} onReapply={reapplyLink} onDisable={disableLink} onDelete={deleteLink} onEdit={editLink} onRefresh={() => Promise.all([refreshNetworkLinks(), refreshNetworkProfiles(), refreshNodes()])} onCopy={handleCopyValue} />;
       case 'forwards':
-        return <Forwards forwards={forwards} networkLinks={networkLinks} nodeMap={nodeMap} forwardForm={forwardForm} setForwardForm={setForwardForm} onCreateForward={createForward} onApplyForward={applyForward} onVerifyForward={verifyForward} onDeleteForward={deleteForward} onRefresh={() => Promise.all([refreshForwards(), refreshNetworkLinks(), refreshNodes()])} onCopy={handleCopyValue} />;
+        return <Forwards forwards={forwards} networkLinks={networkLinks} nodeMap={nodeMap} forwardForm={forwardForm} setForwardForm={setForwardForm} onCreateForward={createForward} onApplyForward={applyForward} onVerifyForward={verifyForward} onDisableForward={disableForward} onDeleteForward={deleteForward} onRefresh={() => Promise.all([refreshForwards(), refreshNetworkLinks(), refreshNodes()])} onCopy={handleCopyValue} />;
       case 'pbr':
         return <PBR nodes={nodes} forwards={forwards} pbrPolicies={pbrPolicies} pbrForm={pbrForm} setPBRForm={setPBRForm} nodeMap={nodeMap} routeGroups={routeGroups} routeDetection={routeDetection} selectedNodeID={selectedNodeID} selectedGroup={selectedGroup} availableForwards={availableForwards} canApply={canApplyPBR} onDetectRouteGroups={detectPBRRouteGroups} onDetectInterfaces={detectInterfaces} onSelectRouteGroup={selectPBRRouteGroup} onCreatePBR={createPBR} onApplyPBR={applyPBR} onVerifyPBR={verifyPBR} onDisablePBR={disablePBR} onDeletePBR={deletePBR} onRefresh={() => Promise.all([refreshPBRPolicies(), refreshForwards(), refreshNodes(), refreshTasks()])} onCopy={handleCopyValue} />;
       case 'tasks':
         return <Tasks tasks={tasks} nodes={nodes} nodeMap={nodeMap} taskFilter={taskFilter} setTaskFilter={setTaskFilter} taskNodeFilter={taskNodeFilter} setTaskNodeFilter={setTaskNodeFilter} taskEasyTierOnly={taskEasyTierOnly} setTaskEasyTierOnly={setTaskEasyTierOnly} onRefresh={refreshTasks} onCopy={handleCopyValue} />;
+      case 'diagnostics':
+        return <Diagnostics nodes={nodes} tasks={tasks} onRunDiagnostics={runDiagnostics} onGetDiagnostics={getDiagnostics} onCopy={handleCopyValue} onRefresh={refreshTasks} />;
       case 'settings':
         return <Settings apiBase={apiBase} setApiBase={setApiBase} token={token} setToken={setToken} strictAuth={strictAuth} health={health} onSave={saveSettings} onClear={clearToken} onTest={() => run('测试连接', refreshHealth)} onCopy={handleCopyValue} />;
       default:

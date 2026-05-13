@@ -1,4 +1,4 @@
-﻿export const DEFAULT_VERSION = 'v0.3.0-ui-test';
+export const DEFAULT_VERSION = 'v0.3.1-test';
 
 export const tabs = [
   ['dashboard', '总览'],
@@ -6,6 +6,7 @@ export const tabs = [
   ['networks', '组网链路'],
   ['forwards', '转发规则'],
   ['pbr', '出口策略 / PBR'],
+  ['diagnostics', '诊断'],
   ['tasks', '任务'],
   ['settings', '设置'],
 ];
@@ -35,6 +36,7 @@ export const actionLabels = {
   verify_agent_config: '验证 Agent 配置',
   verify_easytier_status: '验证 EasyTier 状态',
   verify_network_connectivity: '验证组网',
+  verify_direct_link: '验证直连链路',
   verify_forward_rules: '验证转发规则',
   verify_pbr_rules: '验证出口策略',
   detect_network_interfaces: '识别网卡',
@@ -47,6 +49,11 @@ export const actionLabels = {
   apply_forward_config: '应用转发规则',
   apply_entry_forward_config: '应用入口转发',
   apply_landing_forward_config: '应用落地转发',
+  disable_entry_forward_config: '停用入口转发',
+  disable_landing_forward_config: '停用落地转发',
+  disable_network_link: '停用组网链路',
+  cleanup_node_deployment: '清理节点部署',
+  purge_agent_deployment: '清理并卸载 Agent',
   apply_pbr_config: '应用出口策略',
   apply_pbr_policy: '应用出口策略',
   verify_pbr_policy: '验证出口策略',
@@ -161,6 +168,7 @@ export function networkStatusText(node) {
 }
 
 export function linkStatusText(link) {
+  if (link?.link_type === 'direct' && link?.status === 'active') return '直连可用';
   if (link?.status === 'active' || link?.status === 'connected') return '组网成功';
   if (link?.status === 'applying') return '应用中';
   if (link?.status === 'verifying') return '验证中';
@@ -210,6 +218,7 @@ export function linkOptionLabel(link, nodeMap) {
 }
 
 export function transportModeLabel(value) {
+  if (value === 'direct') return '直连链路';
   return value === 'public' ? 'B 公网直连' : 'EasyTier 隧道';
 }
 

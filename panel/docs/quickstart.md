@@ -1,53 +1,21 @@
-﻿# Quickstart
+﻿# 快速开始
 
-当前版本：`v0.3.0-ui-test`
-
-## 1. 安装 Controller
+1. 安装 Controller：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.3.0-ui-test
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- --version v0.3.1-test
 ```
 
-打开：`http://服务器IP:18080`
+2. 打开 Web：`http://服务器公网IP:18080`。
+3. 进入“节点”，生成 Agent 一键命令。大陆机器可选择“国内加速轮询”，命令会携带 `EDGE_GITHUB_MIRRORS`。
+4. 进入“组网链路”：
+   - EasyTier 链路：A/B 无直接可达时使用。
+   - 直连链路：前海 IX、IPLC、公网或专线互通时使用。
+5. 进入“转发规则”，选择链路，填写公网监听端口、落地服务器 IP/域名、落地端口，创建并应用。
+6. 如 B 节点需要多出口，进入“出口策略 / PBR”，先识别出口线路，再选择线路组应用策略。
+7. 出现问题时进入“诊断”，运行一键诊断并复制 Markdown 报告。
 
-## 2. 添加节点
+## 卸载
 
-进入“节点”页面，点击“添加节点”，复制 root 或 sudo 命令到服务器执行。
-
-建议至少准备：
-
-- A 公网入口节点
-- B 落地执行节点
-
-## 3. 快速组网
-
-进入“组网链路”：
-
-1. 选择 A 公网入口节点。
-2. 选择 B 落地执行节点。
-3. 保持默认 MTU `1380` 和 MSS clamp `auto`。
-4. 点击“创建并应用组网”。
-5. 等待组网卡片显示“组网成功”。
-
-## 4. 创建转发
-
-进入“转发规则”：
-
-1. 选择组网链路。
-2. 填公网监听端口，例如 `18081`。
-3. 填落地服务器地址，例如 `1.2.3.4` 或 `backend.example.com`。
-4. 填落地服务器端口，例如 `8080`。
-5. 点击“创建并应用转发”。
-
-## 5. 配置 PBR
-
-进入“出口策略 / PBR”：
-
-1. 选择 B 落地节点。
-2. 点击“识别出口线路”。
-3. 选择检测到的线路组。
-4. 选择转发规则。
-5. 点击“创建并应用策略”。
-
-如果没有识别到线路组，说明当前节点不适合在本版本中创建 PBR。
+Controller：`--uninstall` 保留数据，`--purge` 彻底删除。
+Agent：`--uninstall` 保留配置，`--purge` 删除 Agent 配置和 EasyTier service/config，`--remove-easytier-binaries` 额外删除 easytier-core/easytier-cli。

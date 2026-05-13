@@ -44,6 +44,8 @@ export default function Nodes({ nodes, agentForm, setAgentForm, agentCommand, on
           <label>节点名称<input value={agentForm.node_name} onChange={(event) => setAgentForm({ ...agentForm, node_name: event.target.value })} placeholder="edge-node-1" /></label>
           <label>Controller 地址<input value={agentForm.controller_url} onChange={(event) => setAgentForm({ ...agentForm, controller_url: event.target.value })} /></label>
           <label>版本<input value={agentForm.version} onChange={(event) => setAgentForm({ ...agentForm, version: event.target.value })} placeholder={DEFAULT_VERSION} /></label>
+          <label>下载源<select value={agentForm.download_source} onChange={(event) => setAgentForm({ ...agentForm, download_source: event.target.value })}><option value="official">官方 GitHub</option><option value="mirror">国内加速轮询</option></select></label>
+          {agentForm.download_source === 'mirror' && <label className="wide-field">镜像列表<textarea value={agentForm.github_mirrors} onChange={(event) => setAgentForm({ ...agentForm, github_mirrors: event.target.value })} /></label>}
           <label className="check"><input type="checkbox" checked={agentForm.enable_tasks} onChange={(event) => setAgentForm({ ...agentForm, enable_tasks: event.target.checked })} />启用任务轮询</label>
           <label className="check"><input type="checkbox" checked={agentForm.enable_write_actions} onChange={(event) => setAgentForm({ ...agentForm, enable_write_actions: event.target.checked })} />允许写入动作</label>
         </div>
@@ -55,6 +57,8 @@ export default function Nodes({ nodes, agentForm, setAgentForm, agentCommand, on
         </div>
         <CodeBlock title="root 命令" value={agentCommand.root || '请先点击“获取一键安装命令”。'} onCopy={onCopy} />
         <CodeBlock title="sudo 命令" value={agentCommand.sudo || '请先点击“获取一键安装命令”。'} onCopy={onCopy} />
+        {agentCommand.mirrorRoots?.length > 0 && <CodeBlock title="备用 root 镜像命令" value={agentCommand.mirrorRoots.join('\n\n')} onCopy={onCopy} />}
+        {agentCommand.mirrorSudos?.length > 0 && <CodeBlock title="备用 sudo 镜像命令" value={agentCommand.mirrorSudos.join('\n\n')} onCopy={onCopy} />}
       </DetailDrawer>
 
       <DetailDrawer open={Boolean(actionNode)} title={actionNode ? `节点操作：${actionNode.name || actionNode.id}` : '节点操作'} subtitle={actionNode ? `${labelStatus(actionNode.status)} / ${publicIP(actionNode)} / ${actionNode.easytier_ip || '未分配'}` : ''} onClose={() => setActionNode(null)} wide>
@@ -75,8 +79,8 @@ function NodeActions({ node, onCreateTask, onDeleteNode }) {
       <ActionGroup title="写入维护" tone="warning" description="这些操作会修改节点服务状态，请只在可信节点执行。" actions={writeActions} node={node} onCreateTask={onCreateTask} />
       <div className="action-group danger-zone">
         <h3>危险操作</h3>
-        <p>仅删除主控面板中的节点记录，不会卸载远端 Agent。</p>
-        <button className="danger" onClick={() => onDeleteNode(node)}>删除节点记录</button>
+        <p>可选择仅删除记录、远程清理配置，或清理并卸载 Agent。离线节点无法远程清理。</p>
+        <button className="danger" onClick={() => onDeleteNode(node)}>删除 / 清理节点</button>
       </div>
     </div>
   );

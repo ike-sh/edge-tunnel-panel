@@ -96,7 +96,7 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
 	asset := fmt.Sprintf("easytier-linux-%s-%s.zip", assetArch, version)
-	url := easyTierDownloadURL(payload, version, asset)
+	urls := easyTierDownloadURLs(payload, version, asset)
 	if err := cleanupOldEasyTierTempDirs(cfg); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
@@ -116,8 +116,17 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 	}
 	defer os.RemoveAll(tmp)
 	archivePath := filepath.Join(tmp, asset)
-	if err := downloadEasyTierArchiveFunc(ctx, url, archivePath); err != nil {
-		return TaskResult{Status: "failed", Error: fmt.Sprintf("download EasyTier failed: %s: %v", url, err), Result: jsonResult(map[string]any{"url": url})}
+	var downloadErr error
+	var usedURL string
+	for _, url := range urls {
+		usedURL = url
+		downloadErr = downloadEasyTierArchiveFunc(ctx, url, archivePath)
+		if downloadErr == nil {
+			break
+		}
+	}
+	if downloadErr != nil {
+		return TaskResult{Status: "failed", Error: fmt.Sprintf("download EasyTier failed: %s: %v", usedURL, downloadErr), Result: jsonResult(map[string]any{"url": usedURL, "urls": urls})}
 	}
 	if err := extractZip(archivePath, tmp); err != nil {
 		return TaskResult{Status: "failed", Error: friendlyInstallError(err, workBase, minEasyTierTempBytes).Error(), Result: jsonResult(map[string]any{"archive": archivePath})}
@@ -139,7 +148,7 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 		return TaskResult{Status: "failed", Stdout: versionResult.Stdout, Stderr: versionResult.Stderr, Error: "easytier-core --version failed: " + errorText(versionResult)}
 	}
 	cliVersion := runner.Run(ctx, cliDst, "--version")
-	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"message": "installed", "version": version, "binary_path": coreDst, "cli_path": cliDst, "core_version": strings.TrimSpace(versionResult.Stdout + versionResult.Stderr), "cli_version": strings.TrimSpace(cliVersion.Stdout + cliVersion.Stderr), "url": url})}
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"message": "installed", "version": version, "binary_path": coreDst, "cli_path": cliDst, "core_version": strings.TrimSpace(versionResult.Stdout + versionResult.Stderr), "cli_version": strings.TrimSpace(cliVersion.Stdout + cliVersion.Stderr), "url": usedURL})}
 }
 
 func runNodePreflight(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
@@ -1223,6 +1232,134 @@ func verifyForwardRules(ctx context.Context, cfg Config, runner CommandRunner, p
 	return TaskResult{Status: "succeeded", Stdout: table.Stdout, Stderr: table.Stderr, Result: jsonResult(status)}
 }
 
+func verifyDirectLink(ctx context.Context, runner CommandRunner, payload map[string]any) TaskResult {
+	host := normalizeHostIP(firstNonEmptyString(stringField(payload, "target_host", ""), stringField(payload, "landing_reachable_host", "")))
+	port := firstNonZeroInt(intField(payload, "target_port"), intField(payload, "transit_port"))
+	if host == "" || strings.Contains(host, "/") {
+		return TaskResult{Status: "failed", Error: "直连验证目标地址不能为空或 CIDR"}
+	}
+	resolved := host
+	if ip := net.ParseIP(host); ip == nil {
+		ips, err := net.LookupIP(host)
+		if err != nil {
+			return TaskResult{Status: "failed", Error: "无法解析直连目标地址: " + err.Error()}
+		}
+		resolved = ""
+		for _, ip := range ips {
+			if ip4 := ip.To4(); ip4 != nil {
+				resolved = ip4.String()
+				break
+			}
+		}
+		if resolved == "" {
+			return TaskResult{Status: "failed", Error: "直连目标没有 IPv4 地址"}
+		}
+	}
+	result := map[string]any{"target_host": host, "resolved_host": resolved, "target_port": port, "route_ok": false, "connect_checked": false, "connect_ok": false, "warnings": []string{}}
+	route := runner.Run(ctx, "ip", "route", "get", resolved)
+	result["route_output"] = strings.TrimSpace(route.Stdout + "\n" + route.Stderr)
+	result["route_ok"] = route.Err == nil && route.ExitCode == 0
+	if port > 0 {
+		if _, err := runner.LookPath("nc"); err == nil {
+			nc := runner.Run(ctx, "nc", "-vz", "-w", "3", resolved, strconv.Itoa(port))
+			result["connect_checked"] = true
+			result["connect_output"] = strings.TrimSpace(nc.Stdout + "\n" + nc.Stderr)
+			result["connect_ok"] = nc.Err == nil && nc.ExitCode == 0
+		} else {
+			result["warnings"] = []string{"nc 不存在，已跳过端口连通性测试。"}
+		}
+	}
+	if route.Err != nil || route.ExitCode != 0 {
+		return TaskResult{Status: "failed", Stdout: route.Stdout, Stderr: route.Stderr, Error: "无法路由到直连目标", Result: jsonResult(result)}
+	}
+	return TaskResult{Status: "succeeded", Stdout: route.Stdout, Stderr: route.Stderr, Result: jsonResult(result)}
+}
+
+func disableForwardStage(ctx context.Context, cfg Config, runner CommandRunner, stage string, payload map[string]any) TaskResult {
+	tableName := "edge_tunnel_entry_forward"
+	nftPath := entryForwardNFTPath(cfg)
+	if stage == "landing" {
+		tableName = "edge_tunnel_landing_forward"
+		nftPath = landingForwardNFTPath(cfg)
+	}
+	del := runner.Run(ctx, "nft", "delete", "table", "ip", tableName)
+	ruleID := firstNonEmptyString(stringField(payload, "rule_id", ""), stringField(payload, "forward_id", ""))
+	removedConfig := false
+	if ruleID != "" {
+		if err := os.Remove(forwardRuleStagePath(cfg, ruleID, stage)); err == nil {
+			removedConfig = true
+		}
+	}
+	_ = os.Remove(nftPath)
+	return TaskResult{Status: "succeeded", Stdout: del.Stdout, Stderr: del.Stderr, Result: jsonResult(map[string]any{"disabled": true, "stage": stage, "table": "ip " + tableName, "removed_table": del.Err == nil && del.ExitCode == 0, "removed_config": removedConfig, "nft_path": nftPath})}
+}
+
+func disableNetworkLink(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
+	stop := runner.Run(ctx, "systemctl", "stop", "edge-tunnel-easytier.service")
+	disable := runner.Run(ctx, "systemctl", "disable", "edge-tunnel-easytier.service")
+	return TaskResult{Status: "succeeded", Stdout: strings.TrimSpace(stop.Stdout + "\n" + disable.Stdout), Stderr: strings.TrimSpace(stop.Stderr + "\n" + disable.Stderr), Result: jsonResult(map[string]any{"disabled": true, "service": "edge-tunnel-easytier.service", "stop_ok": stop.Err == nil && stop.ExitCode == 0, "disable_ok": disable.Err == nil && disable.ExitCode == 0, "network_link_id": stringField(payload, "network_link_id", "")})}
+}
+
+func cleanupNodeDeployment(ctx context.Context, cfg Config, runner CommandRunner, purgeAgent bool) TaskResult {
+	_ = runner.Run(ctx, "systemctl", "stop", "edge-tunnel-easytier.service")
+	_ = runner.Run(ctx, "systemctl", "disable", "edge-tunnel-easytier.service")
+	_ = os.Remove(easyTierServiceSystemPath())
+	for _, tableName := range []string{"edge_tunnel_entry_forward", "edge_tunnel_landing_forward", "edge_tunnel_pbr", "edge_tunnel_mss", "edge_tunnel_forward"} {
+		_ = runner.Run(ctx, "nft", "delete", "table", "ip", tableName)
+	}
+	cleanupPBRRules(ctx, cfg, runner)
+	paths := []string{
+		easyTierPath(cfg),
+		networkProfilePath(cfg),
+		easyTierServiceConfigPath(cfg),
+		entryForwardNFTPath(cfg),
+		landingForwardNFTPath(cfg),
+		pbrNFTPath(cfg),
+		mssNFTPath(cfg),
+		forwardNFTPath(cfg),
+		filepath.Join(cfg.ConfigDir, "forwards.d"),
+		filepath.Join(cfg.ConfigDir, "pbr.d"),
+		filepath.Join(cfg.ConfigDir, "systemd"),
+	}
+	removed := []string{}
+	for _, path := range paths {
+		if err := os.RemoveAll(path); err == nil {
+			removed = append(removed, path)
+		}
+	}
+	if purgeAgent {
+		_ = runner.Run(ctx, "systemctl", "disable", "edge-tunnel-agent.service")
+		_ = os.Remove(filepath.Join(systemdSystemDir, "edge-tunnel-agent.service"))
+		_ = os.Remove("/usr/local/bin/edge-tunnel-agent")
+		_ = os.RemoveAll(cfg.StateDir)
+		_ = os.RemoveAll(cfg.ConfigDir)
+	}
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"cleaned": true, "purge_agent": purgeAgent, "removed_paths": removed, "warnings": []string{"如果选择卸载 Agent，当前进程可能在任务回传后由 systemd 停止。"}})}
+}
+
+func cleanupPBRRules(ctx context.Context, cfg Config, runner CommandRunner) {
+	files, _ := filepath.Glob(filepath.Join(cfg.ConfigDir, "pbr.d", "*.json"))
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		var policy map[string]any
+		if json.Unmarshal(raw, &policy) != nil {
+			continue
+		}
+		fwmark := stringField(policy, "fwmark", stringField(policy, "match_mark", ""))
+		tableID := intField(policy, "route_group_table_id")
+		if tableID == 0 {
+			tableID = intField(policy, "table_id")
+		}
+		priority := intField(policy, "priority")
+		if fwmark != "" && tableID > 0 && priority > 0 {
+			_ = runner.Run(ctx, "ip", "rule", "del", "fwmark", fwmark, "table", strconv.Itoa(tableID), "priority", strconv.Itoa(priority))
+		}
+	}
+}
+
 func normalizeHostIP(value string) string {
 	text := strings.TrimSpace(value)
 	if text == "" {
@@ -1261,11 +1398,11 @@ func resolveLandingHostIPv4(raw string) (string, error) {
 		return "", fmt.Errorf("\u843d\u5730\u670d\u52a1\u5668\u5730\u5740\u4e0d\u80fd\u662f CIDR: %s", raw)
 	}
 	if strings.Contains(raw, ":") {
-		return "", fmt.Errorf("v0.3.0-ui-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return "", fmt.Errorf("v0.3.1-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	if ip := net.ParseIP(raw); ip != nil {
 		if ip.To4() == nil {
-			return "", fmt.Errorf("v0.3.0-ui-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+			return "", fmt.Errorf("v0.3.1-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 		}
 		return ip.String(), nil
 	}
@@ -1896,13 +2033,20 @@ func extractZip(archivePath, destDir string) error {
 	return nil
 }
 
-func easyTierDownloadURL(payload map[string]any, version, asset string) string {
+func easyTierDownloadURLs(payload map[string]any, version, asset string) []string {
 	base := strings.TrimRight(stringField(payload, "download_base_url", "https://github.com/EasyTier/EasyTier/releases/download"), "/")
 	url := base + "/" + version + "/" + asset
 	if proxy := strings.TrimRight(stringField(payload, "github_proxy", ""), "/"); proxy != "" {
-		return proxy + "/" + url
+		return []string{proxy + "/" + url}
 	}
-	return url
+	urls := []string{url}
+	for _, mirror := range strings.Split(os.Getenv("EDGE_GITHUB_MIRRORS"), ",") {
+		mirror = strings.TrimRight(strings.TrimSpace(mirror), "/")
+		if mirror != "" {
+			urls = append(urls, mirror+"/"+url)
+		}
+	}
+	return urls
 }
 
 func selectInstallTempDir(cfg Config, payload map[string]any) (string, error) {

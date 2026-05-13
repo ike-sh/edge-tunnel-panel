@@ -82,6 +82,15 @@ func deleteReq(t *testing.T, h http.Handler, path, token string) *httptest.Respo
 	return rr
 }
 
+func mustPostNode(t *testing.T, h http.Handler, id, name, publicIP, privateIP string) {
+	t.Helper()
+	body := map[string]any{"id": id, "node_name": name, "role": "node", "public_ip": publicIP, "private_ip": privateIP}
+	rr := post(t, h, "/api/v1/agent/report", "agent-token", body)
+	if rr.Code != 200 {
+		t.Fatalf("post node failed: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func postFromRemote(t *testing.T, h http.Handler, path, token, remoteAddr string, body any) *httptest.ResponseRecorder {
 	raw, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
@@ -280,12 +289,12 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.3.0-ui-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.3.1-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.3.0-ui-test") ||
+		!strings.Contains(body, "--version v0.3.1-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, `"root_command"`) ||
@@ -303,6 +312,15 @@ func TestBootstrapAgentInstallCommandsContainToken(t *testing.T) {
 	body := rr.Body.String()
 	if rr.Code != 200 || !strings.Contains(body, "root_command") || !strings.Contains(body, "sudo_command") || !strings.Contains(body, "agent-token") || !strings.Contains(body, `"can_copy":true`) {
 		t.Fatalf("full command missing token: %d %s", rr.Code, body)
+	}
+}
+
+func TestBootstrapAgentCommandWithMirrors(t *testing.T) {
+	h := testServer(t)
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "download_source": "mirror", "github_mirrors": "https://gh.llkk.cc/,https://gh.ddlc.top/"})
+	body := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(body, "EDGE_GITHUB_MIRRORS") || !strings.Contains(body, "https://gh.llkk.cc/https://raw.githubusercontent.com") || !strings.Contains(body, "mirror_root_commands") {
+		t.Fatalf("mirror command missing: %d %s", rr.Code, body)
 	}
 }
 
@@ -1084,5 +1102,73 @@ func TestNetworkLinkMSSDefaults(t *testing.T) {
 	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 	if resp.Data.Link.MTU != 1380 || !resp.Data.Link.MSSClampEnabled || resp.Data.Link.MSSMode != "auto" {
 		t.Fatalf("bad mss defaults: %+v", resp.Data.Link)
+	}
+}
+
+func TestCreateDirectNetworkLink(t *testing.T) {
+	h := testOpenServer(t)
+	mustPostNode(t, h, "entry-direct", "entry-a", "203.0.113.10", "10.0.0.1")
+	mustPostNode(t, h, "landing-direct", "landing-b", "198.51.100.20", "10.0.0.2")
+	rr := post(t, h, "/api/v1/network-links", "", map[string]any{"link_type": "direct", "name": "ip-lc", "entry_node_id": "entry-direct", "landing_node_id": "landing-direct", "landing_reachable_host": "172.16.10.2", "transit_port": 18081, "protocols": []string{"tcp"}})
+	if rr.Code != 200 {
+		t.Fatalf("direct link failed: %d %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		APIResponse
+		Data struct {
+			Link NetworkLink `json:"link"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.Data.Link.LinkType != "direct" || resp.Data.Link.LandingReachableHost != "172.16.10.2" {
+		t.Fatalf("bad direct link: %+v", resp.Data.Link)
+	}
+}
+
+func TestForwardDirectLinkUsesLandingReachableHost(t *testing.T) {
+	h := testOpenServer(t)
+	mustPostNode(t, h, "entry-direct-fwd", "entry-a", "203.0.113.10", "10.0.0.1")
+	mustPostNode(t, h, "landing-direct-fwd", "landing-b", "198.51.100.20", "10.0.0.2")
+	rr := post(t, h, "/api/v1/network-links", "", map[string]any{"link_type": "direct", "name": "direct", "entry_node_id": "entry-direct-fwd", "landing_node_id": "landing-direct-fwd", "landing_reachable_host": "172.16.10.2", "transit_port": 18081, "protocols": []string{"tcp"}})
+	var linkResp struct {
+		Data struct {
+			Link NetworkLink `json:"link"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &linkResp)
+	create := post(t, h, "/api/v1/forwards", "", map[string]any{"network_link_id": linkResp.Data.Link.ID, "name": "direct-forward", "protocol": "tcp", "public_listen_port": 18081, "landing_host": "1.2.3.4", "landing_port": 8080})
+	if create.Code != 200 {
+		t.Fatalf("forward create failed: %d %s", create.Code, create.Body.String())
+	}
+	var fResp struct {
+		Data Forward `json:"data"`
+	}
+	_ = json.Unmarshal(create.Body.Bytes(), &fResp)
+	if fResp.Data.TransportMode != "direct" || fResp.Data.TunnelTargetHost != "172.16.10.2" {
+		t.Fatalf("direct target not used: %+v", fResp.Data)
+	}
+}
+
+func TestDeleteNodeCreatesCleanupTask(t *testing.T) {
+	h := testOpenServer(t)
+	mustPostNode(t, h, "cleanup-node", "cleanup", "203.0.113.10", "10.0.0.1")
+	rr := deleteReq(t, h, "/api/v1/nodes/cleanup-node?mode=clean_deployed", "")
+	if rr.Code != 202 {
+		t.Fatalf("cleanup delete failed: %d %s", rr.Code, rr.Body.String())
+	}
+	if tasks := get(t, h, "/api/v1/tasks", ""); !strings.Contains(tasks.Body.String(), "cleanup_node_deployment") {
+		t.Fatalf("cleanup task missing: %s", tasks.Body.String())
+	}
+}
+
+func TestDiagnosticsRunCreatesTasks(t *testing.T) {
+	h := testOpenServer(t)
+	mustPostNode(t, h, "diag-node", "diag", "203.0.113.10", "10.0.0.1")
+	rr := post(t, h, "/api/v1/diagnostics/run", "", map[string]any{"node_ids": []string{"diag-node"}, "include_controller": true})
+	if rr.Code != 202 || !strings.Contains(rr.Body.String(), "diagnostic_id") {
+		t.Fatalf("diagnostics failed: %d %s", rr.Code, rr.Body.String())
+	}
+	if tasks := get(t, h, "/api/v1/tasks", ""); !strings.Contains(tasks.Body.String(), "detect_pbr_route_groups") {
+		t.Fatalf("diagnostic tasks missing: %s", tasks.Body.String())
 	}
 }

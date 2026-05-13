@@ -1,55 +1,27 @@
-﻿# Network Forwarding
+﻿# 转发规则
 
-v0.3.0-ui-test 的转发链路：
+v0.3.1-test 的转发链路：
 
 ```text
-外部客户端
--> A 公网服务器公网端口
--> A nftables
--> EasyTier 隧道或 B 公网直连
--> B 节点
--> B nftables
--> 落地服务器 IP/域名:端口
+外部用户 -> A 公网入口 -> A nftables -> EasyTier 或 B 公网/专线直连 -> B nftables -> 落地服务器 IP/域名:端口
 ```
 
-## 转发规则
+## EasyTier 模式
 
-用户只需要填写：
+A 侧转发到 B 的 EasyTier 虚拟 IP，中继端口默认等于公网监听端口。
 
-- 组网链路
-- 公网监听端口
-- 落地服务器 IP/域名
-- 落地服务器端口
-- 协议 TCP / UDP / TCP+UDP
-- A 到 B 的传输方式：EasyTier 隧道或 B 公网直连
+## 直连模式
 
-Controller 会自动创建两侧任务：
+A 侧转发到组网链路中填写的 B 可达地址。适合前海 IX、IPLC、公网互通或内网专线互通。
 
-- A 侧：`apply_entry_forward_config`
-- B 侧：`apply_landing_forward_config`
+## 启用 / 停用
 
-## nftables
+启用会重新下发 A/B 两侧 nftables。停用会删除对应的入口/落地 nftables 表。当前 MVP 仍建议同一节点同一阶段只保留一条 active 转发规则。
 
-A 侧表：
+## 排查
 
 ```bash
 nft list table ip edge_tunnel_entry_forward
-```
-
-B 侧表：
-
-```bash
 nft list table ip edge_tunnel_landing_forward
+cat /proc/sys/net/ipv4/ip_forward
 ```
-
-v0.2.8-test 起模板使用 `table ip`、numeric priority 和 `dnat to IP:PORT`，不再生成 output chain。
-
-## MSS clamp
-
-v0.3.0-ui-test 默认启用 MSS clamp，单独渲染到：
-
-```bash
-nft list table ip edge_tunnel_mss
-```
-
-默认 MTU 为 `1380`，自动模式优先使用 `rt mtu`，不支持时可回退到固定 MSS。

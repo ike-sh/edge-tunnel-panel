@@ -1,27 +1,5 @@
 ﻿# Development
 
-当前版本：`v0.3.0-ui-test`
+当前重点能力：节点接入、EasyTier 组网、直连链路、A/B 两段 nftables 转发、PBR 线路组识别、MSS/MTU、启停、远程清理和一键诊断。
 
-## 验证命令
-
-```bash
-cd panel/controller && go test ./... -v -count=1 -timeout=30s
-cd ../agent && go test ./... -v -count=1 -timeout=30s
-cd ../..
-npm --prefix panel/controller/web ci
-npm --prefix panel/controller/web run build
-VERSION=v0.3.0-ui-test bash panel/scripts/build-release.sh
-```
-
-## 近期方向
-
-- PBR domain/static 来源接入域名同步。
-- 转发规则批量启停。
-- 更完整的流量统计和链路诊断。
-- MSS/MTU 自动探测更智能化。
-
-
-
-## Web UI
-
-前端结构拆分为 components/、pages/、utils/ 和 `api.js`。布局参考 bqlpfy/flux-panel 的面板体验，保留本项目 API 与业务模型。
+安全原则：不接受任意 shell/cmd/script/raw 命令；所有写入动作必须是 allowlist action，并使用固定 argv。
