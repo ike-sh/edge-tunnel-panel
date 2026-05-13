@@ -1,4 +1,4 @@
-# PBR
+﻿# PBR
 
 PBR 是“出口策略”能力，用于 B 落地执行节点上的转发流量出口选择。它主要面向具备多出口线路的节点，不是所有普通服务器都适合启用。
 
@@ -30,7 +30,7 @@ Agent 的 `detect_pbr_route_groups` 会扫描本机 IPv4 地址，并匹配内�
 
 识别到线路后，Controller 会自动带出 `gateway`、`table_id`、`table_name`、`priority` 和 `fwmark`。
 
-## v0.2.10-test 限制
+## v0.3.0-ui-test 限制
 
 - 每个节点只支持一条启用中的 PBR 策略。
 - 完整支持 `source_type=forward`。

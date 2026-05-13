@@ -1,9 +1,13 @@
-# Edge Tunnel Panel
+﻿# Edge Tunnel Panel
 
-当前版本：`v0.2.10-test`
+当前版本：`v0.3.0-ui-test`
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网与转发管理面板。它面向没有公网 IPv4 的 NAT 后服务器，通过公网入口节点、EasyTier 隧道、nftables 转发和 PBR 出口策略，把外部访问转发到指定落地服务器。
 
+
+## Web UI
+
+v0.3.0-ui-test 将 Web 重构为侧栏、顶部状态栏、表格列表、详情抽屉和统一状态标签的管理面板体验。UI 布局和交互思路参考 bqlpfy/flux-panel，原项目使用 Apache-2.0 License；本项目仅借鉴 Web 面板体验，Controller/Agent API 与业务模型保持不变。
 ## 典型链路
 
 ```text
@@ -22,7 +26,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网与转发管�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.10-test
+  --version v0.3.0-ui-test
 ```
 
 打开 Web：
@@ -36,7 +40,7 @@ http://服务器IP:18080
 ## 推荐流程
 
 1. 添加 A 公网入口节点和 B 落地执行节点。
-2. 进入“组网配置”，使用快速组网选择 A 和 B。
+2. 进入“组网链路”，使用快速组网选择 A 和 B。
 3. 等待组网卡片显示“组网成功”。
 4. 进入“转发规则”，选择组网链路。
 5. 填写公网监听端口、落地服务器 IP/域名、落地服务器端口和协议。
@@ -63,7 +67,7 @@ http://服务器IP:18080
 
 PBR 用于 B 落地执行节点上的转发流量出口选择，适合具备多出口线路组的节点。面板会先识别 `9929`、`CN2`、`JPSDWAN`、`DESDWAN`、`KRSDWAN` 等线路组，用户只选择线路，网关和路由表由系统自动带出。
 
-v0.2.10-test 的限制：
+v0.3.0-ui-test 的限制：
 
 - 每个节点只允许一条启用中的 PBR 策略。`detect_pbr_route_groups` 会按本机 IPv4 地址匹配线路组。
 - 完整支持 `source_type=forward`。
@@ -81,7 +85,7 @@ PBR 会结构化生成：
 
 EasyTier、tun、多层 NAT 和转发场景下，TCP 可能因为 MTU/MSS 不合适出现卡顿、部分网页打不开或大包异常。
 
-v0.2.10-test 默认：
+v0.3.0-ui-test 默认：
 
 - MTU：`1380`
 - MSS clamp：启用
@@ -135,5 +139,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.10-test bash panel/scripts/build-release.sh
+VERSION=v0.3.0-ui-test bash panel/scripts/build-release.sh
 ```

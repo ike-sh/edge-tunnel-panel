@@ -1,12 +1,12 @@
-# Quickstart
+﻿# Quickstart
 
-当前版本：`v0.2.10-test`
+当前版本：`v0.3.0-ui-test`
 
 ## 1. 安装 Controller
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.10-test
+  --version v0.3.0-ui-test
 ```
 
 打开：`http://服务器IP:18080`
@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 3. 快速组网
 
-进入“组网配置”：
+进入“组网链路”：
 
 1. 选择 A 公网入口节点。
 2. 选择 B 落地执行节点。

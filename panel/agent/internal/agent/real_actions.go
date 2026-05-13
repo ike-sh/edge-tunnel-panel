@@ -1261,11 +1261,11 @@ func resolveLandingHostIPv4(raw string) (string, error) {
 		return "", fmt.Errorf("\u843d\u5730\u670d\u52a1\u5668\u5730\u5740\u4e0d\u80fd\u662f CIDR: %s", raw)
 	}
 	if strings.Contains(raw, ":") {
-		return "", fmt.Errorf("v0.2.10-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return "", fmt.Errorf("v0.3.0-ui-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	if ip := net.ParseIP(raw); ip != nil {
 		if ip.To4() == nil {
-			return "", fmt.Errorf("v0.2.10-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+			return "", fmt.Errorf("v0.3.0-ui-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 		}
 		return ip.String(), nil
 	}

@@ -892,7 +892,7 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 		return Forward{}, errValidation("landing_host must not be CIDR")
 	}
 	if addr, err := netip.ParseAddr(item.LandingHostRaw); err == nil && addr.Is6() {
-		return Forward{}, errValidation("v0.2.10-test does not support IPv6 landing targets")
+		return Forward{}, errValidation("v0.3.0-ui-test does not support IPv6 landing targets")
 	}
 	if item.PublicListenHost == "" {
 		item.PublicListenHost = "0.0.0.0"

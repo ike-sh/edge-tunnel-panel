@@ -12,7 +12,7 @@ import (
 	"github.com/ike-sh/edge-tunnel-panel/panel/agent/internal/agent"
 )
 
-var version = "v0.2.10-test"
+var version = "v0.3.0-ui-test"
 
 func main() {
 	cfg := agent.ConfigFromEnv()

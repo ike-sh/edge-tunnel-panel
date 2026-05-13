@@ -944,10 +944,10 @@ func validateLandingHost(host string) error {
 		return errValidation("landing_host must be an IP address or domain")
 	}
 	if strings.Contains(host, ":") {
-		return errValidation("v0.2.10-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("v0.3.0-ui-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
-		return errValidation("v0.2.10-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("v0.3.0-ui-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	return nil
 }
