@@ -280,12 +280,12 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.3-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.4-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.2.3-test") ||
+		!strings.Contains(body, "--version v0.2.4-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, `"root_command"`) ||
@@ -587,7 +587,7 @@ func TestNetworkLinkVerifyCreatesTasks(t *testing.T) {
 func TestForwardRuleCRUDAndApply(t *testing.T) {
 	h := testServer(t)
 	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "entry-forward", "node_name": "entry", "role": "entry"})
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-forward", "node_name": "backend", "role": "backend", "easytier_ip": "10.144.0.23"})
+	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-forward", "node_name": "backend", "role": "backend", "easytier_ip": "10.144.0.23/16"})
 	create := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"name": "ssh", "protocol": "both", "entry_node_id": "entry-forward", "backend_node_id": "backend-forward", "listen_port": 2222, "target_port": 22})
 	if create.Code != 200 {
 		t.Fatalf("forward create failed: %d %s", create.Code, create.Body.String())
@@ -605,6 +605,23 @@ func TestForwardRuleCRUDAndApply(t *testing.T) {
 	if apply.Code != 202 || !strings.Contains(apply.Body.String(), "apply_forward_config") || !strings.Contains(apply.Body.String(), "entry-forward") || !strings.Contains(apply.Body.String(), "10.144.0.23") {
 		t.Fatalf("forward apply failed: %d %s", apply.Code, apply.Body.String())
 	}
+	var applyResp APIResponse
+	_ = json.Unmarshal(apply.Body.Bytes(), &applyResp)
+	applyRaw, _ := json.Marshal(applyResp.Data)
+	var applyData struct {
+		Forward Forward `json:"forward"`
+		Task    Task    `json:"task"`
+	}
+	_ = json.Unmarshal(applyRaw, &applyData)
+	if applyData.Forward.TargetIP != "10.144.0.23" || applyData.Forward.TargetHost != "10.144.0.23" {
+		t.Fatalf("forward target should be normalized: %+v", applyData.Forward)
+	}
+	payloadRaw, _ := json.Marshal(applyData.Task.Payload["forward_rule"])
+	var payloadForward Forward
+	_ = json.Unmarshal(payloadRaw, &payloadForward)
+	if payloadForward.TargetIP != "10.144.0.23" || payloadForward.TargetHost != "10.144.0.23" {
+		t.Fatalf("task payload target should be normalized: %+v", payloadForward)
+	}
 	verify := post(t, h, "/api/v1/forwards/"+forward.ID+"/verify", "operator-token", map[string]any{})
 	if verify.Code != 202 || !strings.Contains(verify.Body.String(), "verify_forward_rules") {
 		t.Fatalf("forward verify failed: %d %s", verify.Code, verify.Body.String())
@@ -612,6 +629,21 @@ func TestForwardRuleCRUDAndApply(t *testing.T) {
 	del := postMethod(t, h, http.MethodDelete, "/api/v1/forwards/"+forward.ID, "operator-token", nil)
 	if del.Code != 200 {
 		t.Fatalf("forward delete failed: %d %s", del.Code, del.Body.String())
+	}
+}
+
+func TestNormalizeHostIP(t *testing.T) {
+	cases := map[string]string{
+		"10.144.0.2/16": "10.144.0.2",
+		"10.144.0.2":    "10.144.0.2",
+		"fd00::1/64":    "fd00::1",
+		"example.com":   "example.com",
+		"":              "",
+	}
+	for input, want := range cases {
+		if got := normalizeHostIP(input); got != want {
+			t.Fatalf("normalizeHostIP(%q)=%q, want %q", input, got, want)
+		}
 	}
 }
 

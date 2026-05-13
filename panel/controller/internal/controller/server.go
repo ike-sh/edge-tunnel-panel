@@ -816,12 +816,20 @@ func (s *Server) handleForwardApply(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	if strings.TrimSpace(forward.TargetIP) == "" {
-		forward.TargetIP = strings.TrimSpace(backendNode.EasyTierIP)
+		forward.TargetIP = normalizeHostIP(backendNode.EasyTierIP)
 		forward.TargetHost = forward.TargetIP
 	}
+	forward.TargetIP = normalizeHostIP(forward.TargetIP)
+	forward.TargetHost = normalizeHostIP(forward.TargetHost)
 	if strings.TrimSpace(forward.TargetIP) == "" {
 		writeErr(w, 400, "BAD_REQUEST", "backend node has no EasyTier virtual IP; finish network setup and verify virtual IP first")
 		return
+	}
+	if updatedForward, ok, err := s.store.updateForwardResolvedTarget(id, forward.TargetIP); err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	} else if ok {
+		forward = updatedForward
 	}
 	task, err := s.store.createTask(Task{NodeID: entryNode.ID, Action: "apply_forward_config", Payload: map[string]any{"forward_rule": forward, "entry_node": entryNode, "backend_node": backendNode}})
 	if err != nil {

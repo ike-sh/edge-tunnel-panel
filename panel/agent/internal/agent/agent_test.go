@@ -74,11 +74,14 @@ func testConfig(t *testing.T) Config {
 	t.Setenv("EDGE_TEST", "1")
 	oldSystemdDir := systemdSystemDir
 	oldInstallDir := easyTierInstallDir
+	oldForwardSysctlConfigPath := forwardSysctlConfigPath
 	systemdSystemDir = filepath.Join(t.TempDir(), "systemd-system")
 	easyTierInstallDir = filepath.Join(t.TempDir(), "bin")
+	forwardSysctlConfigPath = filepath.Join(t.TempDir(), "sysctl.d", "99-edge-tunnel-forward.conf")
 	t.Cleanup(func() {
 		systemdSystemDir = oldSystemdDir
 		easyTierInstallDir = oldInstallDir
+		forwardSysctlConfigPath = oldForwardSysctlConfigPath
 	})
 	cfg := DefaultConfig()
 	cfg.ControllerURL = "http://127.0.0.1:18080"
@@ -296,7 +299,12 @@ func TestApplyForwardWritesStructuredConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if strings.Contains(text, "raw_nft") || !strings.Contains(text, "udp dport") || !strings.Contains(text, "tcp dport") || !strings.Contains(text, "table inet edge_tunnel_forward") {
+	if strings.Contains(text, "raw_nft") ||
+		!strings.Contains(text, "udp dport 8443 dnat ip to 10.144.1.9:443") ||
+		!strings.Contains(text, "tcp dport 8443 dnat ip to 10.144.1.9:443") ||
+		!strings.Contains(text, "ip daddr 10.144.1.9 masquerade") ||
+		!strings.Contains(text, "chain output") ||
+		!strings.Contains(text, "table inet edge_tunnel_forward") {
 		t.Fatalf("unexpected nft output: %s", text)
 	}
 	if _, err := os.Stat(forwardPath(cfg)); err != nil {
@@ -305,6 +313,46 @@ func TestApplyForwardWritesStructuredConfig(t *testing.T) {
 	joined := strings.Join(runner.calls, "\n")
 	if !strings.Contains(joined, "nft -c -f") || !strings.Contains(joined, "nft -f") {
 		t.Fatalf("expected nft check before apply: %s", joined)
+	}
+}
+
+func TestAgentApplyForwardNormalizesCIDRTarget(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"protocol": "tcp", "listen_port": 18081.0, "target_ip": "10.144.0.2/16", "target_port": 8080.0}
+	runner := &fakeRunner{}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_forward_config", Payload: payload})
+	if result.Status != "succeeded" || strings.Contains(result.Result, "10.144.0.2/16") || !strings.Contains(result.Result, "10.144.0.2") {
+		t.Fatalf("expected normalized target: %+v", result)
+	}
+	raw, err := os.ReadFile(forwardNFTPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Contains(text, "10.144.0.2/16") || !strings.Contains(text, "dnat ip to 10.144.0.2:8080") {
+		t.Fatalf("nft target was not normalized: %s", text)
+	}
+}
+
+func TestAgentApplyForwardRejectsIPv6Target(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"protocol": "tcp", "listen_port": 18081.0, "target_ip": "fd00::2/64", "target_port": 8080.0}
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_forward_config", Payload: payload})
+	if result.Status != "failed" || !strings.Contains(result.Error, "IPv4") {
+		t.Fatalf("expected IPv4 MVP rejection: %+v", result)
+	}
+}
+
+func TestAgentApplyForwardNftCheckFailureIncludesDetails(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"protocol": "tcp", "listen_port": 18081.0, "target_ip": "10.144.0.2", "target_port": 8080.0}
+	runner := &failingRunner{failName: "nft"}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_forward_config", Payload: payload})
+	if result.Status != "failed" || !strings.Contains(result.Result, "nft_check_stderr") || !strings.Contains(result.Result, "nft_content") {
+		t.Fatalf("expected nft failure details: %+v", result)
 	}
 }
 

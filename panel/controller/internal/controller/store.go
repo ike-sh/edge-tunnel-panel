@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -341,6 +342,22 @@ func (s *Store) updateForwardTask(id, taskID, field, status string) (Forward, bo
 	return Forward{}, false, nil
 }
 
+func (s *Store) updateForwardResolvedTarget(id, target string) (Forward, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	target = normalizeHostIP(target)
+	for i := range s.data.Forwards {
+		if s.data.Forwards[i].ID != id {
+			continue
+		}
+		s.data.Forwards[i].TargetIP = target
+		s.data.Forwards[i].TargetHost = target
+		s.data.Forwards[i].UpdatedAt = now()
+		return s.data.Forwards[i], true, s.saveLocked()
+	}
+	return Forward{}, false, nil
+}
+
 func (s *Store) getNetworkProfile(id string) (NetworkProfile, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -541,6 +558,20 @@ func firstString(values ...string) string {
 	return ""
 }
 
+func normalizeHostIP(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	if prefix, err := netip.ParsePrefix(text); err == nil {
+		return prefix.Addr().String()
+	}
+	if addr, err := netip.ParseAddr(text); err == nil {
+		return addr.String()
+	}
+	return text
+}
+
 func firstStringList(values ...[]string) []string {
 	for _, value := range values {
 		if len(value) > 0 {
@@ -566,7 +597,7 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 	if port := intValue(req["listen_port"]); port != 0 {
 		item.ListenPort = port
 	}
-	item.TargetIP = stringValue(req["target_ip"], stringValue(req["target_host"], item.TargetIP))
+	item.TargetIP = normalizeHostIP(stringValue(req["target_ip"], stringValue(req["target_host"], item.TargetIP)))
 	if port := intValue(req["target_port"]); port != 0 {
 		item.TargetPort = port
 	}
@@ -577,7 +608,7 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 	}
 	item.TargetMode = stringValue(req["target_mode"], item.TargetMode)
 	item.TargetNodeID = stringValue(req["target_node_id"], item.TargetNodeID)
-	item.TargetHost = item.TargetIP
+	item.TargetHost = normalizeHostIP(item.TargetIP)
 	if item.Name == "" {
 		return Forward{}, errValidation("name is required")
 	}

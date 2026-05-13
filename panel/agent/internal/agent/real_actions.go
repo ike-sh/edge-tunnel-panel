@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 
 var systemdSystemDir = "/etc/systemd/system"
 var easyTierInstallDir = "/usr/local/bin"
+var forwardSysctlConfigPath = "/etc/sysctl.d/99-edge-tunnel-forward.conf"
 var downloadEasyTierArchiveFunc = downloadEasyTierArchive
 var diskFreeBytesFunc = defaultDiskFreeBytes
 
@@ -188,26 +191,55 @@ func applyForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, p
 	if len(rule) == 0 {
 		rule = payload
 	}
+	targetHost := normalizeHostIP(stringField(rule, "target_ip", stringField(rule, "target_host", "")))
+	if targetHost == "" {
+		return TaskResult{Status: "failed", Error: "target_ip is required"}
+	}
+	if strings.Contains(targetHost, "/") {
+		return TaskResult{Status: "failed", Error: "target_ip must be host address, got CIDR: " + targetHost}
+	}
+	if ip := net.ParseIP(targetHost); ip == nil || ip.To4() == nil {
+		return TaskResult{Status: "failed", Error: "forward MVP supports IPv4 target_ip only: " + targetHost}
+	}
+	rule["target_ip"] = targetHost
+	rule["target_host"] = targetHost
 	if err := writeJSONFile(forwardPath(cfg), rule, 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
-	if err := writeFile(forwardNFTPath(cfg), []byte(renderForwardNFT(rule)), 0o600); err != nil {
+	nftContent := renderForwardNFT(rule)
+	if err := writeFile(forwardNFTPath(cfg), []byte(nftContent), 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	ipForwardBefore := readIPv4Forwarding()
+	ipForwardChanged := false
+	if cfg.EnableWriteActions && strings.TrimSpace(ipForwardBefore) != "1" {
+		if err := writeFile(forwardSysctlConfigPath, []byte("net.ipv4.ip_forward=1\n"), 0o644); err != nil {
+			return TaskResult{Status: "failed", Error: err.Error(), Result: jsonResult(map[string]any{"ip_forward_before": ipForwardBefore, "ip_forward_changed": false})}
+		}
+		sysctl := runner.Run(ctx, "sysctl", "-w", "net.ipv4.ip_forward=1")
+		if sysctl.Err != nil || sysctl.ExitCode != 0 {
+			return TaskResult{Status: "failed", Stdout: sysctl.Stdout, Stderr: sysctl.Stderr, Error: "enable ip_forward failed: " + errorText(sysctl), Result: jsonResult(map[string]any{"ip_forward_before": ipForwardBefore, "ip_forward_changed": false})}
+		}
+		ipForwardChanged = true
 	}
 	check := runner.Run(ctx, "nft", "-c", "-f", forwardNFTPath(cfg))
 	if check.Err != nil || check.ExitCode != 0 {
-		return TaskResult{Status: "failed", Stdout: check.Stdout, Stderr: check.Stderr, Error: "nft syntax check failed: " + errorText(check), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": false, "applied": false})}
+		return TaskResult{Status: "failed", Stdout: check.Stdout, Stderr: check.Stderr, Error: "nft syntax check failed: " + errorText(check), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": false, "nft_check_stdout": check.Stdout, "nft_check_stderr": check.Stderr, "nft_content": nftContent, "applied": false})}
 	}
 	apply := runner.Run(ctx, "nft", "-f", forwardNFTPath(cfg))
 	if apply.Err != nil || apply.ExitCode != 0 {
-		return TaskResult{Status: "failed", Stdout: apply.Stdout, Stderr: apply.Stderr, Error: "nft apply failed: " + errorText(apply), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "applied": false})}
+		return TaskResult{Status: "failed", Stdout: apply.Stdout, Stderr: apply.Stderr, Error: "nft apply failed: " + errorText(apply), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "nft_apply_stdout": apply.Stdout, "nft_apply_stderr": apply.Stderr, "nft_content": nftContent, "applied": false})}
 	}
 	warnings := []string{}
-	ipForward := runner.Run(ctx, "sysctl", "-n", "net.ipv4.ip_forward")
-	if strings.TrimSpace(ipForward.Stdout) != "1" {
+	ipForwardAfter := readIPv4Forwarding()
+	if ipForwardAfter == "" {
+		ipForward := runner.Run(ctx, "sysctl", "-n", "net.ipv4.ip_forward")
+		ipForwardAfter = strings.TrimSpace(ipForward.Stdout)
+	}
+	if strings.TrimSpace(ipForwardAfter) != "1" {
 		warnings = append(warnings, "net.ipv4.ip_forward is not enabled; forwarding may not work until IP forwarding is enabled")
 	}
-	return TaskResult{Status: "succeeded", Stdout: strings.TrimSpace(check.Stdout + "\n" + apply.Stdout), Stderr: strings.TrimSpace(check.Stderr + "\n" + apply.Stderr), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "applied": true, "warnings": warnings, "listen_port": intField(rule, "listen_port"), "target_ip": stringField(rule, "target_ip", stringField(rule, "target_host", "")), "target_port": intField(rule, "target_port")})}
+	return TaskResult{Status: "succeeded", Stdout: strings.TrimSpace(check.Stdout + "\n" + apply.Stdout), Stderr: strings.TrimSpace(check.Stderr + "\n" + apply.Stderr), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "applied": true, "warnings": warnings, "listen_port": intField(rule, "listen_port"), "target_ip": targetHost, "target_host": targetHost, "target_port": intField(rule, "target_port"), "ip_forward_before": ipForwardBefore, "ip_forward_after": ipForwardAfter, "ip_forward_changed": ipForwardChanged})}
 }
 
 func applyPBRConfig(cfg Config, payload map[string]any) TaskResult {
@@ -654,13 +686,15 @@ func edgeTunnelEasyTierService(cfg Config, payload map[string]any, binary string
 func renderForwardNFT(payload map[string]any) string {
 	protocol := strings.ToLower(stringField(payload, "protocol", "tcp"))
 	listenPort := intField(payload, "listen_port")
-	targetHost := stringField(payload, "target_ip", stringField(payload, "target_host", "127.0.0.1"))
+	targetHost := normalizeHostIP(stringField(payload, "target_ip", stringField(payload, "target_host", "127.0.0.1")))
 	targetPort := intField(payload, "target_port")
-	rules := []string{}
+	prerouting := []string{}
+	output := []string{}
 	for _, proto := range forwardProtocols(protocol) {
-		rules = append(rules, fmt.Sprintf("    %s dport %d dnat ip to %s:%d", proto, listenPort, targetHost, targetPort))
+		prerouting = append(prerouting, fmt.Sprintf("    %s dport %d dnat ip to %s:%d", proto, listenPort, targetHost, targetPort))
+		output = append(output, fmt.Sprintf("    ip daddr 127.0.0.1 %s dport %d dnat ip to %s:%d", proto, listenPort, targetHost, targetPort))
 	}
-	return fmt.Sprintf("table inet edge_tunnel_forward {\n  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n%s\n  }\n  chain postrouting {\n    type nat hook postrouting priority srcnat; policy accept;\n    masquerade\n  }\n}\n", strings.Join(rules, "\n"))
+	return fmt.Sprintf("table inet edge_tunnel_forward {\n  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n%s\n  }\n\n  chain output {\n    type nat hook output priority dstnat; policy accept;\n%s\n  }\n\n  chain postrouting {\n    type nat hook postrouting priority srcnat; policy accept;\n    ip daddr %s masquerade\n  }\n}\n", strings.Join(prerouting, "\n"), strings.Join(output, "\n"), targetHost)
 }
 
 func forwardProtocols(protocol string) []string {
@@ -688,13 +722,18 @@ func verifyForwardRules(ctx context.Context, cfg Config, runner CommandRunner) T
 		return TaskResult{Status: "failed", Result: jsonResult(status), Error: err.Error()}
 	}
 	table := runner.Run(ctx, "nft", "list", "table", "inet", "edge_tunnel_forward")
-	ipForward := runner.Run(ctx, "sysctl", "-n", "net.ipv4.ip_forward")
-	status["ip_forward"] = strings.TrimSpace(ipForward.Stdout)
+	ipForward := readIPv4Forwarding()
+	if ipForward == "" {
+		result := runner.Run(ctx, "sysctl", "-n", "net.ipv4.ip_forward")
+		ipForward = strings.TrimSpace(result.Stdout)
+	}
+	status["ip_forward"] = ipForward
 	status["nft_output"] = strings.TrimSpace(table.Stdout + "\n" + table.Stderr)
 	status["table_exists"] = table.Err == nil && table.ExitCode == 0
 	status["rules_present"] = strings.Contains(table.Stdout, "dnat")
+	status["rule_present"] = strings.Contains(table.Stdout, "dnat")
 	warnings := []string{}
-	if strings.TrimSpace(ipForward.Stdout) != "1" {
+	if strings.TrimSpace(ipForward) != "1" {
 		warnings = append(warnings, "net.ipv4.ip_forward is not enabled")
 	}
 	status["warnings"] = warnings
@@ -702,6 +741,28 @@ func verifyForwardRules(ctx context.Context, cfg Config, runner CommandRunner) T
 		return TaskResult{Status: "failed", Stdout: table.Stdout, Stderr: table.Stderr, Result: jsonResult(status), Error: errorText(table)}
 	}
 	return TaskResult{Status: "succeeded", Stdout: table.Stdout, Stderr: table.Stderr, Result: jsonResult(status)}
+}
+
+func normalizeHostIP(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	if prefix, err := netip.ParsePrefix(text); err == nil {
+		return prefix.Addr().String()
+	}
+	if addr, err := netip.ParseAddr(text); err == nil {
+		return addr.String()
+	}
+	return text
+}
+
+func readIPv4Forwarding() string {
+	raw, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func renderPBRScript(payload map[string]any) string {

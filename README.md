@@ -1,8 +1,8 @@
-﻿# Edge Tunnel Panel
+# Edge Tunnel Panel
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发规则、任务和状态。
 
-当前版本：`v0.2.3-test`
+当前版本：`v0.2.4-test`
 
 ## 适用场景
 
@@ -24,7 +24,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.3-test
+  --version v0.2.4-test
 ```
 
 安装完成后打开：
@@ -48,7 +48,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- \
-  --version v0.2.3-test \
+  --version v0.2.4-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -73,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## EasyTier 虚拟 IP
 
-`v0.2.3-test` 生成的 EasyTier systemd 启动参数默认包含：
+`v0.2.4-test` 生成的 EasyTier systemd 启动参数默认包含：
 
 ```text
 -d -i 10.144.0.0/16
@@ -83,18 +83,31 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 转发规则 MVP
 
-当前版本开始提供单端口 TCP/UDP 转发规则 MVP：
+当前版本提供单端口 TCP/UDP 转发规则 MVP。产品链路是：外部客户端 -> 入口节点公网 IP:入口端口 -> 入口节点 nftables DNAT/SNAT -> 后端节点 EasyTier 虚拟 IP:目标端口 -> 后端服务。
 
 1. 先完成快速组网并确认后端节点有 EasyTier 虚拟 IP。
 2. 进入“转发规则”。
 3. 创建规则：选择入口节点、后端节点、监听端口、目标端口和协议。
-4. 默认目标 IP 使用后端节点的 EasyTier 虚拟 IP。
+4. 默认目标 IP 使用后端节点的 EasyTier 虚拟 IP，并自动去掉 CIDR 前缀，例如 `10.144.0.2/16` 会作为 `10.144.0.2` 写入转发规则。
 5. 点击“应用规则”，Controller 会在入口节点创建 `apply_forward_config` 任务。
 6. Agent 写入 `/etc/edge-tunnel/agent/forward.json` 和 `/etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft`。
-7. Agent 先执行 `nft -c -f` 语法检查，通过后再执行 `nft -f` 加载规则。
+7. Agent 先执行 `nft -c -f` 语法检查，通过后再执行 `nft -f` 加载规则；如果检查失败，任务结果会展示 stderr 和生成的 nft 内容。
 8. 可点击“验证规则”创建 `verify_forward_rules` 任务。
 
 限制：第一版只支持单端口规则，不支持端口池、限速、计费或用户系统。
+真实测试示例：
+
+```bash
+# 后端节点
+python3 -m http.server 8080 --bind 0.0.0.0
+
+# 入口节点检查
+nft list table inet edge_tunnel_forward
+cat /proc/sys/net/ipv4/ip_forward
+
+# 外部客户端
+curl -v http://入口公网IP:18081/
+```
 
 ## 如何确认组网成功
 
@@ -155,5 +168,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.3-test bash panel/scripts/build-release.sh
+VERSION=v0.2.4-test bash panel/scripts/build-release.sh
 ```

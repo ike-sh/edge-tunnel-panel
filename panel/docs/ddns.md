@@ -1,4 +1,4 @@
-﻿# DDNS
+# DDNS
 
 DDNS 在 Edge Tunnel Panel 中作为节点或公网入口的内置配置能力，不作为独立主菜单功能。
 
