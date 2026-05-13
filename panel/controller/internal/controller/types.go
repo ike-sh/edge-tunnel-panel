@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.2.8-test"
+	Version = "v0.2.9-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -73,6 +73,10 @@ type NetworkProfile struct {
 	ProtocolPreference string    `json:"protocol_preference"`
 	Listeners          []string  `json:"listeners"`
 	Peers              []string  `json:"peers"`
+	MTU                int       `json:"mtu"`
+	MSSClampEnabled    bool      `json:"mss_clamp_enabled"`
+	MSSMode            string    `json:"mss_mode"`
+	MSSValue           int       `json:"mss_value"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
@@ -84,6 +88,10 @@ type NetworkLink struct {
 	CIDR             string    `json:"cidr"`
 	Port             int       `json:"port"`
 	Protocols        []string  `json:"protocols"`
+	MTU              int       `json:"mtu"`
+	MSSClampEnabled  bool      `json:"mss_clamp_enabled"`
+	MSSMode          string    `json:"mss_mode"`
+	MSSValue         int       `json:"mss_value"`
 	EntryNodeID      string    `json:"entry_node_id"`
 	BackendNodeID    string    `json:"backend_node_id"`
 	EntryTaskID      string    `json:"entry_task_id"`
@@ -159,22 +167,44 @@ type Forward struct {
 }
 
 type PBRPolicy struct {
-	ID            string    `json:"id"`
-	NodeID        string    `json:"node_id"`
-	Name          string    `json:"name"`
-	MatchSource   string    `json:"match_source"`
-	MatchDst      string    `json:"match_dst"`
-	MatchProtocol string    `json:"match_protocol"`
-	MatchMark     string    `json:"match_mark"`
-	TableID       int       `json:"table_id"`
-	Gateway       string    `json:"gateway"`
-	OutInterface  string    `json:"out_interface"`
-	Priority      int       `json:"priority"`
-	Enabled       bool      `json:"enabled"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-}
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Enabled          bool      `json:"enabled"`
+	NodeID           string    `json:"node_id"`
+	SourceType       string    `json:"source_type"`
+	ForwardRuleID    string    `json:"forward_rule_id,omitempty"`
+	Domain           string    `json:"domain,omitempty"`
+	StaticDstCIDR    string    `json:"static_dst_cidr,omitempty"`
+	Protocol         string    `json:"protocol"`
+	MatchPort        int       `json:"match_port"`
+	MatchDstHost     string    `json:"match_dst_host,omitempty"`
+	MatchDstPort     int       `json:"match_dst_port,omitempty"`
+	MatchSrcHost     string    `json:"match_src_host,omitempty"`
+	MatchMarkComment string    `json:"match_mark_comment,omitempty"`
+	EgressInterface  string    `json:"egress_interface"`
+	EgressGateway    string    `json:"egress_gateway,omitempty"`
+	EgressSourceIP   string    `json:"egress_source_ip,omitempty"`
+	TableID          int       `json:"table_id"`
+	FWMark           string    `json:"fwmark"`
+	Priority         int       `json:"priority"`
+	MSSClampEnabled  bool      `json:"mss_clamp_enabled"`
+	MSSValue         int       `json:"mss_value,omitempty"`
+	MTU              int       `json:"mtu,omitempty"`
+	Status           string    `json:"status"`
+	LastApplyTaskID  string    `json:"last_apply_task_id,omitempty"`
+	LastVerifyTaskID string    `json:"last_verify_task_id,omitempty"`
+	Remark           string    `json:"remark,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 
+	// Legacy fields kept for older stored data and API clients.
+	MatchSource   string `json:"match_source,omitempty"`
+	MatchDst      string `json:"match_dst,omitempty"`
+	MatchProtocol string `json:"match_protocol,omitempty"`
+	MatchMark     string `json:"match_mark,omitempty"`
+	Gateway       string `json:"gateway,omitempty"`
+	OutInterface  string `json:"out_interface,omitempty"`
+}
 type DDNSProfile struct {
 	ID         string    `json:"id"`
 	NodeID     string    `json:"node_id"`

@@ -4,13 +4,14 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.2.8-test';
+const DEFAULT_VERSION = 'v0.2.9-test';
 
 const tabs = [
   ['dashboard', '总览'],
   ['nodes', '节点'],
   ['networks', '组网配置'],
   ['forwards', '转发规则'],
+  ['pbr', '出口策略 / PBR'],
   ['tasks', '任务'],
   ['settings', '设置'],
 ];
@@ -23,11 +24,14 @@ const readActions = [
   'verify_network_connectivity',
   'verify_forward_rules',
   'verify_pbr_rules',
+  'detect_network_interfaces',
+  'detect_mtu_status',
   'verify_ddns_status',
 ];
 const writeActions = ['install_or_update_easytier', 'restart_easytier', 'restart_agent'];
-const easyTierActions = ['install_or_update_easytier', 'apply_network_profile', 'verify_easytier_status', 'verify_network_connectivity', 'restart_easytier'];
+const easyTierActions = ['install_or_update_easytier', 'apply_network_profile', 'verify_easytier_status', 'verify_network_connectivity', 'restart_easytier', 'detect_mtu_status'];
 const forwardingActions = ['apply_forward_config', 'apply_entry_forward_config', 'apply_landing_forward_config', 'verify_forward_rules', 'verify_entry_forward_rules', 'verify_landing_forward_rules'];
+const pbrActions = ['detect_network_interfaces', 'apply_pbr_policy', 'verify_pbr_policy', 'disable_pbr_policy', 'verify_pbr_rules'];
 
 const actionLabels = {
   run_node_preflight: '节点预检',
@@ -37,6 +41,8 @@ const actionLabels = {
   verify_network_connectivity: '验证组网',
   verify_forward_rules: '验证转发规则',
   verify_pbr_rules: '验证出口策略',
+  detect_network_interfaces: '识别网卡',
+  detect_mtu_status: '检测 MTU/MSS',
   verify_ddns_status: '验证 DDNS',
   install_or_update_easytier: '安装/更新 EasyTier',
   apply_network_profile: '应用组网配置',
@@ -45,6 +51,9 @@ const actionLabels = {
   apply_entry_forward_config: '应用入口转发',
   apply_landing_forward_config: '应用落地转发',
   apply_pbr_config: '应用出口策略',
+  apply_pbr_policy: '应用出口策略',
+  verify_pbr_policy: '验证出口策略',
+  disable_pbr_policy: '禁用出口策略',
   apply_ddns_config: '应用 DDNS',
   reload_firewall_rules: '重载防火墙规则',
   restart_easytier: '重启 EasyTier',
@@ -210,13 +219,15 @@ function App() {
   const [networkLinks, setNetworkLinks] = useState([]);
   const [networkProfiles, setNetworkProfiles] = useState([]);
   const [forwards, setForwards] = useState([]);
+  const [pbrPolicies, setPBRPolicies] = useState([]);
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [openNodeActions, setOpenNodeActions] = useState('');
   const [expandedTask, setExpandedTask] = useState('');
   const [agentForm, setAgentForm] = useState({ controller_url: browserControllerURL(), node_name: 'edge-node-1', version: DEFAULT_VERSION, enable_tasks: true, enable_write_actions: true });
   const [agentCommand, setAgentCommand] = useState({ root: '', sudo: '' });
-  const [quickForm, setQuickForm] = useState({ name: 'edge-net', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', port: 11010, entry_node_id: '', backend_node_id: '', tcp: true, udp: true, showAdvanced: false, listeners: 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010', peers: '' });
+  const [quickForm, setQuickForm] = useState({ name: 'edge-net', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', port: 11010, mtu: 1380, mss_clamp_enabled: true, mss_mode: 'auto', mss_value: '', entry_node_id: '', backend_node_id: '', tcp: true, udp: true, showAdvanced: false, listeners: 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010', peers: '' });
   const [forwardForm, setForwardForm] = useState({ network_link_id: '', name: '', protocol: 'tcp', public_listen_port: '', landing_host: '', landing_port: '', transport_mode: 'easytier', enabled: true, remark: '', showAdvanced: false });
+  const [pbrForm, setPBRForm] = useState({ node_id: '', forward_rule_id: '', name: '', egress_interface: '', egress_gateway: '', source_type: 'forward', enabled: true });
   const [taskFilter, setTaskFilter] = useState('all');
   const [taskNodeFilter, setTaskNodeFilter] = useState('all');
   const [taskEasyTierOnly, setTaskEasyTierOnly] = useState(false);
@@ -265,9 +276,10 @@ function App() {
   async function refreshNetworkLinks() { const data = safeList(await api('/network-links')); setNetworkLinks(data); return data; }
   async function refreshNetworkProfiles() { const data = safeList(await api('/network-profiles')); setNetworkProfiles(data); return data; }
   async function refreshForwards() { const data = safeList(await api('/forwards')); setForwards(data); return data; }
+  async function refreshPBRPolicies() { const data = safeList(await api('/pbr-policies')); setPBRPolicies(data); return data; }
   async function refreshAll() {
     const h = await refreshHealth();
-    if (token || h.strict_auth === false) await Promise.all([refreshNodes(), refreshTasks(), refreshNetworkLinks(), refreshNetworkProfiles(), refreshForwards()]);
+    if (token || h.strict_auth === false) await Promise.all([refreshNodes(), refreshTasks(), refreshNetworkLinks(), refreshNetworkProfiles(), refreshForwards(), refreshPBRPolicies()]);
   }
 
   useEffect(() => { run('加载数据', refreshAll); }, []);
@@ -329,6 +341,10 @@ function App() {
         network_secret: quickForm.network_secret,
         cidr: quickForm.cidr,
         port: Number(quickForm.port || 11010),
+        mtu: Number(quickForm.mtu || 1380),
+        mss_clamp_enabled: quickForm.mss_clamp_enabled,
+        mss_mode: quickForm.mss_mode,
+        mss_value: Number(quickForm.mss_value || 0),
         entry_node_id: quickForm.entry_node_id,
         backend_node_id: quickForm.backend_node_id,
         protocols,
@@ -424,11 +440,43 @@ function App() {
     await run('验证转发规则', async () => api(`/forwards/${encodeURIComponent(rule.id)}/verify`, { body: {} }));
     await Promise.all([refreshForwards(), refreshTasks()]);
   }
+  async function detectInterfaces(nodeID) {
+    if (!nodeID) { setAlert({ type: 'error', message: '请选择节点' }); return; }
+    await run('识别网卡', async () => api('/tasks', { body: { node_id: nodeID, action: 'detect_network_interfaces', payload: {} } }));
+    await refreshTasks();
+    setAlert({ type: 'success', message: '已创建识别网卡任务，请在任务页查看默认出口和网关。' });
+  }
+  async function createPBR(options = {}) {
+    if (!pbrForm.node_id) { setAlert({ type: 'error', message: '请选择节点。' }); return; }
+    if (!pbrForm.forward_rule_id) { setAlert({ type: 'error', message: '请选择关联转发规则。' }); return; }
+    if (!pbrForm.egress_interface.trim()) { setAlert({ type: 'error', message: '请填写出口接口。' }); return; }
+    const body = { ...pbrForm, name: pbrForm.name || 'pbr-forward', source_type: 'forward', enabled: pbrForm.enabled };
+    const path = options.apply ? '/pbr-policies/create-and-apply' : '/pbr-policies';
+    const result = await run(options.apply ? '创建并应用出口策略' : '创建出口策略', async () => api(path, { body }));
+    if (result) await Promise.all([refreshPBRPolicies(), refreshTasks()]);
+  }
+  async function applyPBR(policy) {
+    await run('应用出口策略', async () => api(`/pbr-policies/${encodeURIComponent(policy.id)}/apply`, { body: {} }));
+    await Promise.all([refreshPBRPolicies(), refreshTasks()]);
+  }
+  async function verifyPBR(policy) {
+    await run('验证出口策略', async () => api(`/pbr-policies/${encodeURIComponent(policy.id)}/verify`, { body: {} }));
+    await Promise.all([refreshPBRPolicies(), refreshTasks()]);
+  }
+  async function disablePBR(policy) {
+    await run('禁用出口策略', async () => api(`/pbr-policies/${encodeURIComponent(policy.id)}/disable`, { body: {} }));
+    await Promise.all([refreshPBRPolicies(), refreshTasks()]);
+  }
+  async function deletePBR(policy) {
+    if (!window.confirm('确认删除这条出口策略？')) return;
+    await run('删除出口策略', async () => api(`/pbr-policies/${encodeURIComponent(policy.id)}`, { method: 'DELETE' }));
+    await refreshPBRPolicies();
+  }
 
   const filteredTasks = tasks.filter((task) =>
     (taskFilter === 'all' || task.status === taskFilter) &&
     (taskNodeFilter === 'all' || task.node_id === taskNodeFilter) &&
-    (!taskEasyTierOnly || easyTierActions.includes(task.action))
+    (!taskEasyTierOnly || easyTierActions.includes(task.action) || pbrActions.includes(task.action))
   );
 
   return (
@@ -453,6 +501,7 @@ function App() {
       case 'nodes': return renderNodes();
       case 'networks': return renderNetworks();
       case 'forwards': return renderForwards();
+      case 'pbr': return renderPBR();
       case 'tasks': return renderTasks();
       case 'settings': return renderSettings();
       default: return renderDashboard();
@@ -479,7 +528,7 @@ function App() {
     return <div className="action-panel"><div className="action-section"><h4>只读检查</h4><div className="action-grid">{readActions.map((action) => <button key={action} className="secondary" onClick={() => createNodeTask(node.id, action)}>{actionLabel(action)}</button>)}</div></div><div className="action-section warning-section"><h4>写入维护</h4><p className="warning-text">这些操作会修改节点服务状态，请只在可信节点执行。</p><div className="action-grid">{writeActions.map((action) => <button key={action} className="warning" onClick={() => createNodeTask(node.id, action)}>{actionLabel(action)}</button>)}</div></div><div className="action-section danger-section"><h4>危险操作</h4><p className="muted">仅删除主控记录，不会卸载远端 Agent。</p><div className="action-grid"><button className="danger" onClick={() => deleteNode(node)}>删除节点记录</button></div></div></div>;
   }
   function renderNetworks() {
-    return <section className="card"><div className="card-head"><h2>组网配置</h2><button className="secondary" onClick={() => Promise.all([refreshNetworkLinks(), refreshNetworkProfiles(), refreshNodes()])}>刷新</button></div><div className="sub-panel network-form"><h3>快速组网</h3><p className="muted">选择公网入口节点和后端节点，面板会自动生成入口 listeners 和后端 peers。</p><div className="grid two form-grid"><label>组网名称<input value={quickForm.name} onChange={(event) => setQuickForm({ ...quickForm, name: event.target.value })} /></label><label>网络名<input value={quickForm.network_name} onChange={(event) => setQuickForm({ ...quickForm, network_name: event.target.value })} /></label><label>网络密钥<div className="inline"><input value={quickForm.network_secret} onChange={(event) => setQuickForm({ ...quickForm, network_secret: event.target.value })} placeholder="留空由主控自动生成" /><button className="secondary" type="button" onClick={() => setQuickForm({ ...quickForm, network_secret: randomSecret() })}>重新生成</button></div></label><label>CIDR<input value={quickForm.cidr} onChange={(event) => setQuickForm({ ...quickForm, cidr: event.target.value })} /></label><label>监听端口<input type="number" min="1" max="65535" value={quickForm.port} onChange={(event) => setQuickForm({ ...quickForm, port: event.target.value })} /></label><label>公网入口节点<select value={quickForm.entry_node_id} onChange={(event) => setQuickForm({ ...quickForm, entry_node_id: event.target.value })}><option value="">请选择入口节点</option>{onlineNodes.map((node) => <option key={node.id} value={node.id}>{nodeOptionLabel(node)}</option>)}</select></label><label>后端节点<select value={quickForm.backend_node_id} onChange={(event) => setQuickForm({ ...quickForm, backend_node_id: event.target.value })}><option value="">请选择后端节点</option>{onlineNodes.map((node) => <option key={node.id} value={node.id}>{nodeOptionLabel(node)}</option>)}</select></label><div className="check-row"><label><input type="checkbox" checked={quickForm.tcp} onChange={(event) => setQuickForm({ ...quickForm, tcp: event.target.checked })} />TCP</label><label><input type="checkbox" checked={quickForm.udp} onChange={(event) => setQuickForm({ ...quickForm, udp: event.target.checked })} />UDP</label></div></div><details className="command-block" open={quickForm.showAdvanced} onToggle={(event) => setQuickForm({ ...quickForm, showAdvanced: event.currentTarget.open })}><summary>高级参数</summary><div className="grid two"><label>自定义 listeners<textarea value={quickForm.listeners} onChange={(event) => setQuickForm({ ...quickForm, listeners: event.target.value })} /></label><label>自定义 peers<textarea value={quickForm.peers} onChange={(event) => setQuickForm({ ...quickForm, peers: event.target.value })} /></label></div><pre>{pretty({ ...quickForm, protocols: [quickForm.tcp && 'tcp', quickForm.udp && 'udp'].filter(Boolean) })}</pre></details><div className="actions"><button onClick={quickApplyNetwork}>创建并应用组网</button></div></div><h3>组网卡片</h3>{networkLinks.length === 0 ? <p className="muted">暂无组网记录。请使用上方“快速组网”。</p> : <div className="cards compact-cards">{networkLinks.map((link) => <NetworkLinkCard key={link.id} link={link} />)}</div>}<details className="command-block"><summary>历史组网配置 / 已保存配置</summary>{networkProfiles.length === 0 ? <p className="muted">暂无历史配置。</p> : networkProfiles.map((profile) => <pre key={profile.id}>{pretty(profile)}</pre>)}</details></section>;
+    return <section className="card"><div className="card-head"><h2>组网配置</h2><button className="secondary" onClick={() => Promise.all([refreshNetworkLinks(), refreshNetworkProfiles(), refreshNodes()])}>刷新</button></div><div className="sub-panel network-form"><h3>快速组网</h3><p className="muted">选择公网入口节点和后端节点，面板会自动生成入口 listeners 和后端 peers。</p><div className="grid two form-grid"><label>组网名称<input value={quickForm.name} onChange={(event) => setQuickForm({ ...quickForm, name: event.target.value })} /></label><label>网络名<input value={quickForm.network_name} onChange={(event) => setQuickForm({ ...quickForm, network_name: event.target.value })} /></label><label>网络密钥<div className="inline"><input value={quickForm.network_secret} onChange={(event) => setQuickForm({ ...quickForm, network_secret: event.target.value })} placeholder="留空由主控自动生成" /><button className="secondary" type="button" onClick={() => setQuickForm({ ...quickForm, network_secret: randomSecret() })}>重新生成</button></div></label><label>CIDR<input value={quickForm.cidr} onChange={(event) => setQuickForm({ ...quickForm, cidr: event.target.value })} /></label><label>监听端口<input type="number" min="1" max="65535" value={quickForm.port} onChange={(event) => setQuickForm({ ...quickForm, port: event.target.value })} /></label><label>公网入口节点<select value={quickForm.entry_node_id} onChange={(event) => setQuickForm({ ...quickForm, entry_node_id: event.target.value })}><option value="">请选择入口节点</option>{onlineNodes.map((node) => <option key={node.id} value={node.id}>{nodeOptionLabel(node)}</option>)}</select></label><label>后端节点<select value={quickForm.backend_node_id} onChange={(event) => setQuickForm({ ...quickForm, backend_node_id: event.target.value })}><option value="">请选择后端节点</option>{onlineNodes.map((node) => <option key={node.id} value={node.id}>{nodeOptionLabel(node)}</option>)}</select></label><div className="check-row"><label><input type="checkbox" checked={quickForm.tcp} onChange={(event) => setQuickForm({ ...quickForm, tcp: event.target.checked })} />TCP</label><label><input type="checkbox" checked={quickForm.udp} onChange={(event) => setQuickForm({ ...quickForm, udp: event.target.checked })} />UDP</label></div></div><details className="command-block" open={quickForm.showAdvanced} onToggle={(event) => setQuickForm({ ...quickForm, showAdvanced: event.currentTarget.open })}><summary>高级参数</summary><div className="grid two"><label>自定义 listeners<textarea value={quickForm.listeners} onChange={(event) => setQuickForm({ ...quickForm, listeners: event.target.value })} /></label><label>自定义 peers<textarea value={quickForm.peers} onChange={(event) => setQuickForm({ ...quickForm, peers: event.target.value })} /></label><label>MTU<input type="number" value={quickForm.mtu} onChange={(event) => setQuickForm({ ...quickForm, mtu: event.target.value })} /></label><label>MSS 模式<select value={quickForm.mss_mode} onChange={(event) => setQuickForm({ ...quickForm, mss_mode: event.target.value })}><option value="auto">自动</option><option value="fixed">固定</option><option value="disabled">禁用</option></select></label><label>固定 MSS 值<input type="number" value={quickForm.mss_value} onChange={(event) => setQuickForm({ ...quickForm, mss_value: event.target.value })} placeholder="默认 MTU-40" /></label><label className="check"><input type="checkbox" checked={quickForm.mss_clamp_enabled} onChange={(event) => setQuickForm({ ...quickForm, mss_clamp_enabled: event.target.checked })} />启用 MSS clamp</label></div><pre>{pretty({ ...quickForm, protocols: [quickForm.tcp && 'tcp', quickForm.udp && 'udp'].filter(Boolean) })}</pre></details><div className="actions"><button onClick={quickApplyNetwork}>创建并应用组网</button></div></div><h3>组网卡片</h3>{networkLinks.length === 0 ? <p className="muted">暂无组网记录。请使用上方“快速组网”。</p> : <div className="cards compact-cards">{networkLinks.map((link) => <NetworkLinkCard key={link.id} link={link} />)}</div>}<details className="command-block"><summary>历史组网配置 / 已保存配置</summary>{networkProfiles.length === 0 ? <p className="muted">暂无历史配置。</p> : networkProfiles.map((profile) => <pre key={profile.id}>{pretty(profile)}</pre>)}</details></section>;
   }
   function NetworkLinkCard({ link }) {
     const entry = nodeMap[link.entry_node_id];
@@ -499,6 +548,16 @@ function App() {
     const landingPort = ruleLandingPort(rule);
     const target = landingHost(rule);
     return <article className="mini-card forward-card"><div className="card-head"><h3>{rule.name}</h3><span className={statusClass(rule.status)}>{labelStatus(rule.status) || (rule.enabled ? '已启用' : '已停用')}</span></div><dl className="kv compact-kv"><dt>链路</dt><dd>外部 → {publicIP(entry)}:{listenPort} → {transportModeLabel(rule.transport_mode)} → {landing?.name || rule.landing_node_id || rule.backend_node_id || 'B 节点'} → {target}:{landingPort}</dd><dt>协议</dt><dd>{String(rule.protocol || '').toUpperCase()}</dd><dt>组网链路</dt><dd>{rule.network_link_id ? shortID(rule.network_link_id) : '-'}</dd><dt>A 侧入口</dt><dd>{labelStatus(rule.entry_stage_status) || '等待'}</dd><dt>B 侧落地</dt><dd>{labelStatus(rule.landing_stage_status) || '等待'}</dd><dt>A→B</dt><dd>{transportModeLabel(rule.transport_mode)} / {normalizeHostIP(rule.tunnel_target_host || rule.target_host || '-')}:{rule.tunnel_target_port || listenPort}</dd><dt>落地目标</dt><dd>{target}:{landingPort}</dd></dl><div className="actions"><button onClick={() => applyForward(rule)}>应用</button><button className="secondary" onClick={() => verifyForward(rule)}>验证</button><button className="danger" onClick={() => deleteForward(rule)}>删除</button></div></article>;
+  }
+  function renderPBR() {
+    const selectedForward = forwards.find((rule) => rule.id === pbrForm.forward_rule_id);
+    const recommendedNode = selectedForward?.landing_node_id || selectedForward?.backend_node_id || '';
+    return <section className="card"><div className="card-head"><div><h2>出口策略 / PBR</h2><p className="muted">为 B 落地执行节点上的转发流量选择出口网卡。当前 MVP 每个节点只允许一条启用中的出口策略。</p></div><button className="secondary" onClick={() => Promise.all([refreshPBRPolicies(), refreshForwards(), refreshNodes()])}>刷新</button></div><div className="sub-panel forward-form"><h3>创建出口策略</h3><div className="grid two form-grid"><label>选择节点<select value={pbrForm.node_id || recommendedNode} onChange={(event) => setPBRForm({ ...pbrForm, node_id: event.target.value })}><option value="">请选择 B 落地节点</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id} / {shortID(node.id)} / {node.private_ip || node.public_ip || '-'}</option>)}</select></label><label>关联转发规则<select value={pbrForm.forward_rule_id} onChange={(event) => { const rule = forwards.find((item) => item.id === event.target.value); setPBRForm({ ...pbrForm, forward_rule_id: event.target.value, node_id: rule?.landing_node_id || rule?.backend_node_id || pbrForm.node_id, name: pbrForm.name || `pbr-${rule?.name || 'forward'}` }); }}><option value="">请选择转发规则</option>{forwards.map((rule) => <option key={rule.id} value={rule.id}>{rule.name} / {nodeLabel(nodeMap[rule.landing_node_id || rule.backend_node_id])} / {ruleListenPort(rule)}→{ruleLandingPort(rule)}</option>)}</select></label><label>策略名称<input value={pbrForm.name} onChange={(event) => setPBRForm({ ...pbrForm, name: event.target.value })} placeholder="pbr-forward" /></label><label>出口接口<input value={pbrForm.egress_interface} onChange={(event) => setPBRForm({ ...pbrForm, egress_interface: event.target.value })} placeholder="例如 eth1" /></label><label>出口网关<input value={pbrForm.egress_gateway} onChange={(event) => setPBRForm({ ...pbrForm, egress_gateway: event.target.value })} placeholder="可留空，或填写 1.2.3.1" /></label><label className="check"><input type="checkbox" checked={pbrForm.enabled} onChange={(event) => setPBRForm({ ...pbrForm, enabled: event.target.checked })} />启用策略</label></div><div className="actions"><button className="secondary" onClick={() => detectInterfaces(pbrForm.node_id || recommendedNode)}>识别网卡</button><button onClick={() => createPBR()}>创建策略</button><button onClick={() => createPBR({ apply: true })}>创建并应用策略</button></div><p className="muted">推荐流程：先识别网卡，再选择 B 节点、转发规则、出口接口和网关。</p></div>{pbrPolicies.length === 0 ? <p className="muted">暂无出口策略。</p> : <div className="cards compact-cards">{pbrPolicies.map((policy) => <PBRCard key={policy.id} policy={policy} />)}</div>}</section>;
+  }
+  function PBRCard({ policy }) {
+    const node = nodeMap[policy.node_id];
+    const forward = forwards.find((rule) => rule.id === policy.forward_rule_id);
+    return <article className="mini-card"><div className="card-head"><h3>{policy.name}</h3><span className={statusClass(policy.status)}>{labelStatus(policy.status)}</span></div><dl className="kv compact-kv"><dt>节点</dt><dd>{nodeLabel(node)}</dd><dt>转发规则</dt><dd>{forward?.name || policy.forward_rule_id || '-'}</dd><dt>出口接口</dt><dd>{policy.egress_interface || policy.out_interface || '-'}</dd><dt>网关</dt><dd>{policy.egress_gateway || policy.gateway || '-'}</dd><dt>fwmark/table/priority</dt><dd>{policy.fwmark || policy.match_mark || '-'} / {policy.table_id || '-'} / {policy.priority || '-'}</dd></dl><div className="actions"><button onClick={() => applyPBR(policy)}>应用</button><button className="secondary" onClick={() => verifyPBR(policy)}>验证</button><button className="secondary" onClick={() => disablePBR(policy)}>禁用</button><button className="danger" onClick={() => deletePBR(policy)}>删除</button></div></article>;
   }
   function renderTasks() {
     return <section className="card"><div className="card-head"><h2>任务</h2><button className="secondary" onClick={refreshTasks}>刷新</button></div><div className="inline"><label>状态筛选<select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}><option value="all">全部状态</option>{['pending', 'running', 'succeeded', 'failed', 'expired', 'cancelled'].map((status) => <option key={status} value={status}>{labelStatus(status)}</option>)}</select></label><label>节点筛选<select value={taskNodeFilter} onChange={(event) => setTaskNodeFilter(event.target.value)}><option value="all">全部节点</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id} / {shortID(node.id)} / {labelStatus(node.status)}</option>)}</select></label><button className="secondary" onClick={() => setTaskFilter('failed')}>只看失败</button><button className={taskEasyTierOnly ? '' : 'secondary'} onClick={() => setTaskEasyTierOnly(!taskEasyTierOnly)}>只看 EasyTier 相关</button></div>{filteredTasks.length === 0 ? <p className="muted">暂无匹配任务。</p> : filteredTasks.map((task) => <TaskCard key={task.id} task={task} />)}</section>;

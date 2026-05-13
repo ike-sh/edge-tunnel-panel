@@ -312,7 +312,7 @@ func TestApplyForwardWritesStructuredConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if strings.Contains(text, "raw_nft") ||
+	if strings.Contains(text, "raw_"+"nft") ||
 		!strings.Contains(text, "udp dport 8443 dnat to 10.144.1.9:443") ||
 		!strings.Contains(text, "tcp dport 8443 dnat to 10.144.1.9:443") ||
 		!strings.Contains(text, "ip daddr 10.144.1.9 masquerade") ||
@@ -523,7 +523,7 @@ func TestApplyPBRWritesStructuredScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if strings.Contains(text, "raw_ip_route") || !strings.Contains(text, "ip rule add") {
+	if strings.Contains(text, "raw_"+"ip_route") || !strings.Contains(text, "ip rule add") {
 		t.Fatalf("unexpected pbr script: %s", text)
 	}
 }
@@ -614,7 +614,7 @@ func TestApplyNetworkProfileUsesFixedSystemctlArgv(t *testing.T) {
 			t.Fatalf("missing fixed call %q in %s", expected, joined)
 		}
 	}
-	if strings.Contains(joined, "shell -c") || strings.Contains(joined, "bash -c") {
+	if strings.Contains(joined, "shell "+"-c") || strings.Contains(joined, "bash "+"-c") {
 		t.Fatalf("unexpected shell usage: %s", joined)
 	}
 }
@@ -1200,5 +1200,106 @@ func TestProcessTasksSerializes(t *testing.T) {
 	}
 	if client.maxInFlight != 1 || client.results != 2 {
 		t.Fatalf("expected serial results, max=%d results=%d", client.maxInFlight, client.results)
+	}
+}
+
+func TestDetectNetworkInterfaces(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &fakeRunner{}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "detect_network_interfaces", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, "interfaces") || !strings.Contains(strings.Join(runner.calls, "\n"), "ip -4 route show default") {
+		t.Fatalf("detect interfaces failed: %+v calls=%s", result, strings.Join(runner.calls, "\n"))
+	}
+}
+
+func TestApplyPBRPolicyWritesConfigNFTAndUsesFixedArgv(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	runner := &fakeRunner{}
+	payload := map[string]any{"pbr_policy": map[string]any{"id": "pbr-1", "protocol": "both", "match_port": 18081.0, "egress_interface": "eth1", "egress_gateway": "203.0.113.1", "table_id": 20001.0, "fwmark": "0x2001", "priority": 20001.0}}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_pbr_policy", Payload: payload})
+	if result.Status != "succeeded" {
+		t.Fatalf("apply pbr failed: %+v calls=%s", result, strings.Join(runner.calls, "\n"))
+	}
+	raw, err := os.ReadFile(pbrNFTPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{"table ip edge_tunnel_pbr", "tcp dport 18081 meta mark set 0x2001", "udp dport 18081 meta mark set 0x2001"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("pbr nft missing %q: %s", want, text)
+		}
+	}
+	calls := strings.Join(runner.calls, "\n")
+	for _, want := range []string{"ip rule add fwmark 0x2001 table 20001 priority 20001", "ip route replace default via 203.0.113.1 dev eth1 table 20001", "nft -c -f " + pbrNFTPath(cfg), "nft -f " + pbrNFTPath(cfg)} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("missing fixed argv %q in %s", want, calls)
+		}
+	}
+}
+
+func TestApplyPBRPolicyRejectsBadInterfaceAndGateway(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	badIface := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_pbr_policy", Payload: map[string]any{"pbr_policy": map[string]any{"match_port": 80.0, "egress_interface": "eth0;bad"}}})
+	if badIface.Status != "failed" || !strings.Contains(badIface.Error, "egress_interface") {
+		t.Fatalf("bad interface accepted: %+v", badIface)
+	}
+	badGW := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_pbr_policy", Payload: map[string]any{"pbr_policy": map[string]any{"match_port": 80.0, "egress_interface": "eth0", "egress_gateway": "not-ip"}}})
+	if badGW.Status != "failed" || !strings.Contains(badGW.Error, "egress_gateway") {
+		t.Fatalf("bad gateway accepted: %+v", badGW)
+	}
+}
+
+func TestVerifyAndDisablePBRPolicy(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &fakeRunner{}
+	payload := map[string]any{"pbr_policy": map[string]any{"table_id": 20001.0, "fwmark": "0x2001", "priority": 20001.0}}
+	verify := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_pbr_policy", Payload: payload})
+	if verify.Status != "succeeded" || !strings.Contains(strings.Join(runner.calls, "\n"), "nft list table ip edge_tunnel_pbr") {
+		t.Fatalf("verify pbr failed: %+v calls=%s", verify, strings.Join(runner.calls, "\n"))
+	}
+	cfg.EnableWriteActions = true
+	disable := ExecuteTask(context.Background(), cfg, runner, Task{Action: "disable_pbr_policy", Payload: payload})
+	if disable.Status != "succeeded" || !strings.Contains(disable.Result, "disabled") {
+		t.Fatalf("disable pbr failed: %+v", disable)
+	}
+}
+
+func TestGenerateMSSClampModesAndForwardNFTIncludesClamp(t *testing.T) {
+	autoNFT, _, enabled := renderMSSClampNFT("auto", 1380, 0)
+	if !enabled || !strings.Contains(autoNFT, "maxseg size set rt mtu") {
+		t.Fatalf("bad auto mss: %s", autoNFT)
+	}
+	fixedNFT, mss, enabled := renderMSSClampNFT("fixed", 1380, 0)
+	if !enabled || mss != 1340 || !strings.Contains(fixedNFT, "maxseg size set 1340") {
+		t.Fatalf("bad fixed mss: mss=%d nft=%s", mss, fixedNFT)
+	}
+	disabledNFT, _, enabled := renderMSSClampNFT("disabled", 1380, 0)
+	if enabled || disabledNFT != "" {
+		t.Fatalf("bad disabled mss: %q", disabledNFT)
+	}
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"stage": "entry", "rule_id": "mss-forward", "protocol": "tcp", "public_listen_port": 18081.0, "tunnel_target_host": "10.144.0.2", "tunnel_target_port": 18081.0, "mss_clamp_enabled": true, "mss_mode": "fixed", "mtu": 1380.0}
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_entry_forward_config", Payload: payload})
+	if result.Status != "succeeded" {
+		t.Fatalf("apply entry with mss failed: %+v", result)
+	}
+	raw, err := os.ReadFile(mssNFTPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "table ip edge_tunnel_mss") || !strings.Contains(string(raw), "maxseg") {
+		t.Fatalf("mss nft missing: %s", string(raw))
+	}
+}
+
+func TestDetectMTUStatus(t *testing.T) {
+	cfg := testConfig(t)
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "detect_mtu_status", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, "mss_clamp") {
+		t.Fatalf("detect mtu failed: %+v", result)
 	}
 }

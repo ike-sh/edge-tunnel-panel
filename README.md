@@ -1,77 +1,10 @@
-# Edge Tunnel Panel
+﻿# Edge Tunnel Panel
 
-Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并通过固定 Agent action 管理组网、转发、任务和状态。
+当前版本：`v0.2.9-test`
 
-当前版本：`v0.2.8-test`
+Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网与转发管理面板。它面向没有公网 IPv4 的 NAT 后服务器，通过公网入口节点、EasyTier 隧道、nftables 转发和 PBR 出口策略，把外部访问转发到指定落地服务器。
 
-## 适用场景
-
-- 被控服务器没有公网 IPv4，只能主动连接外部服务。
-- 服务器只有 SSH NAT 端口，业务端口无法直接暴露。
-- 需要一台公网服务器作为 A 入口节点。
-- 需要通过 EasyTier 把 A 公网入口节点与 B 落地执行节点组网。
-- 需要把公网端口转发到 B 节点后面的落地服务器 IP/域名和端口。
-
-## 架构
-
-- **Controller**：Go HTTP API、JSON 文件存储、任务下发、Web 静态文件服务。
-- **Agent**：安装在节点上，主动注册、心跳上报、轮询固定 action 任务。
-- **Web**：React + Vite 面板，默认中文界面。
-- **EasyTier**：负责 A 与 B 之间的 overlay 组网。
-- **nftables**：Agent 结构化生成 A/B 两侧转发规则，不接受 raw nft。
-
-## 快速安装 Controller
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.8-test
-```
-
-安装完成后打开：
-
-```text
-http://服务器IP:18080
-```
-
-测试版默认不强制 Web Operator Token。生产环境可启用严格鉴权。
-
-## 添加节点
-
-1. 打开 Web，进入“节点”。
-2. 点击“添加节点”。
-3. 在“新节点接入”卡片里填写节点名称。
-4. 点击“获取一键安装命令”。
-5. root 登录服务器时复制 root 命令；普通用户复制 sudo 命令。
-6. 执行完成后回到“节点”页面，等待 30 秒或点击刷新。
-
-示例命令：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- \
-  --version v0.2.8-test \
-  --controller-url http://YOUR_CONTROLLER:18080 \
-  --token YOUR_AGENT_TOKEN \
-  --node-name edge-node-1 \
-  --enable-tasks \
-  --enable-write-actions
-```
-
-节点用途不再由“角色”字段决定，而是在组网和转发流程中选择 A 入口节点、B 落地执行节点。
-
-## 快速组网
-
-1. 确认至少两个节点在线。
-2. 进入“组网配置”。
-3. 使用“快速组网”选择 A 公网入口节点和 B 落地执行节点。
-4. 面板自动生成同一组 `network_name`、`network_secret`、CIDR、listeners 和 peers。
-5. 入口节点 listeners 默认是 `tcp://0.0.0.0:11010` 和 `udp://0.0.0.0:11010`，peers 为空。
-6. 后端节点 peers 自动指向入口公网 IP，例如 `tcp://入口公网IP:11010` 和 `udp://入口公网IP:11010`。
-7. Controller 创建两个 `apply_network_profile` 任务，并生成一张组网卡片。
-8. 系统会在约 20 秒后自动验证；组网卡片会显示“组网成功 / 组网失败”。
-
-## 转发规则 MVP
-
-`v0.2.8-test` 的转发模型是双阶段：
+## 典型链路
 
 ```text
 外部客户端
@@ -83,90 +16,116 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 -> 落地服务器 IP/域名:端口
 ```
 
-用户只需要填写：
+## 快速开始
 
-- 组网链路。
-- 公网监听端口。
-- 落地服务器 IP/域名。
-- 落地服务器端口。
-- 协议 TCP / UDP / TCP+UDP。
-- A 到 B 的传输方式：EasyTier 隧道或 B 公网直连。
+安装 Controller：
 
-点击“创建并应用转发”后，Controller 会创建两个任务：
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
+  --version v0.2.9-test
+```
 
-- `apply_entry_forward_config`：运行在 A 公网入口节点，把公网端口转发到 B。
-- `apply_landing_forward_config`：运行在 B 落地执行节点，把内部端口转发到落地服务器 IP/域名:端口。
-
-A/B 两侧会分别写入：
+打开 Web：
 
 ```text
-/etc/edge-tunnel/agent/forwards.d/{rule_id}-entry.json
-/etc/edge-tunnel/agent/forwards.d/{rule_id}-landing.json
-/etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
-/etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
+http://服务器IP:18080
 ```
 
-B 侧支持把落地域名解析为 IPv4 后写入 nftables。IPv6 落地目标暂不支持。
+在“节点”页面点击“添加节点”，生成 Agent 一键命令并复制到被控服务器执行。
 
-真实测试示例：
+## 推荐流程
+
+1. 添加 A 公网入口节点和 B 落地执行节点。
+2. 进入“组网配置”，使用快速组网选择 A 和 B。
+3. 等待组网卡片显示“组网成功”。
+4. 进入“转发规则”，选择组网链路。
+5. 填写公网监听端口、落地服务器 IP/域名、落地服务器端口和协议。
+6. 点击“创建并应用转发”。
+7. 如需指定 B 节点出口线路，进入“出口策略 / PBR”。
+8. 识别网卡，选择转发规则、出口接口和网关，创建并应用策略。
+
+## 转发 MVP
+
+转发规则会生成两阶段任务：
+
+- `apply_entry_forward_config`：运行在 A 节点，把公网端口转发到 B。
+- `apply_landing_forward_config`：运行在 B 节点，把内部端口转发到落地服务器。
+
+当前 nftables 模板使用：
+
+- `table ip edge_tunnel_entry_forward`
+- `table ip edge_tunnel_landing_forward`
+- numeric priority：`-100` / `100`
+- `dnat to IP:PORT`
+- 不生成 output chain
+
+## 出口策略 / PBR
+
+PBR 用于 B 落地执行节点上的转发流量出口选择，适合多网卡、多公网 IP、CN2/9929/普通线路切换等场景。
+
+v0.2.9-test 的限制：
+
+- 每个节点只允许一条启用中的 PBR 策略。
+- 完整支持 `source_type=forward`。
+- `domain` / `static` 已保留模型，后续接入 DDNS/domain sync。
+- 不支持 IPv6 PBR。
+- 不接受任意 shell、命令字符串或 raw nft/raw route。
+
+PBR 会结构化生成：
+
+- `/etc/edge-tunnel/agent/pbr.d/{policy_id}.json`
+- `/etc/edge-tunnel/agent/nftables/edge-tunnel-pbr.nft`
+- `ip rule` / `ip route table`
+
+## MTU / MSS clamp
+
+EasyTier、tun、多层 NAT 和转发场景下，TCP 可能因为 MTU/MSS 不合适出现卡顿、部分网页打不开或大包异常。
+
+v0.2.9-test 默认：
+
+- MTU：`1380`
+- MSS clamp：启用
+- MSS 模式：`auto`
+
+可在组网高级参数中调整为：
+
+- `auto`：优先使用 `rt mtu`
+- `fixed`：固定 MSS 值，未填写时按 `MTU - 40`
+- `disabled`：不生成 MSS clamp
+
+## 常用验证
+
+A 节点：
 
 ```bash
-# 落地服务器
-python3 -m http.server 8080 --bind 0.0.0.0
-
-# A/B 节点检查
 nft list table ip edge_tunnel_entry_forward
-nft list table ip edge_tunnel_landing_forward
 cat /proc/sys/net/ipv4/ip_forward
-
-# 外部客户端
-curl -v http://入口公网IP:18081/
 ```
 
-## 如何确认组网成功
-
-- 节点页 EasyTier 状态为“运行中”。
-- 组网状态为“组网成功”。
-- Peer 数量大于 0。
-- 延迟有数值，例如 `146.8 ms`。
-- 丢包较低，例如 `0.0%`。
-- 隧道显示 `udp,tcp` 或 `tcp,udp`。
-- 路由显示 `DIRECT` 或可用路径。
-
-命令行也可以在 Agent 服务器上验证：
+B 节点：
 
 ```bash
-easytier-cli peer
-easytier-cli route
+nft list table ip edge_tunnel_landing_forward
+nft list table ip edge_tunnel_pbr
+ip rule show
+ip route show table 20000
+cat /proc/sys/net/ipv4/ip_forward
 ```
 
-## 卸载
-
-Controller 保留数据卸载：
+落地服务测试：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- --uninstall
-```
-
-Agent 彻底删除并清理 EasyTier service/config：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge
-```
-
-如果要同时删除 `easytier-core` 和 `easytier-cli`：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge --remove-easytier-binaries
+python3 -m http.server 8080 --bind 0.0.0.0
+curl -v http://A公网IP:18081/
 ```
 
 ## 安全边界
 
-- Agent 不接受任意 `command`、`cmd`、`shell`、`script`。
-- Agent 不接受 `raw_nft`、`raw_iptables`、`raw_ip_route`。
-- 写入动作必须是固定 action 映射到固定 Go 函数和固定 argv。
-- Token、任务输出和错误信息会做 redaction。
-- 任务输出会限制大小。
+- Agent 不接受任意 shell。
+- 只执行固定 action。
+- payload 中拒绝危险字段。
+- token 和任务输出会做 redaction 与长度限制。
+- 所有 nft/ip/systemctl 操作使用固定 argv。
 
 ## 开发验证
 
@@ -176,31 +135,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.8-test bash panel/scripts/build-release.sh
-```
-
-## v0.2.8-test nftables 兼容性修复
-
-v0.2.8-test 简化了转发 nftables 模板：
-
-- 使用 `table ip`，当前 MVP 仅支持 IPv4 转发。
-- 使用数字优先级：`priority -100` 和 `priority 100`。
-- 去除 output chain，外部访问请使用入口公网 IP 测试。
-- DNAT 语法改为 `dnat to IP:PORT`。
-- 应用前会先尝试删除旧的 `edge_tunnel_entry_forward` / `edge_tunnel_landing_forward` 表，再执行 `nft -c -f` 和 `nft -f`。
-
-A 节点检查：
-
-```bash
-cat /etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
-nft list table ip edge_tunnel_entry_forward
-cat /proc/sys/net/ipv4/ip_forward
-```
-
-B 节点检查：
-
-```bash
-cat /etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
-nft list table ip edge_tunnel_landing_forward
-cat /proc/sys/net/ipv4/ip_forward
+VERSION=v0.2.9-test bash panel/scripts/build-release.sh
 ```

@@ -1,23 +1,6 @@
-# 网络与转发
+﻿# Network Forwarding
 
-`v0.2.8-test` 把组网和转发拆成两个清晰阶段。
-
-## 组网阶段
-
-```text
-A 公网入口节点
-<-> EasyTier
-<-> B 落地执行节点
-```
-
-快速组网会自动生成：
-
-- A 侧 listeners。
-- B 侧 peers。
-- 同一组网络名、网络密钥和 CIDR。
-- 两个 `apply_network_profile` 任务。
-
-## 转发阶段
+v0.2.9-test 的转发链路：
 
 ```text
 外部客户端
@@ -29,101 +12,44 @@ A 公网入口节点
 -> 落地服务器 IP/域名:端口
 ```
 
+## 转发规则
+
 用户只需要填写：
 
-- 组网链路。
-- 公网监听端口。
-- 落地服务器 IP/域名。
-- 落地服务器端口。
-- 协议 TCP / UDP / TCP+UDP。
-- A 到 B 的传输方式。
+- 组网链路
+- 公网监听端口
+- 落地服务器 IP/域名
+- 落地服务器端口
+- 协议 TCP / UDP / TCP+UDP
+- A 到 B 的传输方式：EasyTier 隧道或 B 公网直连
 
-## A 侧入口转发
+Controller 会自动创建两侧任务：
 
-任务：`apply_entry_forward_config`
+- A 侧：`apply_entry_forward_config`
+- B 侧：`apply_landing_forward_config`
 
-路径：
+## nftables
 
-```text
-/etc/edge-tunnel/agent/forwards.d/{rule_id}-entry.json
-/etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
-```
-
-作用：公网监听端口转发到 B 节点的 EasyTier IP 或公网 IP。
-
-## B 侧落地转发
-
-任务：`apply_landing_forward_config`
-
-路径：
-
-```text
-/etc/edge-tunnel/agent/forwards.d/{rule_id}-landing.json
-/etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
-```
-
-作用：B 内部端口转发到落地服务器 IP/域名:端口。
-
-如果落地服务器地址是域名，B Agent 会解析为 IPv4 后写入 nftables。IPv6 落地目标暂不支持。
-
-## nftables 预检
-
-Agent 会执行固定 argv：
+A 侧表：
 
 ```bash
-nft -c -f /etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
-nft -f /etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
-nft -c -f /etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
-nft -f /etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
-```
-
-失败时任务页会展示 `nft_check_stderr` 和 `nft_content`。
-
-## 真实测试
-
-落地服务器：
-
-```bash
-python3 -m http.server 8080 --bind 0.0.0.0
-```
-
-面板：
-
-```text
-组网链路：edge-net
-公网监听端口：18081
-落地服务器地址：1.2.3.4 或 backend.example.com
-落地服务器端口：8080
-```
-
-外部访问：
-
-```bash
-curl -v http://入口公网IP:18081/
-```
-
-## v0.2.8-test nftables 兼容性修复
-
-v0.2.8-test 简化了转发 nftables 模板：
-
-- 使用 `table ip`，当前 MVP 仅支持 IPv4 转发。
-- 使用数字优先级：`priority -100` 和 `priority 100`。
-- 去除 output chain，外部访问请使用入口公网 IP 测试。
-- DNAT 语法改为 `dnat to IP:PORT`。
-- 应用前会先尝试删除旧的 `edge_tunnel_entry_forward` / `edge_tunnel_landing_forward` 表，再执行 `nft -c -f` 和 `nft -f`。
-
-A 节点检查：
-
-```bash
-cat /etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
 nft list table ip edge_tunnel_entry_forward
-cat /proc/sys/net/ipv4/ip_forward
 ```
 
-B 节点检查：
+B 侧表：
 
 ```bash
-cat /etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
 nft list table ip edge_tunnel_landing_forward
-cat /proc/sys/net/ipv4/ip_forward
 ```
+
+v0.2.8-test 起模板使用 `table ip`、numeric priority 和 `dnat to IP:PORT`，不再生成 output chain。
+
+## MSS clamp
+
+v0.2.9-test 默认启用 MSS clamp，单独渲染到：
+
+```bash
+nft list table ip edge_tunnel_mss
+```
+
+默认 MTU 为 `1380`，自动模式优先使用 `rt mtu`，不支持时可回退到固定 MSS。

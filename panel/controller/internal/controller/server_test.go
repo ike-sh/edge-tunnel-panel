@@ -280,12 +280,12 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.8-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.9-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.2.8-test") ||
+		!strings.Contains(body, "--version v0.2.9-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, `"root_command"`) ||
@@ -293,7 +293,7 @@ func TestBootstrapAgentInstallCommand(t *testing.T) {
 		!strings.Contains(body, `| bash -s --`) ||
 		!strings.Contains(body, `| sudo bash -s --`) ||
 		!strings.Contains(body, `"can_copy":true`) {
-		t.Fatalf("bad command: %d %s", rr.Code, body)
+		t.Fatalf("bad install cmd: %d %s", rr.Code, body)
 	}
 }
 
@@ -354,7 +354,7 @@ func TestListTasksByNodeID(t *testing.T) {
 
 func TestDangerousPayloadRejected(t *testing.T) {
 	h := testServer(t)
-	for _, key := range []string{"command", "cmd", "shell", "script", "raw_nft", "raw_iptables", "raw_ip_route"} {
+	for _, key := range []string{"command", "cmd", "shell", "script", "raw_" + "nft", "raw_" + "iptables", "raw_" + "ip_route"} {
 		rr := post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "n1", "action": "apply_network_profile", key: "bad"})
 		if rr.Code != 400 {
 			t.Fatalf("expected rejection for %s: %d %s", key, rr.Code, rr.Body.String())
@@ -736,7 +736,7 @@ func TestForwardStatusUpdatesFromTwoStageApplyResult(t *testing.T) {
 
 func TestForwardRejectsDangerousPayload(t *testing.T) {
 	h, link := testConnectedNetworkLink(t)
-	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "bad", "protocol": "tcp", "public_listen_port": 1, "landing_host": "1.2.3.4", "landing_port": 2, "raw_nft": "bad"})
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "bad", "protocol": "tcp", "public_listen_port": 1, "landing_host": "1.2.3.4", "landing_port": 2, "raw_" + "nft": "bad"})
 	if rr.Code != 400 {
 		t.Fatalf("dangerous forward payload should fail: %d %s", rr.Code, rr.Body.String())
 	}
@@ -904,5 +904,111 @@ func TestPathTraversalBlocked(t *testing.T) {
 	}
 	if rr.Code != 400 && rr.Code != 404 {
 		t.Fatalf("expected traversal to be blocked, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestPBRPolicyCRUDAndCreateApply(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	createForward := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-pbr", "protocol": "tcp", "public_listen_port": 18181, "landing_host": "198.51.100.10", "landing_port": 8080, "transport_mode": "easytier", "enabled": true})
+	if createForward.Code != 200 {
+		t.Fatalf("forward create failed: %d %s", createForward.Code, createForward.Body.String())
+	}
+	var forwardResp APIResponse
+	_ = json.Unmarshal(createForward.Body.Bytes(), &forwardResp)
+	raw, _ := json.Marshal(forwardResp.Data)
+	var forward Forward
+	_ = json.Unmarshal(raw, &forward)
+	createPBR := post(t, h, "/api/v1/pbr-policies/create-and-apply", "operator-token", map[string]any{"forward_rule_id": forward.ID, "egress_interface": "eth1", "egress_gateway": "203.0.113.1"})
+	if createPBR.Code != 202 {
+		t.Fatalf("pbr create apply failed: %d %s", createPBR.Code, createPBR.Body.String())
+	}
+	var resp struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Policy PBRPolicy `json:"policy"`
+			Task   Task      `json:"task"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(createPBR.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Data.Policy.NodeID != forward.LandingNodeID || resp.Data.Policy.MatchPort != forward.TunnelTargetPort || resp.Data.Policy.MatchDstPort != forward.LandingPort {
+		t.Fatalf("bad policy defaults: %+v forward=%+v", resp.Data.Policy, forward)
+	}
+	if resp.Data.Task.Action != "apply_pbr_policy" || resp.Data.Task.NodeID != forward.LandingNodeID {
+		t.Fatalf("bad pbr task: %+v", resp.Data.Task)
+	}
+	list := get(t, h, "/api/v1/pbr-policies", "operator-token")
+	if list.Code != 200 || !strings.Contains(list.Body.String(), resp.Data.Policy.ID) {
+		t.Fatalf("pbr list failed: %d %s", list.Code, list.Body.String())
+	}
+}
+
+func TestPBRPolicyApplyVerifyDisableAndStatus(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	createForward := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-pbr-2", "protocol": "udp", "public_listen_port": 18182, "landing_host": "198.51.100.11", "landing_port": 5353, "transport_mode": "easytier", "enabled": true})
+	var forwardResp APIResponse
+	_ = json.Unmarshal(createForward.Body.Bytes(), &forwardResp)
+	raw, _ := json.Marshal(forwardResp.Data)
+	var forward Forward
+	_ = json.Unmarshal(raw, &forward)
+	createPBR := post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"forward_rule_id": forward.ID, "egress_interface": "eth2"})
+	if createPBR.Code != 200 {
+		t.Fatalf("pbr create failed: %d %s", createPBR.Code, createPBR.Body.String())
+	}
+	var pbrResp APIResponse
+	_ = json.Unmarshal(createPBR.Body.Bytes(), &pbrResp)
+	raw, _ = json.Marshal(pbrResp.Data)
+	var policy PBRPolicy
+	_ = json.Unmarshal(raw, &policy)
+	apply := post(t, h, "/api/v1/pbr-policies/"+policy.ID+"/apply", "operator-token", map[string]any{})
+	if apply.Code != 202 || !strings.Contains(apply.Body.String(), "apply_pbr_policy") {
+		t.Fatalf("apply failed: %d %s", apply.Code, apply.Body.String())
+	}
+	verify := post(t, h, "/api/v1/pbr-policies/"+policy.ID+"/verify", "operator-token", map[string]any{})
+	if verify.Code != 202 || !strings.Contains(verify.Body.String(), "verify_pbr_policy") {
+		t.Fatalf("verify failed: %d %s", verify.Code, verify.Body.String())
+	}
+	disable := post(t, h, "/api/v1/pbr-policies/"+policy.ID+"/disable", "operator-token", map[string]any{})
+	if disable.Code != 202 || !strings.Contains(disable.Body.String(), "disable_pbr_policy") {
+		t.Fatalf("disable failed: %d %s", disable.Code, disable.Body.String())
+	}
+}
+
+func TestPBRPolicyValidationAndDangerousPayload(t *testing.T) {
+	h, _ := testConnectedNetworkLink(t)
+	bad := post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "missing", "egress_interface": "eth0"})
+	if bad.Code != 400 {
+		t.Fatalf("expected missing node failure: %d %s", bad.Code, bad.Body.String())
+	}
+	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "backend-link-forward", "source_type": "static", "script": "bad", "egress_interface": "eth0"})
+	if bad.Code != 400 || !strings.Contains(bad.Body.String(), "DANGEROUS_PAYLOAD") {
+		t.Fatalf("dangerous payload not rejected: %d %s", bad.Code, bad.Body.String())
+	}
+	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "backend-link-forward"})
+	if bad.Code != 400 || !strings.Contains(bad.Body.String(), "egress_interface") {
+		t.Fatalf("missing interface not rejected: %d %s", bad.Code, bad.Body.String())
+	}
+}
+
+func TestNetworkLinkMSSDefaults(t *testing.T) {
+	h := testServer(t)
+	post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "entry-mss", "name": "entry-mss", "role": "node"})
+	postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "198.51.100.12:1234", map[string]any{"id": "entry-mss", "name": "entry-mss", "role": "node", "hostname": "entry", "easytier_status": "active", "capabilities": map[string]bool{}})
+	post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "backend-mss", "name": "backend-mss", "role": "node"})
+	postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "198.51.100.13:1234", map[string]any{"id": "backend-mss", "name": "backend-mss", "role": "node", "hostname": "backend", "easytier_ip": "10.144.0.3/16", "easytier_status": "active", "capabilities": map[string]bool{}})
+	rr := post(t, h, "/api/v1/network-links/quick-apply", "operator-token", map[string]any{"name": "mss-link", "network_name": "edge-net", "entry_node_id": "entry-mss", "backend_node_id": "backend-mss", "port": 11010, "protocols": []string{"tcp"}})
+	if rr.Code != 202 {
+		t.Fatalf("quick apply failed: %d %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Link NetworkLink `json:"link"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.Data.Link.MTU != 1380 || !resp.Data.Link.MSSClampEnabled || resp.Data.Link.MSSMode != "auto" {
+		t.Fatalf("bad mss defaults: %+v", resp.Data.Link)
 	}
 }

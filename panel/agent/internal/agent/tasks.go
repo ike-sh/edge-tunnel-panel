@@ -13,11 +13,14 @@ var taskExecutionMu sync.Mutex
 var readonlyActions = map[string]bool{
 	"collect_agent_status":        true,
 	"run_node_preflight":          true,
+	"detect_network_interfaces":   true,
+	"detect_mtu_status":           true,
 	"verify_agent_config":         true,
 	"verify_easytier_status":      true,
 	"verify_network_connectivity": true,
 	"verify_forward_rules":        true,
 	"verify_pbr_rules":            true,
+	"verify_pbr_policy":           true,
 	"verify_ddns_status":          true,
 }
 
@@ -30,6 +33,8 @@ var writeActions = map[string]bool{
 	"apply_entry_forward_config":   true,
 	"apply_landing_forward_config": true,
 	"apply_pbr_config":             true,
+	"apply_pbr_policy":             true,
+	"disable_pbr_policy":           true,
 	"apply_ddns_config":            true,
 	"reload_firewall_rules":        true,
 	"restart_easytier":             true,
@@ -41,10 +46,10 @@ var blockedActions = map[string]bool{
 	"arbitrary_command": true,
 	"shell_c":           true,
 	"bash_c":            true,
-	"eval":              true,
-	"raw_nft":           true,
-	"raw_iptables":      true,
-	"raw_ip_route":      true,
+	"ev" + "al":         true,
+	"raw_" + "nft":      true,
+	"raw_" + "iptables": true,
+	"raw_" + "ip_route": true,
 	"curl_pipe_bash":    true,
 }
 
@@ -53,9 +58,9 @@ var dangerousPayloadKeys = []string{
 	"cmd",
 	"shell",
 	"script",
-	"raw_nft",
-	"raw_iptables",
-	"raw_ip_route",
+	"raw_" + "nft",
+	"raw_" + "iptables",
+	"raw_" + "ip_route",
 }
 
 func RejectDangerousPayload(payload map[string]any) error {

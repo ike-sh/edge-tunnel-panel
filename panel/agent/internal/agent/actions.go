@@ -16,6 +16,10 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		return TaskResult{Status: "succeeded", Result: string(raw)}
 	case "run_node_preflight":
 		return runNodePreflight(ctx, cfg, runner)
+	case "detect_network_interfaces":
+		return detectNetworkInterfaces(ctx, cfg, runner)
+	case "detect_mtu_status":
+		return detectMTUStatus(ctx, cfg, runner)
 	case "verify_agent_config":
 		return verifyFile(cfg.ConfigDir)
 	case "verify_easytier_status":
@@ -26,6 +30,8 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		return verifyForwardRules(ctx, cfg, runner, task.Payload)
 	case "verify_pbr_rules":
 		return verifyPBR(ctx, cfg, runner)
+	case "verify_pbr_policy":
+		return verifyPBRPolicy(ctx, cfg, runner, task.Payload)
 	case "verify_ddns_status":
 		return verifyFile(ddnsPath(cfg))
 	case "configure_node_role":
@@ -44,6 +50,10 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		return applyLandingForwardConfig(ctx, cfg, runner, task.Payload)
 	case "apply_pbr_config":
 		return applyPBRConfig(cfg, task.Payload)
+	case "apply_pbr_policy":
+		return applyPBRPolicy(ctx, cfg, runner, task.Payload)
+	case "disable_pbr_policy":
+		return disablePBRPolicy(ctx, cfg, runner, task.Payload)
 	case "apply_ddns_config":
 		return applyDDNSConfig(cfg, task.Payload)
 	case "reload_firewall_rules":

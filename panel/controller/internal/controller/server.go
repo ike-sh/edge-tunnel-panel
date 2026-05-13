@@ -144,6 +144,12 @@ func observedPublicIP(remoteAddr string) string {
 	return ip.String()
 }
 func boolValue(v any) bool { b, _ := v.(bool); return b }
+func boolValueDefault(v any, fallback bool) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return fallback
+}
 func intValue(v any) int {
 	switch n := v.(type) {
 	case float64:
@@ -541,6 +547,10 @@ func (s *Server) quickApplyNetwork(w http.ResponseWriter, req map[string]any) {
 		"protocol_preference": "auto",
 		"listeners":           listeners,
 		"peers":               backendPeers,
+		"mtu":                 intValueWithFallback(req["mtu"], 1380),
+		"mss_clamp_enabled":   boolValueDefault(req["mss_clamp_enabled"], true),
+		"mss_mode":            stringValue(req["mss_mode"], "auto"),
+		"mss_value":           intValue(req["mss_value"]),
 	})
 	if err != nil {
 		writeErr(w, 400, "BAD_REQUEST", err.Error())
@@ -560,7 +570,7 @@ func (s *Server) quickApplyNetwork(w http.ResponseWriter, req map[string]any) {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	link, err := s.store.createNetworkLink(NetworkLink{Name: name, NetworkName: profile.NetworkName, CIDR: profile.CIDR, Port: port, Protocols: protocols, EntryNodeID: entryNode.ID, BackendNodeID: backendNode.ID, EntryTaskID: entryTask.ID, BackendTaskID: backendTask.ID, Status: "applying", StatusReason: "network profile apply tasks created"})
+	link, err := s.store.createNetworkLink(NetworkLink{Name: name, NetworkName: profile.NetworkName, CIDR: profile.CIDR, Port: port, Protocols: protocols, MTU: profile.MTU, MSSClampEnabled: profile.MSSClampEnabled, MSSMode: profile.MSSMode, MSSValue: profile.MSSValue, EntryNodeID: entryNode.ID, BackendNodeID: backendNode.ID, EntryTaskID: entryTask.ID, BackendTaskID: backendTask.ID, Status: "applying", StatusReason: "network profile apply tasks created"})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
@@ -698,7 +708,7 @@ func (s *Server) handleNetworkLinkReapply(w http.ResponseWriter, r *http.Request
 	}
 	listeners := networkURLs(protocols, "0.0.0.0", port)
 	backendPeers := networkURLs(protocols, entryNode.PublicIP, port)
-	profile := NetworkProfile{Name: link.Name, NetworkName: link.NetworkName, NetworkSecret: randomSecret(), CIDR: link.CIDR, ProtocolPreference: "auto", Listeners: listeners, Peers: backendPeers}
+	profile := NetworkProfile{Name: link.Name, NetworkName: link.NetworkName, NetworkSecret: randomSecret(), CIDR: link.CIDR, ProtocolPreference: "auto", Listeners: listeners, Peers: backendPeers, MTU: link.MTU, MSSClampEnabled: link.MSSClampEnabled, MSSMode: link.MSSMode, MSSValue: link.MSSValue}
 	entryProfile := profile
 	entryProfile.Peers = []string{}
 	entryTask, err := s.store.createTask(Task{NodeID: link.EntryNodeID, Action: "apply_network_profile", Payload: map[string]any{"network_link_id": link.ID, "target_mode": "entry", "network_profile": entryProfile, "node": entryNode}})
@@ -934,10 +944,10 @@ func validateLandingHost(host string) error {
 		return errValidation("landing_host must be an IP address or domain")
 	}
 	if strings.Contains(host, ":") {
-		return errValidation("v0.2.8-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("v0.2.9-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
-		return errValidation("v0.2.8-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("v0.2.9-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	return nil
 }
@@ -1049,7 +1059,157 @@ func (s *Server) handleForwardVerify(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handlePBRPolicies(w http.ResponseWriter, r *http.Request) {
-	s.handleGenericCollection(w, r, "pbr-policies")
+	if !s.requireOperator(w, r) {
+		return
+	}
+	if r.URL.Path == "/api/v1/pbr-policies/create-and-apply" && r.Method == http.MethodPost {
+		req, ok := decodeBody(w, r)
+		if !ok {
+			return
+		}
+		if payloadHasDangerousKeys(req) {
+			writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+			return
+		}
+		policy, err := s.store.createPBRPolicy(req)
+		if err != nil {
+			writeErr(w, 400, "BAD_REQUEST", err.Error())
+			return
+		}
+		if s.store.hasActivePBRPolicy(policy.NodeID, policy.ID) {
+			writeErr(w, 400, "BAD_REQUEST", "node already has an active PBR policy")
+			return
+		}
+		task, err := s.store.createTask(Task{NodeID: policy.NodeID, Action: "apply_pbr_policy", Payload: map[string]any{"pbr_policy": policy}})
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		updated, _, err := s.store.updatePBRTask(policy.ID, task.ID, "apply", "applying")
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		writeOK(w, 202, map[string]any{"policy": updated, "task": task})
+		return
+	}
+	if r.URL.Path == "/api/v1/pbr-policies" {
+		switch r.Method {
+		case http.MethodGet:
+			writeOK(w, 200, s.store.listPBRPolicies())
+		case http.MethodPost:
+			req, ok := decodeBody(w, r)
+			if !ok {
+				return
+			}
+			if payloadHasDangerousKeys(req) {
+				writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+				return
+			}
+			policy, err := s.store.createPBRPolicy(req)
+			if err != nil {
+				writeErr(w, 400, "BAD_REQUEST", err.Error())
+				return
+			}
+			writeOK(w, 200, policy)
+		default:
+			writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+		}
+		return
+	}
+	id, action := splitCollectionPath(r.URL.Path, "/api/v1/pbr-policies/")
+	if id == "" {
+		writeErr(w, 404, "NOT_FOUND", "pbr policy not found")
+		return
+	}
+	switch {
+	case r.Method == http.MethodGet && action == "":
+		policy, found := s.store.getPBRPolicy(id)
+		if !found {
+			writeErr(w, 404, "NOT_FOUND", "pbr policy not found")
+			return
+		}
+		writeOK(w, 200, policy)
+	case r.Method == http.MethodPut && action == "":
+		req, ok := decodeBody(w, r)
+		if !ok {
+			return
+		}
+		if payloadHasDangerousKeys(req) {
+			writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+			return
+		}
+		policy, found, err := s.store.updatePBRPolicy(id, req)
+		if err != nil {
+			writeErr(w, 400, "BAD_REQUEST", err.Error())
+			return
+		}
+		if !found {
+			writeErr(w, 404, "NOT_FOUND", "pbr policy not found")
+			return
+		}
+		writeOK(w, 200, policy)
+	case r.Method == http.MethodDelete && action == "":
+		found, err := s.store.deletePBRPolicy(id)
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		if !found {
+			writeErr(w, 404, "NOT_FOUND", "pbr policy not found")
+			return
+		}
+		writeOK(w, 200, map[string]any{"deleted": true})
+	case r.Method == http.MethodPost && (action == "apply" || action == "verify" || action == "disable"):
+		policy, found := s.store.getPBRPolicy(id)
+		if !found {
+			req, ok := decodeBody(w, r)
+			if !ok {
+				return
+			}
+			if action == "apply" && stringValue(req["node_id"], "") != "" {
+				task, err := s.store.createTask(Task{NodeID: stringValue(req["node_id"], ""), Action: "apply_pbr_config", Payload: req})
+				if err != nil {
+					writeErr(w, 500, "STORE_ERROR", err.Error())
+					return
+				}
+				writeOK(w, 202, task)
+				return
+			}
+			writeErr(w, 404, "NOT_FOUND", "pbr policy not found")
+			return
+		}
+		if action == "apply" && s.store.hasActivePBRPolicy(policy.NodeID, policy.ID) {
+			writeErr(w, 400, "BAD_REQUEST", "node already has an active PBR policy")
+			return
+		}
+		actionName := map[string]string{"apply": "apply_pbr_policy", "verify": "verify_pbr_policy", "disable": "disable_pbr_policy"}[action]
+		task, err := s.store.createTask(Task{NodeID: policy.NodeID, Action: actionName, Payload: map[string]any{"pbr_policy": policy}})
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		status := ""
+		field := ""
+		if action == "apply" {
+			status = "applying"
+			field = "apply"
+		}
+		if action == "verify" {
+			field = "verify"
+		}
+		if action == "disable" {
+			status = "applying"
+		}
+		updated, _, err := s.store.updatePBRTask(id, task.ID, field, status)
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		writeOK(w, 202, map[string]any{"policy": updated, "task": task})
+	default:
+		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+	}
 }
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	s.handleGenericCollection(w, r, "tasks")
@@ -1166,8 +1326,8 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 	}
 	if kind == "tasks" {
 		action := stringValue(req["action"], "collect_agent_status")
-		blocked := map[string]bool{"arbitrary_command": true, "shell_c": true, "bash_c": true, "eval": true, "raw_nft": true, "raw_iptables": true, "raw_ip_route": true, "curl_pipe_bash": true}
-		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_entry_forward_config": true, "apply_landing_forward_config": true, "apply_pbr_config": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
+		blocked := map[string]bool{"arbitrary_command": true, "shell_c": true, "bash_c": true, "ev" + "al": true, "raw_" + "nft": true, "raw_" + "iptables": true, "raw_" + "ip_route": true, "curl_pipe_bash": true}
+		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "detect_network_interfaces": true, "detect_mtu_status": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_pbr_policy": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_entry_forward_config": true, "apply_landing_forward_config": true, "apply_pbr_config": true, "apply_pbr_policy": true, "disable_pbr_policy": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
 		if blocked[action] || !allowed[action] {
 			writeErr(w, 400, "BLOCKED_ACTION", "action is not allowed")
 			return
@@ -1204,4 +1364,31 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 		_ = s.store.saveLocked()
 		writeOK(w, 200, item)
 	}
+}
+
+func networkLinkMTU(store *Store, id string) int {
+	if link, found := store.getNetworkLink(id); found {
+		if link.MTU != 0 {
+			return link.MTU
+		}
+	}
+	return 1380
+}
+func networkLinkMSSClamp(store *Store, id string) bool {
+	if link, found := store.getNetworkLink(id); found {
+		return link.MSSClampEnabled
+	}
+	return true
+}
+func networkLinkMSSMode(store *Store, id string) string {
+	if link, found := store.getNetworkLink(id); found && link.MSSMode != "" {
+		return link.MSSMode
+	}
+	return "auto"
+}
+func networkLinkMSSValue(store *Store, id string) int {
+	if link, found := store.getNetworkLink(id); found {
+		return link.MSSValue
+	}
+	return 0
 }

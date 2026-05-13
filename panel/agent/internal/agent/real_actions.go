@@ -65,7 +65,19 @@ func landingForwardNFTPath(cfg Config) string {
 }
 func pbrPath(cfg Config) string      { return filepath.Join(cfg.ConfigDir, "pbr.json") }
 func pbrApplyPath(cfg Config) string { return filepath.Join(cfg.ConfigDir, "pbr-apply.sh") }
-func ddnsPath(cfg Config) string     { return filepath.Join(cfg.ConfigDir, "ddns.json") }
+func pbrPolicyPath(cfg Config, policyID string) string {
+	if policyID == "" {
+		policyID = "pbr"
+	}
+	return filepath.Join(cfg.ConfigDir, "pbr.d", safeFilePart(policyID)+".json")
+}
+func pbrNFTPath(cfg Config) string {
+	return filepath.Join(cfg.ConfigDir, "nftables", "edge-tunnel-pbr.nft")
+}
+func mssNFTPath(cfg Config) string {
+	return filepath.Join(cfg.ConfigDir, "nftables", "edge-tunnel-mss.nft")
+}
+func ddnsPath(cfg Config) string { return filepath.Join(cfg.ConfigDir, "ddns.json") }
 
 func configureNodeRole(cfg Config, payload map[string]any) TaskResult {
 	return writeJSONAction(nodePath(cfg), payload)
@@ -299,12 +311,21 @@ func applyEntryForwardConfig(ctx context.Context, cfg Config, runner CommandRunn
 	}
 	configPath := forwardRuleStagePath(cfg, ruleID, "entry")
 	entryPayload := map[string]any{"stage": "entry", "rule_id": ruleID, "protocol": protocol, "public_listen_port": listenPort, "tunnel_target_host": targetHost, "tunnel_target_port": targetPort}
+	mssMode := stringField(payload, "mss_mode", stringField(rule, "mss_mode", "auto"))
+	mtu := firstNonZeroInt(intField(payload, "mtu"), intField(rule, "mtu"), 1380)
+	mssValue := firstNonZeroInt(intField(payload, "mss_value"), intField(rule, "mss_value"))
+	mssEnabled := boolFieldDefault(payload, "mss_clamp_enabled", boolFieldDefault(rule, "mss_clamp_enabled", true))
+	entryPayload["mss_clamp_enabled"] = mssEnabled
+	entryPayload["mss_mode"] = mssMode
+	entryPayload["mtu"] = mtu
+	entryPayload["mss_value"] = mssValue
 	if err := writeJSONFile(configPath, entryPayload, 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
 	nftPath := entryForwardNFTPath(cfg)
 	nftContent := renderStageForwardNFT("edge_tunnel_entry_forward", protocol, listenPort, targetHost, targetPort)
-	return applyForwardNFT(ctx, cfg, runner, "edge_tunnel_entry_forward", nftPath, nftContent, map[string]any{"stage": "entry", "rule_id": ruleID, "config_path": configPath, "nft_path": nftPath, "listen_port": listenPort, "target_host": targetHost, "target_port": targetPort, "table": "ip edge_tunnel_entry_forward", "warnings": warnings})
+	result := applyForwardNFT(ctx, cfg, runner, "edge_tunnel_entry_forward", nftPath, nftContent, map[string]any{"stage": "entry", "rule_id": ruleID, "config_path": configPath, "nft_path": nftPath, "listen_port": listenPort, "target_host": targetHost, "target_port": targetPort, "table": "ip edge_tunnel_entry_forward", "warnings": warnings})
+	return applyMSSClampIfRequested(ctx, cfg, runner, result, mssEnabled, mssMode, mtu, mssValue)
 }
 
 func applyLandingForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
@@ -330,12 +351,21 @@ func applyLandingForwardConfig(ctx context.Context, cfg Config, runner CommandRu
 	}
 	configPath := forwardRuleStagePath(cfg, ruleID, "landing")
 	landingPayload := map[string]any{"stage": "landing", "rule_id": ruleID, "protocol": protocol, "tunnel_listen_port": listenPort, "landing_host_raw": landingRaw, "landing_host_resolved": targetHost, "landing_port": landingPort}
+	mssMode := stringField(payload, "mss_mode", stringField(rule, "mss_mode", "auto"))
+	mtu := firstNonZeroInt(intField(payload, "mtu"), intField(rule, "mtu"), 1380)
+	mssValue := firstNonZeroInt(intField(payload, "mss_value"), intField(rule, "mss_value"))
+	mssEnabled := boolFieldDefault(payload, "mss_clamp_enabled", boolFieldDefault(rule, "mss_clamp_enabled", true))
+	landingPayload["mss_clamp_enabled"] = mssEnabled
+	landingPayload["mss_mode"] = mssMode
+	landingPayload["mtu"] = mtu
+	landingPayload["mss_value"] = mssValue
 	if err := writeJSONFile(configPath, landingPayload, 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
 	nftPath := landingForwardNFTPath(cfg)
 	nftContent := renderStageForwardNFT("edge_tunnel_landing_forward", protocol, listenPort, targetHost, landingPort)
-	return applyForwardNFT(ctx, cfg, runner, "edge_tunnel_landing_forward", nftPath, nftContent, map[string]any{"stage": "landing", "rule_id": ruleID, "config_path": configPath, "nft_path": nftPath, "listen_port": listenPort, "landing_host_raw": landingRaw, "landing_host_resolved": targetHost, "target_host": targetHost, "target_port": landingPort, "table": "ip edge_tunnel_landing_forward", "warnings": warnings})
+	result := applyForwardNFT(ctx, cfg, runner, "edge_tunnel_landing_forward", nftPath, nftContent, map[string]any{"stage": "landing", "rule_id": ruleID, "config_path": configPath, "nft_path": nftPath, "listen_port": listenPort, "landing_host_raw": landingRaw, "landing_host_resolved": targetHost, "target_host": targetHost, "target_port": landingPort, "table": "ip edge_tunnel_landing_forward", "warnings": warnings})
+	return applyMSSClampIfRequested(ctx, cfg, runner, result, mssEnabled, mssMode, mtu, mssValue)
 }
 
 func applyPBRConfig(cfg Config, payload map[string]any) TaskResult {
@@ -994,6 +1024,78 @@ func renderStageForwardNFT(tableName, protocol string, listenPort int, targetHos
 	return fmt.Sprintf("table ip %s {\n  chain prerouting {\n    type nat hook prerouting priority -100; policy accept;\n%s\n  }\n\n  chain postrouting {\n    type nat hook postrouting priority 100; policy accept;\n    ip daddr %s masquerade\n  }\n}\n", tableName, strings.Join(prerouting, "\n"), targetHost)
 }
 
+func renderMSSClampNFT(mode string, mtu, mssValue int) (string, int, bool) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "auto"
+	}
+	if mode == "disabled" {
+		return "", 0, false
+	}
+	if mtu == 0 {
+		mtu = 1380
+	}
+	if mode == "fixed" {
+		if mssValue == 0 {
+			mssValue = mtu - 40
+		}
+		return fmt.Sprintf("table ip edge_tunnel_mss {\n  chain forward_mss {\n    type filter hook forward priority mangle; policy accept;\n    tcp flags syn tcp option maxseg size set %d\n  }\n}\n", mssValue), mssValue, true
+	}
+	return "table ip edge_tunnel_mss {\n  chain forward_mss {\n    type filter hook forward priority mangle; policy accept;\n    tcp flags syn tcp option maxseg size set rt mtu\n  }\n}\n", 0, true
+}
+
+func applyMSSClampIfRequested(ctx context.Context, cfg Config, runner CommandRunner, result TaskResult, enabled bool, mode string, mtu, mssValue int) TaskResult {
+	if result.Status != "succeeded" || !enabled {
+		return result
+	}
+	nftContent, fixedValue, ok := renderMSSClampNFT(mode, mtu, mssValue)
+	if !ok {
+		return result
+	}
+	mssResult := map[string]any{"mss_clamp_enabled": true, "mss_mode": mode, "mtu": mtu, "mss_value": fixedValue, "mss_nft_path": mssNFTPath(cfg), "mss_nft_content": nftContent}
+	if err := writeFile(mssNFTPath(cfg), []byte(nftContent), 0o600); err != nil {
+		result.Status = "failed"
+		result.Error = err.Error()
+		return result
+	}
+	_ = runner.Run(ctx, "nft", "delete", "table", "ip", "edge_tunnel_mss")
+	check := runner.Run(ctx, "nft", "-c", "-f", mssNFTPath(cfg))
+	if check.Err != nil || check.ExitCode != 0 {
+		if strings.EqualFold(mode, "auto") {
+			fallback, value, _ := renderMSSClampNFT("fixed", mtu, 0)
+			mssResult["mss_mode"] = "fixed"
+			mssResult["mss_value"] = value
+			mssResult["mss_warning"] = "current nftables does not support rt mtu MSS clamp; fallback to fixed MSS"
+			_ = writeFile(mssNFTPath(cfg), []byte(fallback), 0o600)
+			nftContent = fallback
+			check = runner.Run(ctx, "nft", "-c", "-f", mssNFTPath(cfg))
+		}
+		if check.Err != nil || check.ExitCode != 0 {
+			result.Status = "failed"
+			result.Stderr = strings.TrimSpace(result.Stderr + "\n" + check.Stderr)
+			result.Error = "mss clamp nft syntax check failed: " + errorText(check)
+			return result
+		}
+	}
+	apply := runner.Run(ctx, "nft", "-f", mssNFTPath(cfg))
+	if apply.Err != nil || apply.ExitCode != 0 {
+		result.Status = "failed"
+		result.Stderr = strings.TrimSpace(result.Stderr + "\n" + apply.Stderr)
+		result.Error = "mss clamp nft apply failed: " + errorText(apply)
+		return result
+	}
+	var base map[string]any
+	_ = json.Unmarshal([]byte(result.Result), &base)
+	if base == nil {
+		base = map[string]any{}
+	}
+	for key, value := range mssResult {
+		base[key] = value
+	}
+	result.Result = jsonResult(base)
+	return result
+}
+
 func applyForwardNFT(ctx context.Context, cfg Config, runner CommandRunner, tableName, nftPath, nftContent string, result map[string]any) TaskResult {
 	if err := writeFile(nftPath, []byte(nftContent), 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
@@ -1157,11 +1259,11 @@ func resolveLandingHostIPv4(raw string) (string, error) {
 		return "", fmt.Errorf("\u843d\u5730\u670d\u52a1\u5668\u5730\u5740\u4e0d\u80fd\u662f CIDR: %s", raw)
 	}
 	if strings.Contains(raw, ":") {
-		return "", fmt.Errorf("v0.2.8-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return "", fmt.Errorf("v0.2.9-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	if ip := net.ParseIP(raw); ip != nil {
 		if ip.To4() == nil {
-			return "", fmt.Errorf("v0.2.8-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+			return "", fmt.Errorf("v0.2.9-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 		}
 		return ip.String(), nil
 	}
@@ -1223,6 +1325,189 @@ func readIPv4Forwarding() string {
 	return strings.TrimSpace(string(raw))
 }
 
+func detectNetworkInterfaces(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
+	items := []map[string]any{}
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		addrs, _ := iface.Addrs()
+		ipv4 := []string{}
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() != nil {
+				ipv4 = append(ipv4, ipnet.String())
+			}
+		}
+		items = append(items, map[string]any{"name": iface.Name, "up": iface.Flags&net.FlagUp != 0, "mtu": iface.MTU, "mac": iface.HardwareAddr.String(), "ipv4": ipv4})
+	}
+	defaultRoute := runner.Run(ctx, "ip", "-4", "route", "show", "default")
+	addrShow := runner.Run(ctx, "ip", "-4", "addr", "show")
+	mainRoute := runner.Run(ctx, "ip", "route", "show", "table", "main")
+	iface, gw := parseDefaultRoute(defaultRoute.Stdout)
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"interfaces": items, "default_interface": iface, "default_gateway": gw, "raw_routes": strings.TrimSpace(defaultRoute.Stdout + "\n" + mainRoute.Stdout), "ip_addr": addrShow.Stdout, "warnings": []string{}})}
+}
+
+func parseDefaultRoute(text string) (string, string) {
+	fields := strings.Fields(text)
+	iface, gw := "", ""
+	for i, f := range fields {
+		if f == "dev" && i+1 < len(fields) {
+			iface = fields[i+1]
+		}
+		if f == "via" && i+1 < len(fields) {
+			gw = fields[i+1]
+		}
+	}
+	return iface, gw
+}
+
+func applyPBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
+	policy := mapPayload(payload, "pbr_policy")
+	if policy == nil {
+		policy = payload
+	}
+	policyID := stringField(policy, "id", stringField(payload, "policy_id", "pbr"))
+	iface := stringField(policy, "egress_interface", stringField(policy, "out_interface", ""))
+	if !regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`).MatchString(iface) {
+		return TaskResult{Status: "failed", Error: "invalid egress_interface"}
+	}
+	gw := stringField(policy, "egress_gateway", stringField(policy, "gateway", ""))
+	if gw != "" {
+		ip := net.ParseIP(gw)
+		if ip == nil || ip.To4() == nil {
+			return TaskResult{Status: "failed", Error: "egress_gateway must be IPv4"}
+		}
+	}
+	fwmark := stringField(policy, "fwmark", stringField(policy, "match_mark", "0x2000"))
+	tableID := intField(policy, "table_id")
+	if tableID == 0 {
+		tableID = 20000
+	}
+	priority := intField(policy, "priority")
+	if priority == 0 {
+		priority = 20000
+	}
+	matchPort := intField(policy, "match_port")
+	if matchPort == 0 {
+		return TaskResult{Status: "failed", Error: "match_port is required"}
+	}
+	protocol := stringField(policy, "protocol", stringField(policy, "match_protocol", "tcp"))
+	if err := writeJSONFile(pbrPolicyPath(cfg, policyID), policy, 0o600); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	nftContent := renderPBRNFT(protocol, matchPort, fwmark)
+	if err := writeFile(pbrNFTPath(cfg), []byte(nftContent), 0o600); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	_ = runner.Run(ctx, "ip", "rule", "del", "fwmark", fwmark, "table", strconv.Itoa(tableID), "priority", strconv.Itoa(priority))
+	ipRule := runner.Run(ctx, "ip", "rule", "add", "fwmark", fwmark, "table", strconv.Itoa(tableID), "priority", strconv.Itoa(priority))
+	if ipRule.Err != nil || ipRule.ExitCode != 0 {
+		return TaskResult{Status: "failed", Stdout: ipRule.Stdout, Stderr: ipRule.Stderr, Error: "ip rule add failed: " + errorText(ipRule)}
+	}
+	args := []string{"route", "replace", "default"}
+	if gw != "" {
+		args = append(args, "via", gw)
+	}
+	args = append(args, "dev", iface, "table", strconv.Itoa(tableID))
+	ipRoute := runner.Run(ctx, "ip", args...)
+	if ipRoute.Err != nil || ipRoute.ExitCode != 0 {
+		return TaskResult{Status: "failed", Stdout: ipRoute.Stdout, Stderr: ipRoute.Stderr, Error: "ip route replace failed: " + errorText(ipRoute)}
+	}
+	_ = runner.Run(ctx, "nft", "delete", "table", "ip", "edge_tunnel_pbr")
+	check := runner.Run(ctx, "nft", "-c", "-f", pbrNFTPath(cfg))
+	result := map[string]any{"applied": false, "pbr_path": pbrPolicyPath(cfg, policyID), "nft_path": pbrNFTPath(cfg), "nft_content": nftContent, "table_id": tableID, "fwmark": fwmark, "priority": priority, "egress_interface": iface, "egress_gateway": gw, "ip_rule_output": strings.TrimSpace(ipRule.Stdout + ipRule.Stderr), "ip_route_output": strings.TrimSpace(ipRoute.Stdout + ipRoute.Stderr)}
+	if check.Err != nil || check.ExitCode != 0 {
+		result["nft_check_ok"] = false
+		result["nft_check_stderr"] = check.Stderr
+		return TaskResult{Status: "failed", Stdout: check.Stdout, Stderr: check.Stderr, Error: "nft syntax check failed: " + errorText(check), Result: jsonResult(result)}
+	}
+	apply := runner.Run(ctx, "nft", "-f", pbrNFTPath(cfg))
+	if apply.Err != nil || apply.ExitCode != 0 {
+		result["nft_check_ok"] = true
+		return TaskResult{Status: "failed", Stdout: apply.Stdout, Stderr: apply.Stderr, Error: "nft apply failed: " + errorText(apply), Result: jsonResult(result)}
+	}
+	result["nft_check_ok"] = true
+	result["applied"] = true
+	return TaskResult{Status: "succeeded", Result: jsonResult(result)}
+}
+
+func renderPBRNFT(protocol string, matchPort int, fwmark string) string {
+	lines := []string{}
+	for _, proto := range forwardProtocols(protocol) {
+		lines = append(lines, fmt.Sprintf("    %s dport %d meta mark set %s", proto, matchPort, fwmark))
+	}
+	return fmt.Sprintf("table ip edge_tunnel_pbr {\n  chain prerouting {\n    type filter hook prerouting priority mangle; policy accept;\n%s\n  }\n}\n", strings.Join(lines, "\n"))
+}
+
+func verifyPBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
+	policy := mapPayload(payload, "pbr_policy")
+	if policy == nil {
+		policy = payload
+	}
+	tableID := intField(policy, "table_id")
+	fwmark := stringField(policy, "fwmark", stringField(policy, "match_mark", ""))
+	ipRule := runner.Run(ctx, "ip", "rule", "show")
+	ipRoute := runner.Run(ctx, "ip", "route", "show", "table", strconv.Itoa(tableID))
+	nft := runner.Run(ctx, "nft", "list", "table", "ip", "edge_tunnel_pbr")
+	out := strings.TrimSpace(ipRule.Stdout + "\n" + ipRoute.Stdout + "\n" + nft.Stdout)
+	verified := strings.Contains(out, fwmark) && strings.Contains(out, strconv.Itoa(tableID)) && strings.Contains(out, "edge_tunnel_pbr")
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"rule_present": strings.Contains(ipRule.Stdout, fwmark), "route_present": strings.TrimSpace(ipRoute.Stdout) != "", "nft_present": nft.Err == nil && nft.ExitCode == 0, "mark_present": strings.Contains(out, fwmark), "verified": verified, "ip_rule_output": ipRule.Stdout, "ip_route_output": ipRoute.Stdout, "nft_output": nft.Stdout})}
+}
+
+func disablePBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
+	policy := mapPayload(payload, "pbr_policy")
+	if policy == nil {
+		policy = payload
+	}
+	fwmark := stringField(policy, "fwmark", stringField(policy, "match_mark", "0x2000"))
+	tableID := intField(policy, "table_id")
+	priority := intField(policy, "priority")
+	delRule := runner.Run(ctx, "ip", "rule", "del", "fwmark", fwmark, "table", strconv.Itoa(tableID), "priority", strconv.Itoa(priority))
+	delNFT := runner.Run(ctx, "nft", "delete", "table", "ip", "edge_tunnel_pbr")
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"disabled": true, "removed_rule": delRule.Err == nil && delRule.ExitCode == 0, "removed_nft": delNFT.Err == nil && delNFT.ExitCode == 0})}
+}
+
+func detectMTUStatus(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
+	links := runner.Run(ctx, "ip", "-o", "link", "show")
+	routes := runner.Run(ctx, "ip", "route", "show")
+	get := runner.Run(ctx, "ip", "route", "get", "1.1.1.1")
+	nft := runner.Run(ctx, "nft", "list", "table", "ip", "edge_tunnel_mss")
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"interfaces_raw": links.Stdout, "routes_raw": routes.Stdout, "default_route_raw": get.Stdout, "mss_clamp_table_exists": nft.Err == nil && nft.ExitCode == 0, "mss_clamp_enabled": strings.Contains(nft.Stdout, "maxseg"), "mss_value_detected": parseMSSValue(nft.Stdout), "nft_output": nft.Stdout})}
+}
+
+func parseMSSValue(text string) string {
+	if strings.Contains(text, "rt mtu") {
+		return "rt mtu"
+	}
+	fields := strings.Fields(text)
+	for i, f := range fields {
+		if f == "set" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+func appendStringAny(value any, item string) []string {
+	out := []string{}
+	switch v := value.(type) {
+	case []string:
+		out = append(out, v...)
+	case []any:
+		for _, x := range v {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return append(out, item)
+}
+func boolFieldDefault(payload map[string]any, key string, fallback bool) bool {
+	if v, ok := payload[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return fallback
+}
 func renderPBRScript(payload map[string]any) string {
 	priority := intField(payload, "priority")
 	tableID := intField(payload, "table_id")

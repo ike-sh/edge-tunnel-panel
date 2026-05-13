@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -391,6 +392,69 @@ func forwardIDFromTaskPayload(payload map[string]any) string {
 	return stringValue(payload["forward_id"], "")
 }
 
+func pbrIDFromTaskPayload(payload map[string]any) string {
+	for _, key := range []string{"pbr_policy", "policy"} {
+		raw, ok := payload[key]
+		if !ok {
+			continue
+		}
+		if item, ok := raw.(PBRPolicy); ok {
+			return item.ID
+		}
+		if item, ok := raw.(map[string]any); ok {
+			return stringValue(item["id"], "")
+		}
+		data, _ := json.Marshal(raw)
+		var item PBRPolicy
+		if err := json.Unmarshal(data, &item); err == nil && item.ID != "" {
+			return item.ID
+		}
+	}
+	return stringValue(payload["policy_id"], stringValue(payload["pbr_policy_id"], ""))
+}
+
+func (s *Store) updatePBRStatusForTaskLocked(task Task) {
+	policyID := pbrIDFromTaskPayload(task.Payload)
+	if policyID == "" {
+		return
+	}
+	for i := range s.data.PBRPolicies {
+		if s.data.PBRPolicies[i].ID != policyID {
+			continue
+		}
+		switch task.Action {
+		case "apply_pbr_policy":
+			s.data.PBRPolicies[i].LastApplyTaskID = task.ID
+			if task.Status == "succeeded" {
+				s.data.PBRPolicies[i].Status = "applied"
+			} else {
+				s.data.PBRPolicies[i].Status = "failed"
+			}
+		case "verify_pbr_policy":
+			s.data.PBRPolicies[i].LastVerifyTaskID = task.ID
+			verified := false
+			if task.Status == "succeeded" {
+				result := map[string]any{}
+				_ = json.Unmarshal([]byte(task.Result), &result)
+				verified = boolValue(result["verified"])
+			}
+			if verified {
+				s.data.PBRPolicies[i].Status = "verified"
+			} else {
+				s.data.PBRPolicies[i].Status = "failed"
+			}
+		case "disable_pbr_policy":
+			if task.Status == "succeeded" {
+				s.data.PBRPolicies[i].Status = "disabled"
+				s.data.PBRPolicies[i].Enabled = false
+			} else {
+				s.data.PBRPolicies[i].Status = "failed"
+			}
+		}
+		s.data.PBRPolicies[i].UpdatedAt = now()
+		return
+	}
+}
 func (s *Store) listForwards() []Forward {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -528,6 +592,7 @@ func (s *Store) createNetworkProfile(req map[string]any) (NetworkProfile, error)
 func (s *Store) createNetworkLink(link NetworkLink) (NetworkLink, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	applyMSSDefaults(&link)
 	if link.ID == "" {
 		link.ID = newID()
 	}
@@ -826,7 +891,7 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 		return Forward{}, errValidation("landing_host must not be CIDR")
 	}
 	if addr, err := netip.ParseAddr(item.LandingHostRaw); err == nil && addr.Is6() {
-		return Forward{}, errValidation("v0.2.8-test 鏆備笉鏀寔 IPv6 钀藉湴鐩爣")
+		return Forward{}, errValidation("v0.2.9-test does not support IPv6 landing targets")
 	}
 	if item.PublicListenHost == "" {
 		item.PublicListenHost = "0.0.0.0"
@@ -883,4 +948,299 @@ func stringListValue(value any) []string {
 	default:
 		return nil
 	}
+}
+
+func (s *Store) listPBRPolicies() []PBRPolicy {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]PBRPolicy(nil), s.data.PBRPolicies...)
+}
+
+func (s *Store) getPBRPolicy(id string) (PBRPolicy, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, policy := range s.data.PBRPolicies {
+		if policy.ID == id {
+			return policy, true
+		}
+	}
+	return PBRPolicy{}, false
+}
+
+func (s *Store) createPBRPolicy(req map[string]any) (PBRPolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	policy, err := s.pbrPolicyFromRequestLocked(req, nil)
+	if err != nil {
+		return PBRPolicy{}, err
+	}
+	policy.ID = newID()
+	n := now()
+	policy.CreatedAt = n
+	policy.UpdatedAt = n
+	if policy.Status == "" {
+		policy.Status = "draft"
+	}
+	s.data.PBRPolicies = append(s.data.PBRPolicies, policy)
+	return policy, s.saveLocked()
+}
+
+func (s *Store) updatePBRPolicy(id string, req map[string]any) (PBRPolicy, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.PBRPolicies {
+		if s.data.PBRPolicies[i].ID != id {
+			continue
+		}
+		policy, err := s.pbrPolicyFromRequestLocked(req, &s.data.PBRPolicies[i])
+		if err != nil {
+			return PBRPolicy{}, true, err
+		}
+		policy.ID = s.data.PBRPolicies[i].ID
+		policy.CreatedAt = s.data.PBRPolicies[i].CreatedAt
+		policy.UpdatedAt = now()
+		s.data.PBRPolicies[i] = policy
+		return policy, true, s.saveLocked()
+	}
+	return PBRPolicy{}, false, nil
+}
+
+func (s *Store) deletePBRPolicy(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.PBRPolicies {
+		if s.data.PBRPolicies[i].ID == id {
+			s.data.PBRPolicies = append(s.data.PBRPolicies[:i], s.data.PBRPolicies[i+1:]...)
+			return true, s.saveLocked()
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) updatePBRTask(id, taskID, field, status string) (PBRPolicy, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.PBRPolicies {
+		if s.data.PBRPolicies[i].ID != id {
+			continue
+		}
+		if field == "apply" {
+			s.data.PBRPolicies[i].LastApplyTaskID = taskID
+		}
+		if field == "verify" {
+			s.data.PBRPolicies[i].LastVerifyTaskID = taskID
+		}
+		if status != "" {
+			s.data.PBRPolicies[i].Status = status
+		}
+		s.data.PBRPolicies[i].UpdatedAt = now()
+		return s.data.PBRPolicies[i], true, s.saveLocked()
+	}
+	return PBRPolicy{}, false, nil
+}
+
+func (s *Store) pbrPolicyFromRequestLocked(req map[string]any, existing *PBRPolicy) (PBRPolicy, error) {
+	policy := PBRPolicy{Enabled: true, SourceType: "forward", Protocol: "tcp", Status: "draft", MSSClampEnabled: true, MTU: 1380}
+	if existing != nil {
+		policy = *existing
+	}
+	if value := stringValue(req["name"], policy.Name); value != "" {
+		policy.Name = value
+	}
+	policy.NodeID = stringValue(req["node_id"], policy.NodeID)
+	policy.SourceType = normalizePBRSourceType(stringValue(req["source_type"], policy.SourceType))
+	policy.ForwardRuleID = stringValue(req["forward_rule_id"], policy.ForwardRuleID)
+	policy.Domain = stringValue(req["domain"], policy.Domain)
+	policy.StaticDstCIDR = stringValue(req["static_dst_cidr"], policy.StaticDstCIDR)
+	policy.Protocol = strings.ToLower(stringValue(req["protocol"], policy.Protocol))
+	if value := intValue(req["match_port"]); value != 0 {
+		policy.MatchPort = value
+	}
+	policy.MatchDstHost = stringValue(req["match_dst_host"], policy.MatchDstHost)
+	if value := intValue(req["match_dst_port"]); value != 0 {
+		policy.MatchDstPort = value
+	}
+	policy.MatchSrcHost = stringValue(req["match_src_host"], policy.MatchSrcHost)
+	policy.MatchMarkComment = stringValue(req["match_mark_comment"], policy.MatchMarkComment)
+	policy.EgressInterface = stringValue(req["egress_interface"], stringValue(req["out_interface"], policy.EgressInterface))
+	policy.EgressGateway = stringValue(req["egress_gateway"], stringValue(req["gateway"], policy.EgressGateway))
+	policy.EgressSourceIP = stringValue(req["egress_source_ip"], policy.EgressSourceIP)
+	if value := intValue(req["table_id"]); value != 0 {
+		policy.TableID = value
+	}
+	policy.FWMark = stringValue(req["fwmark"], stringValue(req["match_mark"], policy.FWMark))
+	if value := intValue(req["priority"]); value != 0 {
+		policy.Priority = value
+	}
+	if _, ok := req["mss_clamp_enabled"]; ok {
+		policy.MSSClampEnabled = boolValue(req["mss_clamp_enabled"])
+	}
+	if value := intValue(req["mss_value"]); value != 0 {
+		policy.MSSValue = value
+	}
+	if value := intValue(req["mtu"]); value != 0 {
+		policy.MTU = value
+	}
+	policy.Remark = stringValue(req["remark"], policy.Remark)
+	if value, ok := req["enabled"]; ok {
+		policy.Enabled = boolValue(value)
+	}
+	if policy.ForwardRuleID != "" && policy.SourceType == "forward" {
+		forward, found := findForwardLocked(s.data.Forwards, policy.ForwardRuleID)
+		if !found {
+			return PBRPolicy{}, errValidation("forward_rule_id not found")
+		}
+		if policy.NodeID == "" {
+			policy.NodeID = forward.LandingNodeID
+		}
+		if policy.MatchPort == 0 {
+			policy.MatchPort = firstNonZero(forward.TunnelTargetPort, forward.PublicListenPort)
+		}
+		if policy.MatchDstHost == "" {
+			policy.MatchDstHost = firstString(forward.LandingHostResolved, forward.LandingHostRaw)
+		}
+		if policy.MatchDstPort == 0 {
+			policy.MatchDstPort = forward.LandingPort
+		}
+		if policy.Protocol == "" {
+			policy.Protocol = forward.Protocol
+		}
+	}
+	if policy.NodeID == "" {
+		return PBRPolicy{}, errValidation("node_id is required")
+	}
+	if _, found := findNodeLocked(s.data.Nodes, policy.NodeID); !found {
+		return PBRPolicy{}, errValidation("node_id not found")
+	}
+	if policy.Name == "" {
+		policy.Name = "pbr-" + policy.NodeID
+	}
+	if policy.EgressInterface == "" {
+		return PBRPolicy{}, errValidation("egress_interface is required")
+	}
+	if policy.SourceType == "forward" && policy.ForwardRuleID == "" {
+		return PBRPolicy{}, errValidation("forward_rule_id is required for forward source")
+	}
+	if !validForwardProtocol(policy.Protocol) {
+		return PBRPolicy{}, errValidation("protocol must be tcp, udp, or both")
+	}
+	if policy.MatchPort != 0 && !validPort(policy.MatchPort) {
+		return PBRPolicy{}, errValidation("match_port must be 1-65535")
+	}
+	if policy.MatchDstPort != 0 && !validPort(policy.MatchDstPort) {
+		return PBRPolicy{}, errValidation("match_dst_port must be 1-65535")
+	}
+	if policy.TableID == 0 {
+		policy.TableID = nextPBRNumberLocked(s.data.PBRPolicies, 20000, func(p PBRPolicy) int { return p.TableID })
+	}
+	if policy.Priority == 0 {
+		policy.Priority = nextPBRNumberLocked(s.data.PBRPolicies, 20000, func(p PBRPolicy) int { return p.Priority })
+	}
+	if policy.FWMark == "" {
+		policy.FWMark = nextPBRMarkLocked(s.data.PBRPolicies)
+	}
+	policy.MatchSource = policy.MatchSrcHost
+	policy.MatchDst = policy.MatchDstHost
+	policy.MatchProtocol = policy.Protocol
+	policy.MatchMark = policy.FWMark
+	policy.Gateway = policy.EgressGateway
+	policy.OutInterface = policy.EgressInterface
+	return policy, nil
+}
+
+func findForwardLocked(forwards []Forward, id string) (Forward, bool) {
+	for _, f := range forwards {
+		if f.ID == id {
+			return f, true
+		}
+	}
+	return Forward{}, false
+}
+func findNodeLocked(nodes []Node, id string) (Node, bool) {
+	for _, n := range nodes {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return Node{}, false
+}
+func (s *Store) hasActivePBRPolicy(nodeID, exceptID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return hasActivePBRPolicyLocked(s.data.PBRPolicies, nodeID, exceptID)
+}
+func hasActivePBRPolicyLocked(policies []PBRPolicy, nodeID, exceptID string) bool {
+	for _, p := range policies {
+		if p.ID != exceptID && p.NodeID == nodeID && p.Enabled && (p.Status == "applying" || p.Status == "applied" || p.Status == "verified") {
+			return true
+		}
+	}
+	return false
+}
+func nextPBRNumberLocked(policies []PBRPolicy, start int, pick func(PBRPolicy) int) int {
+	candidate := start
+	used := map[int]bool{}
+	for _, p := range policies {
+		if v := pick(p); v != 0 {
+			used[v] = true
+		}
+	}
+	for used[candidate] {
+		candidate++
+	}
+	return candidate
+}
+func nextPBRMarkLocked(policies []PBRPolicy) string {
+	candidate := 0x2000
+	used := map[string]bool{}
+	for _, p := range policies {
+		used[strings.ToLower(p.FWMark)] = true
+	}
+	for used[strings.ToLower(hexMark(candidate))] {
+		candidate++
+	}
+	return hexMark(candidate)
+}
+func hexMark(value int) string { return "0x" + strconv.FormatInt(int64(value), 16) }
+func normalizePBRSourceType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "domain", "static":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "forward"
+	}
+}
+func applyMSSDefaults(link *NetworkLink) {
+	if link.MTU == 0 {
+		link.MTU = 1380
+	}
+	if link.MSSMode == "" {
+		link.MSSMode = "auto"
+	}
+	link.MSSMode = normalizeMSSMode(link.MSSMode)
+	if link.MSSMode != "disabled" && !link.MSSClampEnabled {
+		link.MSSClampEnabled = true
+	}
+}
+func normalizeMSSMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "fixed", "disabled":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "auto"
+	}
+}
+func intValueWithFallback(v any, fallback int) int {
+	if value := intValue(v); value != 0 {
+		return value
+	}
+	return fallback
+}
+func firstNonZero(values ...int) int {
+	for _, v := range values {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
 }
