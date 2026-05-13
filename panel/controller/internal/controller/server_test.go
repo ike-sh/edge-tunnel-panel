@@ -156,12 +156,12 @@ func TestReportDoesNotOverwritePrivateIPWithPublicIP(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.7-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.8-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.1.7-test") ||
+		!strings.Contains(body, "--version v0.1.8-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||
@@ -225,6 +225,22 @@ func TestDangerousPayloadRejected(t *testing.T) {
 		if rr.Code != 400 {
 			t.Fatalf("expected rejection for %s: %d %s", key, rr.Code, rr.Body.String())
 		}
+	}
+}
+
+func TestRunNodePreflightTaskAllowed(t *testing.T) {
+	h := testServer(t)
+	rr := post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "node-a", "action": "run_node_preflight", "payload": map[string]any{}})
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "run_node_preflight") {
+		t.Fatalf("expected preflight task allowed: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestInstallEasyTierTaskAllowed(t *testing.T) {
+	h := testServer(t)
+	rr := post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "node-a", "action": "install_or_update_easytier", "payload": map[string]any{}})
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "install_or_update_easytier") {
+		t.Fatalf("expected install task allowed: %d %s", rr.Code, rr.Body.String())
 	}
 }
 

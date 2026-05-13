@@ -479,6 +479,89 @@ func TestInstallEasyTierArchiveMissingCoreFails(t *testing.T) {
 	}
 }
 
+func TestSelectInstallTempDirPrefersStateDir(t *testing.T) {
+	cfg := testConfig(t)
+	oldDisk := diskFreeBytesFunc
+	diskFreeBytesFunc = func(path string) (uint64, error) { return 300 << 20, nil }
+	t.Cleanup(func() { diskFreeBytesFunc = oldDisk })
+	dir, err := selectInstallTempDir(cfg, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != filepath.Join(cfg.StateDir, "tmp") {
+		t.Fatalf("expected state tmp dir, got %s", dir)
+	}
+}
+
+func TestDiskSpacePreflightFailsWhenLow(t *testing.T) {
+	cfg := testConfig(t)
+	oldDisk := diskFreeBytesFunc
+	diskFreeBytesFunc = func(path string) (uint64, error) { return 1 << 20, nil }
+	t.Cleanup(func() { diskFreeBytesFunc = oldDisk })
+	_, err := selectInstallTempDir(cfg, map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "磁盘空间不足") {
+		t.Fatalf("expected friendly low disk error, got %v", err)
+	}
+}
+
+func TestCleanupOldEasyTierTempDirs(t *testing.T) {
+	cfg := testConfig(t)
+	old := filepath.Join(cfg.StateDir, "tmp", "edge-easytier-old")
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupOldEasyTierTempDirs(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("old temp dir still exists: %v", err)
+	}
+}
+
+func TestZipExtractionBlocksPathTraversal(t *testing.T) {
+	archive := createEasyTierArchiveWithFiles(t, []string{"../easytier-core"})
+	err := extractZip(archive, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "unsafe path") {
+		t.Fatalf("expected unsafe path error, got %v", err)
+	}
+}
+
+func TestInstallEasyTierNoSpaceLeftReturnsFriendlyError(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	oldDisk := diskFreeBytesFunc
+	diskFreeBytesFunc = func(path string) (uint64, error) { return 1 << 20, nil }
+	t.Cleanup(func() { diskFreeBytesFunc = oldDisk })
+	result := ExecuteTask(context.Background(), cfg, &installRunner{}, Task{Action: "install_or_update_easytier", Payload: map[string]any{}})
+	if result.Status != "failed" || !strings.Contains(result.Error, "磁盘空间不足") {
+		t.Fatalf("expected friendly no space error: %+v", result)
+	}
+}
+
+func TestRunNodePreflightAllowedWithoutWriteActions(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	cfg.ControllerURL = server.URL
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{paths: map[string]bool{"systemctl": true, "ip": true}}, Task{Action: "run_node_preflight", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, "controller_health") {
+		t.Fatalf("expected preflight success: %+v", result)
+	}
+}
+
+func TestRunNodePreflightRedactsToken(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.ControllerToken = "secret-token"
+	cfg.StateDir = filepath.Join(t.TempDir(), "secret-token-state")
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "run_node_preflight", Payload: map[string]any{}})
+	if strings.Contains(result.Result, "secret-token") {
+		t.Fatalf("preflight leaked token: %s", result.Result)
+	}
+}
+
 func TestGenerateEasyTierServiceUsesCLIArgs(t *testing.T) {
 	cfg := testConfig(t)
 	service := edgeTunnelEasyTierService(cfg, map[string]any{"network_name": "edge", "network_secret": "secret"}, "/usr/local/bin/easytier-core", []string{"tcp://0.0.0.0:11010"}, []string{"tcp://1.2.3.4:11010"})

@@ -499,7 +499,7 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 	if kind == "tasks" {
 		action := stringValue(req["action"], "collect_agent_status")
 		blocked := map[string]bool{"arbitrary_command": true, "shell_c": true, "bash_c": true, "eval": true, "raw_nft": true, "raw_iptables": true, "raw_ip_route": true, "curl_pipe_bash": true}
-		allowed := map[string]bool{"collect_agent_status": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_pbr_config": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
+		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_pbr_config": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
 		if blocked[action] || !allowed[action] {
 			writeErr(w, 400, "BLOCKED_ACTION", "action is not allowed")
 			return

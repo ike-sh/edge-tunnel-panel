@@ -14,6 +14,8 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		status := CollectStatus(ctx, cfg, runner)
 		raw, _ := json.Marshal(status)
 		return TaskResult{Status: "succeeded", Result: string(raw)}
+	case "run_node_preflight":
+		return runNodePreflight(ctx, cfg, runner)
 	case "verify_agent_config":
 		return verifyFile(cfg.ConfigDir)
 	case "verify_easytier_status":

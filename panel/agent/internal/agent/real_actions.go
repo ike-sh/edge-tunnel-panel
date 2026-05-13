@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -19,9 +20,13 @@ import (
 var systemdSystemDir = "/etc/systemd/system"
 var easyTierInstallDir = "/usr/local/bin"
 var downloadEasyTierArchiveFunc = downloadEasyTierArchive
+var diskFreeBytesFunc = defaultDiskFreeBytes
 
 const defaultEasyTierVersion = "v2.4.5"
 const maxEasyTierDownloadBytes = 200 << 20
+const minEasyTierTempBytes = 200 << 20
+const minEasyTierInstallBytes = 100 << 20
+const downloadSpaceReserveBytes = 50 << 20
 
 func nodePath(cfg Config) string     { return filepath.Join(cfg.ConfigDir, "node.json") }
 func easyTierPath(cfg Config) string { return filepath.Join(cfg.ConfigDir, "easytier.toml") }
@@ -59,7 +64,20 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 	}
 	asset := fmt.Sprintf("easytier-linux-%s-%s.zip", assetArch, version)
 	url := easyTierDownloadURL(payload, version, asset)
-	tmp, err := os.MkdirTemp("", "edge-easytier-*")
+	if err := cleanupOldEasyTierTempDirs(cfg); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	workBase, err := selectInstallTempDir(cfg, payload)
+	if err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	if err := os.MkdirAll(easyTierInstallDir, 0o755); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	if err := ensureDiskSpace(easyTierInstallDir, minEasyTierInstallBytes); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	tmp, err := os.MkdirTemp(workBase, "edge-easytier-*")
 	if err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
@@ -69,22 +87,19 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 		return TaskResult{Status: "failed", Error: fmt.Sprintf("download EasyTier failed: %s: %v", url, err), Result: jsonResult(map[string]any{"url": url})}
 	}
 	if err := extractZip(archivePath, tmp); err != nil {
-		return TaskResult{Status: "failed", Error: err.Error(), Result: jsonResult(map[string]any{"archive": archivePath})}
+		return TaskResult{Status: "failed", Error: friendlyInstallError(err, workBase, minEasyTierTempBytes).Error(), Result: jsonResult(map[string]any{"archive": archivePath})}
 	}
 	coreSrc, cliSrc, err := locateEasyTierBinaries(tmp)
 	if err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
-	if err := os.MkdirAll(easyTierInstallDir, 0o755); err != nil {
-		return TaskResult{Status: "failed", Error: err.Error()}
-	}
 	coreDst := filepath.Join(easyTierInstallDir, "easytier-core")
 	cliDst := filepath.Join(easyTierInstallDir, "easytier-cli")
 	if err := copyExecutable(coreSrc, coreDst); err != nil {
-		return TaskResult{Status: "failed", Error: err.Error()}
+		return TaskResult{Status: "failed", Error: friendlyInstallError(err, easyTierInstallDir, minEasyTierInstallBytes).Error()}
 	}
 	if err := copyExecutable(cliSrc, cliDst); err != nil {
-		return TaskResult{Status: "failed", Error: err.Error()}
+		return TaskResult{Status: "failed", Error: friendlyInstallError(err, easyTierInstallDir, minEasyTierInstallBytes).Error()}
 	}
 	versionResult := runner.Run(ctx, coreDst, "--version")
 	if versionResult.Err != nil || versionResult.ExitCode != 0 {
@@ -92,6 +107,28 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 	}
 	cliVersion := runner.Run(ctx, cliDst, "--version")
 	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"message": "installed", "version": version, "binary_path": coreDst, "cli_path": cliDst, "core_version": strings.TrimSpace(versionResult.Stdout + versionResult.Stderr), "cli_version": strings.TrimSpace(cliVersion.Stdout + cliVersion.Stderr), "url": url})}
+}
+
+func runNodePreflight(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
+	checks := map[string]any{
+		"is_root":              isRootUser(),
+		"config_dir":           cfg.ConfigDir,
+		"state_dir":            cfg.StateDir,
+		"enable_tasks":         cfg.EnableTasks,
+		"enable_write_actions": cfg.EnableWriteActions,
+	}
+	for _, path := range []string{"/", os.TempDir(), "/var/tmp", cfg.StateDir, easyTierInstallDir} {
+		checks["disk_"+path] = diskSpaceSummary(path)
+	}
+	for _, name := range []string{"curl", "wget", "easytier-core", "easytier-cli", "systemctl", "nft", "ip"} {
+		_, err := runner.LookPath(name)
+		checks["has_"+name] = err == nil
+	}
+	systemdWritable := runner.Run(ctx, "test", "-w", systemdSystemDir)
+	checks["systemd_dir_writable"] = systemdWritable.Err == nil && systemdWritable.ExitCode == 0
+	checks["controller_health"] = controllerHealth(ctx, cfg.ControllerURL)
+	raw, _ := json.Marshal(checks)
+	return TaskResult{Status: "succeeded", Result: RedactString(string(raw), cfg.ControllerToken)}
 }
 
 func applyNetworkProfile(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
@@ -411,6 +448,12 @@ func downloadEasyTierArchive(ctx context.Context, url, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
+	if resp.ContentLength > 0 {
+		required := uint64(resp.ContentLength) + downloadSpaceReserveBytes
+		if err := ensureDiskSpace(filepath.Dir(dest), required); err != nil {
+			return err
+		}
+	}
 	out, err := os.Create(dest)
 	if err != nil {
 		return err
@@ -438,6 +481,9 @@ func extractZip(archivePath, destDir string) error {
 		return err
 	}
 	for _, file := range reader.File {
+		if strings.Contains(file.Name, "..") {
+			return fmt.Errorf("unsafe path in EasyTier archive: %s", file.Name)
+		}
 		target := filepath.Join(destDir, file.Name)
 		absTarget, err := filepath.Abs(target)
 		if err != nil {
@@ -450,6 +496,9 @@ func extractZip(archivePath, destDir string) error {
 			if err := os.MkdirAll(absTarget, 0o755); err != nil {
 				return err
 			}
+			continue
+		}
+		if filepath.Base(file.Name) != "easytier-core" && filepath.Base(file.Name) != "easytier-cli" {
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(absTarget), 0o755); err != nil {
@@ -484,6 +533,123 @@ func easyTierDownloadURL(payload map[string]any, version, asset string) string {
 		return proxy + "/" + url
 	}
 	return url
+}
+
+func selectInstallTempDir(cfg Config, payload map[string]any) (string, error) {
+	candidates := []string{}
+	if tempDir := stringField(payload, "temp_dir", ""); tempDir != "" {
+		if err := validateInstallTempDir(tempDir); err != nil {
+			return "", err
+		}
+		candidates = append(candidates, tempDir)
+	}
+	candidates = append(candidates, filepath.Join(cfg.StateDir, "tmp"), "/var/tmp/edge-tunnel", os.TempDir())
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if err := validateInstallTempDir(candidate); err != nil {
+			continue
+		}
+		if err := os.MkdirAll(candidate, 0o700); err != nil {
+			continue
+		}
+		if err := ensureDiskSpace(candidate, minEasyTierTempBytes); err != nil {
+			continue
+		}
+		return candidate, nil
+	}
+	return "", friendlyDiskSpaceError("no suitable temp dir", minEasyTierTempBytes, 0)
+}
+
+func validateInstallTempDir(path string) error {
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("temp_dir must be an absolute path")
+	}
+	clean := filepath.Clean(path)
+	for _, blocked := range []string{"/etc", "/usr", "/bin", "/sbin", "/proc", "/sys", "/dev"} {
+		if clean == blocked || strings.HasPrefix(clean, blocked+string(os.PathSeparator)) {
+			return fmt.Errorf("temp_dir is not allowed: %s", path)
+		}
+	}
+	return nil
+}
+
+func cleanupOldEasyTierTempDirs(cfg Config) error {
+	for _, base := range []string{os.TempDir(), "/var/tmp/edge-tunnel", filepath.Join(cfg.StateDir, "tmp")} {
+		matches, err := filepath.Glob(filepath.Join(base, "edge-easytier-*"))
+		if err != nil {
+			return err
+		}
+		for _, match := range matches {
+			if strings.HasPrefix(filepath.Base(match), "edge-easytier-") {
+				if err := os.RemoveAll(match); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func ensureDiskSpace(path string, required uint64) error {
+	available, err := diskFreeBytesFunc(path)
+	if err != nil {
+		return fmt.Errorf("无法读取磁盘空间：%s: %w", path, err)
+	}
+	if available < required {
+		return friendlyDiskSpaceError(path, required, available)
+	}
+	return nil
+}
+
+func friendlyDiskSpaceError(path string, required, available uint64) error {
+	return fmt.Errorf("磁盘空间不足，无法安装 EasyTier。\n临时目录：%s\n需要至少：%dMB\n当前可用：%dMB\n建议：\n1. 清理磁盘空间\n2. 或设置 Agent 状态目录到更大分区\n3. 或手动安装 easytier-core/easytier-cli 到 /usr/local/bin", path, required>>20, available>>20)
+}
+
+func friendlyInstallError(err error, path string, required uint64) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "no space left on device") {
+		available, _ := diskFreeBytesFunc(path)
+		return friendlyDiskSpaceError(path, required, available)
+	}
+	return err
+}
+
+func diskSpaceSummary(path string) map[string]any {
+	available, err := diskFreeBytesFunc(path)
+	if err != nil {
+		return map[string]any{"path": path, "ok": false, "error": err.Error()}
+	}
+	return map[string]any{"path": path, "ok": true, "available_mb": available >> 20}
+}
+
+func isRootUser() bool {
+	current, err := user.Current()
+	if err != nil {
+		return false
+	}
+	return current.Uid == "0" || current.Username == "root"
+}
+
+func controllerHealth(ctx context.Context, controllerURL string) map[string]any {
+	if strings.TrimSpace(controllerURL) == "" {
+		return map[string]any{"ok": false, "error": "controller URL is empty"}
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, strings.TrimRight(controllerURL, "/")+"/api/v1/health", nil)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	defer resp.Body.Close()
+	return map[string]any{"ok": resp.StatusCode >= 200 && resp.StatusCode < 300, "status": resp.Status}
 }
 
 func locateEasyTierBinaries(root string) (string, string, error) {

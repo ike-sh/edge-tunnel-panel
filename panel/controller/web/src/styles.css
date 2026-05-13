@@ -313,6 +313,20 @@ textarea {
   margin: 14px 0;
 }
 
+.action-panel h4 {
+  margin: 12px 0 8px;
+}
+
+.warning-text {
+  color: #fed7aa;
+}
+
+button.mini {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
 .check,
 .check-row label {
   color: var(--text);

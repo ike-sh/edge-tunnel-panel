@@ -12,6 +12,7 @@ var taskExecutionMu sync.Mutex
 
 var readonlyActions = map[string]bool{
 	"collect_agent_status":   true,
+	"run_node_preflight":     true,
 	"verify_agent_config":    true,
 	"verify_easytier_status": true,
 	"verify_forward_rules":   true,

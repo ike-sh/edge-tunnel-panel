@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.7-test';
+const DEFAULT_VERSION = 'v0.1.8-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -17,13 +17,17 @@ const tabs = [
   ['settings', '设置']
 ];
 
-const readonlyActions = [
+const checkActions = [
+  'run_node_preflight',
   'collect_agent_status',
   'verify_agent_config',
   'verify_easytier_status',
   'verify_forward_rules',
   'verify_pbr_rules',
-  'verify_ddns_status',
+  'verify_ddns_status'
+];
+
+const maintenanceActions = [
   'install_or_update_easytier',
   'restart_easytier',
   'restart_agent'
@@ -39,14 +43,22 @@ const roleOptions = [
 const roleText = Object.fromEntries(roleOptions);
 
 const actionText = {
+  run_node_preflight: '节点预检',
   collect_agent_status: '状态检查',
-  verify_agent_config: '验证配置',
-  verify_easytier_status: '验证 EasyTier',
-  verify_forward_rules: '验证转发',
+  verify_agent_config: '验证 Agent 配置',
+  verify_easytier_status: '验证 EasyTier 状态',
+  verify_forward_rules: '验证转发规则',
   verify_pbr_rules: '验证出口策略',
   verify_ddns_status: '验证 DDNS',
+  install_or_update_easytier: '安装/更新 EasyTier',
+  apply_entry_config: '应用公网入口',
+  apply_forward_config: '应用转发规则',
+  apply_pbr_config: '应用出口策略',
+  apply_ddns_config: '应用 DDNS',
+  reload_firewall_rules: '重载防火墙规则',
   restart_easytier: '重启 EasyTier',
   restart_agent: '重启 Agent',
+  reboot_node: '重启服务器',
   apply_network_profile: '应用组网配置'
 };
 
@@ -114,6 +126,32 @@ function statusClass(status) {
 
 function trStatus(status) {
   return statusText[status] || status || '-';
+}
+
+async function copyText(text) {
+  if (!text) return false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fallback below supports HTTP or blocked clipboard contexts.
+    }
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 function App() {
@@ -368,8 +406,13 @@ function App() {
       setAlert({ type: 'error', message: '请先生成一键命令。' });
       return;
     }
-    await navigator.clipboard.writeText(text);
-    setAlert({ type: 'success', message: '已复制' + label + '，请到被控服务器执行。' });
+    const ok = await copyText(text);
+    setAlert(ok ? { type: 'success', message: '已复制' + label + '，请到被控服务器执行。' } : { type: 'error', message: '复制失败，请手动复制。' });
+  }
+
+  async function copyOutput(text) {
+    const ok = await copyText(text);
+    setAlert(ok ? { type: 'success', message: '已复制任务输出。' } : { type: 'error', message: '复制失败，请手动复制。' });
   }
 
   function networkPayload() {
@@ -566,8 +609,11 @@ function App() {
                 <div className="cap-list">{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).map((key) => <span className="cap" key={key}>{key}</span>)}</div>
                 <div className="actions"><button className="secondary" onClick={() => setOpenNodeActions(openNodeActions === node.id ? '' : node.id)}>节点操作</button></div>
                 {openNodeActions === node.id && <div className="action-panel">
-                  {readonlyActions.map((action) => <button key={action} className={(action.startsWith('restart_') || action === 'install_or_update_easytier') ? 'warning' : 'secondary'} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}
-                  <p className="muted">重启动作会修改节点服务状态，请只在可信节点执行。</p>
+                  <h4>只读检查</h4>
+                  <div className="inline">{checkActions.map((action) => <button key={action} className="secondary" title={action} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}</div>
+                  <h4>写入/维护</h4>
+                  <div className="inline">{maintenanceActions.map((action) => <button key={action} className="warning" title={action} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}</div>
+                  <p className="muted warning-text">这些操作会修改节点服务状态，请只在可信节点执行。</p>
                 </div>}
               </div>
             ))}
@@ -596,11 +642,12 @@ function App() {
         {agentForm.enable_write_actions && <div className="alert warning">允许写入动作后，Agent 可以写入 EasyTier、转发、PBR、DDNS 配置，请只在可信服务器执行。</div>}
         <div className="actions">
           <button onClick={generateAgentCommand}>生成一键命令</button>
-          <button className="secondary" onClick={() => copyCommand(rootCommand, 'root 命令')}>复制 root 命令</button>
-          <button className="secondary" onClick={() => copyCommand(sudoCommand, 'sudo 命令')}>复制 sudo 命令</button>
+          <button className="secondary" onClick={() => copyCommand(rootCommand, 'root 一键命令')}>复制 root 命令</button>
+          <button className="secondary" onClick={() => copyCommand(sudoCommand, 'sudo 一键命令')}>复制 sudo 命令</button>
           <button className="secondary" onClick={() => setShowAddAgent(false)}>关闭</button>
         </div>
         <div className="alert warning">如果当前是 root 登录服务器，复制 root 命令；普通用户才使用 sudo 命令。</div>
+        <p className="muted">如果浏览器禁止自动复制，可以手动选中下面代码块复制。</p>
         <div className="command-block danger">
           <div className="command-title"><strong>推荐：root 用户直接执行</strong><span>完整命令包含 Agent 接入 Token，请勿泄露。</span></div>
           <pre>{recommendedCommand || '点击“生成一键命令”后，这里会显示推荐命令。'}</pre>
@@ -740,7 +787,7 @@ function App() {
     const visibleTasks = taskFilter === 'all' ? tasks : tasks.filter((task) => task.status === taskFilter);
     return (
       <Card title="任务" action={<div className="inline"><select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>{taskStatuses.map((status) => <option key={status} value={status}>{trStatus(status)}</option>)}</select><button onClick={() => run('刷新任务', refreshTasks)}>刷新</button></div>}>
-        <TaskTable tasks={visibleTasks} />
+        <TaskTable tasks={visibleTasks} onCopy={copyOutput} />
       </Card>
     );
   }
@@ -809,12 +856,18 @@ function Field({ label, value, onChange, type = 'text', required = false }) {
   return <label>{label}<input type={type} value={value} required={required} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
-function TaskOutput({ task }) {
+function TaskOutput({ task, onCopy }) {
   const content = formatOutput(task.error || task.result || task.stderr || task.stdout);
+  const noSpace = /no space left on device|磁盘空间不足/i.test(content);
+  const body = <>
+    {noSpace && <div className="alert error">磁盘空间不足，请清理磁盘或调整临时目录。</div>}
+    {onCopy && <button className="secondary mini" onClick={() => onCopy(content)}>复制输出</button>}
+    <pre className="small task-output">{content}</pre>
+  </>;
   if (task.status === 'failed') {
-    return <details open><summary>查看错误</summary><pre className="small task-output">{content}</pre></details>;
+    return <details open><summary>查看错误</summary>{body}</details>;
   }
-  return <details><summary>查看输出</summary><pre className="small task-output">{content}</pre></details>;
+  return <details><summary>查看输出</summary>{body}</details>;
 }
 
 function Select({ label, value, options, onChange }) {
@@ -843,13 +896,13 @@ function ListCard({ title, items, fields, refresh, apply }) {
   );
 }
 
-function TaskTable({ tasks, compact = false }) {
+function TaskTable({ tasks, compact = false, onCopy }) {
   if (!tasks.length) return <p className="muted">暂无任务。</p>;
   return (
     <div className="table-wrap">
       <table>
         <thead><tr><th>ID</th><th>节点</th><th>action</th><th>状态</th><th>创建时间</th>{!compact && <th>开始</th>}{!compact && <th>完成</th>}{!compact && <th>输出</th>}</tr></thead>
-        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{task.node_id || '-'}</td><td>{actionText[task.action] || task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><TaskOutput task={task} /></td>}</tr>)}</tbody>
+        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{task.node_id || '-'}</td><td title={task.action}>{actionText[task.action] || task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><TaskOutput task={task} onCopy={onCopy} /></td>}</tr>)}</tbody>
       </table>
     </div>
   );

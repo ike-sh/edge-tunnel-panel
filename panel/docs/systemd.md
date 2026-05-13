@@ -44,3 +44,14 @@ systemctl is-active edge-tunnel-easytier.service
 ## EasyTier 启动参数
 
 `edge-tunnel-easytier.service` 的 `ExecStart` 使用 `easytier-core` CLI 参数生成：`--network-name`、`--network-secret`、多个 `-l` listeners，以及多个 `-p` peers。`/etc/edge-tunnel/agent/easytier.toml` 仍会写入，方便审计和后续模板调整。
+
+## 空间不足排障
+
+EasyTier 安装临时目录优先使用 `/var/lib/edge-tunnel/agent/tmp`，也会清理旧的 `edge-easytier-*` 临时目录。如果任务提示空间不足：
+
+```bash
+df -h
+journalctl --vacuum-size=100M
+apt clean
+rm -rf /tmp/edge-easytier-*
+```

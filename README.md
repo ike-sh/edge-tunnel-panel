@@ -2,7 +2,7 @@
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
 
-当前版本：`v0.1.7-test`
+当前版本：`v0.1.8-test`
 
 ## 典型场景
 
@@ -25,7 +25,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.7-test
+  --version v0.1.8-test
 ```
 
 安装完成后打开：
@@ -47,7 +47,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.1.7-test \
+  --version v0.1.8-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -63,8 +63,24 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 3. 创建组网配置，填写名称、网络名、CIDR、协议偏好和可选 peers/listeners。
 4. 在配置卡片中选择目标节点，点击“应用到节点”。
 5. 进入“任务”页面查看 `apply_network_profile` 结果。
-6. 如果任务提示下载失败，请检查 GitHub 访问或后续配置代理；也可以先手动安装 EasyTier 后重试。
+6. 如果任务提示下载失败或磁盘空间不足，请按任务页提示处理后重试。
 7. 回到“节点”页面刷新，查看 EasyTier 状态。
+
+### EasyTier 安装预检
+
+`v0.1.8-test` 会在安装 EasyTier 前检查临时目录和 `/usr/local/bin` 所在分区空间，并优先使用 `/var/lib/edge-tunnel/agent/tmp` 作为工作目录。Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
+
+如果任务页出现 `no space left on device` 或“磁盘空间不足”，可先执行：
+
+```bash
+df -h
+du -sh /tmp/* 2>/dev/null | sort -h | tail
+journalctl --vacuum-size=100M
+apt clean
+rm -rf /tmp/edge-easytier-*
+```
+
+然后回到节点操作里重新执行“安装/更新 EasyTier”。
 
 ## 卸载
 
@@ -102,7 +118,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 当前限制
 
-- `v0.1.7-test` 是测试版。
+- `v0.1.8-test` 是测试版。
 - EasyTier 自动下载/安装后续增强。
 - DDNS provider 后续增强。
 - PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
@@ -133,5 +149,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.1.7-test bash panel/scripts/build-release.sh
+VERSION=v0.1.8-test bash panel/scripts/build-release.sh
 ```
