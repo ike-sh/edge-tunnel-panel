@@ -18,6 +18,8 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		return runNodePreflight(ctx, cfg, runner)
 	case "detect_network_interfaces":
 		return detectNetworkInterfaces(ctx, cfg, runner)
+	case "detect_pbr_route_groups":
+		return detectPBRRouteGroups(ctx, cfg, runner)
 	case "detect_mtu_status":
 		return detectMTUStatus(ctx, cfg, runner)
 	case "verify_agent_config":

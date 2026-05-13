@@ -306,6 +306,22 @@ button.danger {
   max-width: 480px;
 }
 
+.route-group-list {
+  margin-top: 14px;
+}
+
+.route-group-list button {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  width: 100%;
+}
+
+.route-group-list button span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .node-card-head {
   display: flex;
   align-items: flex-start;

@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.2.9-test';
+const DEFAULT_VERSION = 'v0.2.10-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -25,13 +25,14 @@ const readActions = [
   'verify_forward_rules',
   'verify_pbr_rules',
   'detect_network_interfaces',
+  'detect_pbr_route_groups',
   'detect_mtu_status',
   'verify_ddns_status',
 ];
 const writeActions = ['install_or_update_easytier', 'restart_easytier', 'restart_agent'];
 const easyTierActions = ['install_or_update_easytier', 'apply_network_profile', 'verify_easytier_status', 'verify_network_connectivity', 'restart_easytier', 'detect_mtu_status'];
 const forwardingActions = ['apply_forward_config', 'apply_entry_forward_config', 'apply_landing_forward_config', 'verify_forward_rules', 'verify_entry_forward_rules', 'verify_landing_forward_rules'];
-const pbrActions = ['detect_network_interfaces', 'apply_pbr_policy', 'verify_pbr_policy', 'disable_pbr_policy', 'verify_pbr_rules'];
+const pbrActions = ['detect_network_interfaces', 'detect_pbr_route_groups', 'apply_pbr_policy', 'verify_pbr_policy', 'disable_pbr_policy', 'verify_pbr_rules'];
 
 const actionLabels = {
   run_node_preflight: '节点预检',
@@ -42,6 +43,7 @@ const actionLabels = {
   verify_forward_rules: '验证转发规则',
   verify_pbr_rules: '验证出口策略',
   detect_network_interfaces: '识别网卡',
+  detect_pbr_route_groups: '识别出口线路',
   detect_mtu_status: '检测 MTU/MSS',
   verify_ddns_status: '验证 DDNS',
   install_or_update_easytier: '安装/更新 EasyTier',
@@ -227,7 +229,7 @@ function App() {
   const [agentCommand, setAgentCommand] = useState({ root: '', sudo: '' });
   const [quickForm, setQuickForm] = useState({ name: 'edge-net', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', port: 11010, mtu: 1380, mss_clamp_enabled: true, mss_mode: 'auto', mss_value: '', entry_node_id: '', backend_node_id: '', tcp: true, udp: true, showAdvanced: false, listeners: 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010', peers: '' });
   const [forwardForm, setForwardForm] = useState({ network_link_id: '', name: '', protocol: 'tcp', public_listen_port: '', landing_host: '', landing_port: '', transport_mode: 'easytier', enabled: true, remark: '', showAdvanced: false });
-  const [pbrForm, setPBRForm] = useState({ node_id: '', forward_rule_id: '', name: '', egress_interface: '', egress_gateway: '', source_type: 'forward', enabled: true });
+  const [pbrForm, setPBRForm] = useState({ node_id: '', forward_rule_id: '', name: '', route_group_name: '', route_group_gateway: '', route_group_table_id: '', route_group_table_name: '', route_group_matched_ip: '', source_type: 'forward', enabled: true });
   const [taskFilter, setTaskFilter] = useState('all');
   const [taskNodeFilter, setTaskNodeFilter] = useState('all');
   const [taskEasyTierOnly, setTaskEasyTierOnly] = useState(false);
@@ -446,10 +448,40 @@ function App() {
     await refreshTasks();
     setAlert({ type: 'success', message: '已创建识别网卡任务，请在任务页查看默认出口和网关。' });
   }
+  async function detectPBRRouteGroups(nodeID) {
+    if (!nodeID) { setAlert({ type: 'error', message: '请选择 B 落地节点。' }); return; }
+    await run('识别出口线路', async () => api('/tasks', { body: { node_id: nodeID, action: 'detect_pbr_route_groups', payload: {} } }));
+    await refreshTasks();
+    setAlert({ type: 'success', message: '已创建识别出口线路任务。Agent 执行后刷新本页，即可选择检测到的线路组。' });
+  }
+  function latestPBRRouteGroupResult(nodeID) {
+    if (!nodeID) return {};
+    const matched = tasks
+      .filter((task) => task.node_id === nodeID && task.action === 'detect_pbr_route_groups' && task.status === 'succeeded')
+      .sort((a, b) => String(b.finished_at || b.created_at || '').localeCompare(String(a.finished_at || a.created_at || '')));
+    return parseJSON(matched[0]?.result);
+  }
+  function pbrRouteGroupsForNode(nodeID) {
+    return safeList(latestPBRRouteGroupResult(nodeID).route_groups);
+  }
+  function selectPBRRouteGroup(group) {
+    setPBRForm({
+      ...pbrForm,
+      route_group_name: group.name || '',
+      route_group_gateway: group.gateway || '',
+      route_group_table_id: group.table_id || '',
+      route_group_table_name: group.table_name || '',
+      route_group_matched_ip: group.matched_ip || '',
+      name: pbrForm.name || `pbr-${group.name || 'route'}-${selectedForwardName(pbrForm.forward_rule_id)}`,
+    });
+  }
+  function selectedForwardName(id) {
+    return forwards.find((rule) => rule.id === id)?.name || 'forward';
+  }
   async function createPBR(options = {}) {
     if (!pbrForm.node_id) { setAlert({ type: 'error', message: '请选择节点。' }); return; }
     if (!pbrForm.forward_rule_id) { setAlert({ type: 'error', message: '请选择关联转发规则。' }); return; }
-    if (!pbrForm.egress_interface.trim()) { setAlert({ type: 'error', message: '请填写出口接口。' }); return; }
+    if (!pbrForm.route_group_name) { setAlert({ type: 'error', message: '请先识别并选择出口线路。' }); return; }
     const body = { ...pbrForm, name: pbrForm.name || 'pbr-forward', source_type: 'forward', enabled: pbrForm.enabled };
     const path = options.apply ? '/pbr-policies/create-and-apply' : '/pbr-policies';
     const result = await run(options.apply ? '创建并应用出口策略' : '创建出口策略', async () => api(path, { body }));
@@ -552,14 +584,18 @@ function App() {
   function renderPBR() {
     const selectedForward = forwards.find((rule) => rule.id === pbrForm.forward_rule_id);
     const recommendedNode = selectedForward?.landing_node_id || selectedForward?.backend_node_id || '';
-    return <section className="card"><div className="card-head"><div><h2>出口策略 / PBR</h2><p className="muted">为 B 落地执行节点上的转发流量选择出口网卡。当前 MVP 每个节点只允许一条启用中的出口策略。</p></div><button className="secondary" onClick={() => Promise.all([refreshPBRPolicies(), refreshForwards(), refreshNodes()])}>刷新</button></div><div className="sub-panel forward-form"><h3>创建出口策略</h3><div className="grid two form-grid"><label>选择节点<select value={pbrForm.node_id || recommendedNode} onChange={(event) => setPBRForm({ ...pbrForm, node_id: event.target.value })}><option value="">请选择 B 落地节点</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id} / {shortID(node.id)} / {node.private_ip || node.public_ip || '-'}</option>)}</select></label><label>关联转发规则<select value={pbrForm.forward_rule_id} onChange={(event) => { const rule = forwards.find((item) => item.id === event.target.value); setPBRForm({ ...pbrForm, forward_rule_id: event.target.value, node_id: rule?.landing_node_id || rule?.backend_node_id || pbrForm.node_id, name: pbrForm.name || `pbr-${rule?.name || 'forward'}` }); }}><option value="">请选择转发规则</option>{forwards.map((rule) => <option key={rule.id} value={rule.id}>{rule.name} / {nodeLabel(nodeMap[rule.landing_node_id || rule.backend_node_id])} / {ruleListenPort(rule)}→{ruleLandingPort(rule)}</option>)}</select></label><label>策略名称<input value={pbrForm.name} onChange={(event) => setPBRForm({ ...pbrForm, name: event.target.value })} placeholder="pbr-forward" /></label><label>出口接口<input value={pbrForm.egress_interface} onChange={(event) => setPBRForm({ ...pbrForm, egress_interface: event.target.value })} placeholder="例如 eth1" /></label><label>出口网关<input value={pbrForm.egress_gateway} onChange={(event) => setPBRForm({ ...pbrForm, egress_gateway: event.target.value })} placeholder="可留空，或填写 1.2.3.1" /></label><label className="check"><input type="checkbox" checked={pbrForm.enabled} onChange={(event) => setPBRForm({ ...pbrForm, enabled: event.target.checked })} />启用策略</label></div><div className="actions"><button className="secondary" onClick={() => detectInterfaces(pbrForm.node_id || recommendedNode)}>识别网卡</button><button onClick={() => createPBR()}>创建策略</button><button onClick={() => createPBR({ apply: true })}>创建并应用策略</button></div><p className="muted">推荐流程：先识别网卡，再选择 B 节点、转发规则、出口接口和网关。</p></div>{pbrPolicies.length === 0 ? <p className="muted">暂无出口策略。</p> : <div className="cards compact-cards">{pbrPolicies.map((policy) => <PBRCard key={policy.id} policy={policy} />)}</div>}</section>;
-  }
-  function PBRCard({ policy }) {
+    const selectedNodeID = pbrForm.node_id || recommendedNode;
+    const routeGroups = pbrRouteGroupsForNode(selectedNodeID);
+    const routeDetection = latestPBRRouteGroupResult(selectedNodeID);
+    const selectedGroup = routeGroups.find((group) => group.name === pbrForm.route_group_name) || null;
+    const availableForwards = forwards.filter((rule) => !selectedNodeID || (rule.landing_node_id || rule.backend_node_id) === selectedNodeID);
+    const canApply = Boolean(selectedNodeID && pbrForm.forward_rule_id && selectedGroup);
+    return <section className="card"><div className="card-head"><div><h2>出口策略 / PBR</h2><p className="muted">为 B 落地执行节点上的转发流量选择出口线路。面板会先识别节点上的可用线路组，识别成功后才能选择线路并应用策略。</p></div><button className="secondary" onClick={() => Promise.all([refreshPBRPolicies(), refreshForwards(), refreshNodes(), refreshTasks()])}>刷新</button></div><div className="sub-panel forward-form"><h3>创建出口策略</h3><div className="grid two form-grid"><label>选择节点<select value={selectedNodeID} onChange={(event) => setPBRForm({ ...pbrForm, node_id: event.target.value, forward_rule_id: '', route_group_name: '', route_group_gateway: '', route_group_table_id: '', route_group_table_name: '', route_group_matched_ip: '' })}><option value="">请选择 B 落地节点</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id} / {publicIP(node)} / {node.easytier_ip || '-'} / {labelStatus(node.status)}</option>)}</select></label><label>关联转发规则<select value={pbrForm.forward_rule_id} onChange={(event) => { const rule = forwards.find((item) => item.id === event.target.value); setPBRForm({ ...pbrForm, forward_rule_id: event.target.value, node_id: rule?.landing_node_id || rule?.backend_node_id || selectedNodeID, name: pbrForm.name || `pbr-${pbrForm.route_group_name || 'line'}-${rule?.name || 'forward'}` }); }}><option value="">请选择转发规则</option>{availableForwards.map((rule) => <option key={rule.id} value={rule.id}>{rule.name} / {nodeLabel(nodeMap[rule.landing_node_id || rule.backend_node_id])} / {ruleListenPort(rule)}→{ruleLandingPort(rule)}</option>)}</select></label><label>策略名称<input value={pbrForm.name} onChange={(event) => setPBRForm({ ...pbrForm, name: event.target.value })} placeholder="pbr-CN2-forward" /></label><label className="check"><input type="checkbox" checked={pbrForm.enabled} onChange={(event) => setPBRForm({ ...pbrForm, enabled: event.target.checked })} />启用策略</label></div><div className="actions"><button className="secondary" onClick={() => detectPBRRouteGroups(selectedNodeID)}>识别出口线路</button><button className="secondary" onClick={() => detectInterfaces(selectedNodeID)}>识别网卡</button></div>{selectedNodeID && routeGroups.length > 0 && <div className="route-group-list"><label>线路组<select value={pbrForm.route_group_name} onChange={(event) => selectPBRRouteGroup(routeGroups.find((group) => group.name === event.target.value) || {})}><option value="">请选择检测到的线路组</option>{routeGroups.map((group) => <option key={group.name} value={group.name}>{group.name} - 网关 {group.gateway} - 表 {group.table_name} - 匹配 {group.matched_ip}</option>)}</select></label></div>}{selectedNodeID && routeGroups.length === 0 && safeList(routeDetection.warnings).length > 0 && <div className="alert">当前节点未检测到可用多出口线路组。PBR 仅适合具备 10.7/10.8/10.3/10.4 等线路地址的多出口节点。</div>}{selectedGroup && <details className="command-block"><summary>高级参数</summary><dl className="kv compact-kv"><dt>线路</dt><dd>{selectedGroup.name}</dd><dt>网关</dt><dd>{selectedGroup.gateway}</dd><dt>table_id</dt><dd>{selectedGroup.table_id}</dd><dt>table_name</dt><dd>{selectedGroup.table_name}</dd><dt>priority / fwmark</dt><dd>由 Controller 自动生成</dd><dt>match_port</dt><dd>从关联转发规则自动生成</dd></dl></details>}<div className="actions"><button disabled={!canApply} onClick={() => createPBR()}>创建策略</button><button disabled={!canApply} onClick={() => createPBR({ apply: true })}>创建并应用策略</button></div><p className="muted">推荐流程：选择 B 落地节点 → 识别出口线路 → 选择线路组 → 选择转发规则 → 创建并应用策略。没有检测到线路组的节点不建议创建 PBR。</p></div>{pbrPolicies.length === 0 ? <p className="muted">暂无出口策略。</p> : <div className="cards compact-cards">{pbrPolicies.map((policy) => <PBRCard key={policy.id} policy={policy} />)}</div>}</section>;
+  }  function PBRCard({ policy }) {
     const node = nodeMap[policy.node_id];
     const forward = forwards.find((rule) => rule.id === policy.forward_rule_id);
-    return <article className="mini-card"><div className="card-head"><h3>{policy.name}</h3><span className={statusClass(policy.status)}>{labelStatus(policy.status)}</span></div><dl className="kv compact-kv"><dt>节点</dt><dd>{nodeLabel(node)}</dd><dt>转发规则</dt><dd>{forward?.name || policy.forward_rule_id || '-'}</dd><dt>出口接口</dt><dd>{policy.egress_interface || policy.out_interface || '-'}</dd><dt>网关</dt><dd>{policy.egress_gateway || policy.gateway || '-'}</dd><dt>fwmark/table/priority</dt><dd>{policy.fwmark || policy.match_mark || '-'} / {policy.table_id || '-'} / {policy.priority || '-'}</dd></dl><div className="actions"><button onClick={() => applyPBR(policy)}>应用</button><button className="secondary" onClick={() => verifyPBR(policy)}>验证</button><button className="secondary" onClick={() => disablePBR(policy)}>禁用</button><button className="danger" onClick={() => deletePBR(policy)}>删除</button></div></article>;
-  }
-  function renderTasks() {
+    return <article className="mini-card"><div className="card-head"><h3>{policy.name}</h3><span className={statusClass(policy.status)}>{labelStatus(policy.status)}</span></div><dl className="kv compact-kv"><dt>节点</dt><dd>{nodeLabel(node)}</dd><dt>转发规则</dt><dd>{forward?.name || policy.forward_rule_id || '-'}</dd><dt>线路组</dt><dd>{policy.route_group_name || '-'}</dd><dt>线路网关</dt><dd>{policy.route_group_gateway || policy.gateway || '-'}</dd><dt>路由表</dt><dd>{policy.route_group_table_name || '-'} / {policy.route_group_table_id || policy.table_id || '-'}</dd><dt>匹配 IP</dt><dd>{policy.route_group_matched_ip || '-'}</dd><dt>fwmark / priority</dt><dd>{policy.fwmark || policy.match_mark || '-'} / {policy.priority || '-'}</dd></dl><div className="actions"><button onClick={() => applyPBR(policy)}>应用</button><button className="secondary" onClick={() => verifyPBR(policy)}>验证</button><button className="secondary" onClick={() => disablePBR(policy)}>禁用</button><button className="danger" onClick={() => deletePBR(policy)}>删除</button></div></article>;
+  }  function renderTasks() {
     return <section className="card"><div className="card-head"><h2>任务</h2><button className="secondary" onClick={refreshTasks}>刷新</button></div><div className="inline"><label>状态筛选<select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}><option value="all">全部状态</option>{['pending', 'running', 'succeeded', 'failed', 'expired', 'cancelled'].map((status) => <option key={status} value={status}>{labelStatus(status)}</option>)}</select></label><label>节点筛选<select value={taskNodeFilter} onChange={(event) => setTaskNodeFilter(event.target.value)}><option value="all">全部节点</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id} / {shortID(node.id)} / {labelStatus(node.status)}</option>)}</select></label><button className="secondary" onClick={() => setTaskFilter('failed')}>只看失败</button><button className={taskEasyTierOnly ? '' : 'secondary'} onClick={() => setTaskEasyTierOnly(!taskEasyTierOnly)}>只看 EasyTier 相关</button></div>{filteredTasks.length === 0 ? <p className="muted">暂无匹配任务。</p> : filteredTasks.map((task) => <TaskCard key={task.id} task={task} />)}</section>;
   }
   function TaskMini({ task }) {

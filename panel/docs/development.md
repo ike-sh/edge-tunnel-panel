@@ -1,6 +1,6 @@
-﻿# Development
+# Development
 
-当前版本：`v0.2.9-test`
+当前版本：`v0.2.10-test`
 
 ## 验证命令
 
@@ -10,7 +10,7 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.9-test bash panel/scripts/build-release.sh
+VERSION=v0.2.10-test bash panel/scripts/build-release.sh
 ```
 
 ## 近期方向

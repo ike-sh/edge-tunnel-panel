@@ -1,12 +1,12 @@
-﻿# Quickstart
+# Quickstart
 
-当前版本：`v0.2.9-test`
+当前版本：`v0.2.10-test`
 
 ## 1. 安装 Controller
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.9-test
+  --version v0.2.10-test
 ```
 
 打开：`http://服务器IP:18080`
@@ -45,9 +45,9 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 进入“出口策略 / PBR”：
 
 1. 选择 B 落地节点。
-2. 点击“识别网卡”。
-3. 选择转发规则。
-4. 填出口接口和网关。
+2. 点击“识别出口线路”。
+3. 选择检测到的线路组。
+4. 选择转发规则。
 5. 点击“创建并应用策略”。
 
-当前每个节点只允许一条启用中的 PBR 策略。
+如果没有识别到线路组，说明当前节点不适合在本版本中创建 PBR。

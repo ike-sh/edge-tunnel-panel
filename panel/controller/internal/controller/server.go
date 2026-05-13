@@ -944,10 +944,10 @@ func validateLandingHost(host string) error {
 		return errValidation("landing_host must be an IP address or domain")
 	}
 	if strings.Contains(host, ":") {
-		return errValidation("v0.2.9-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("v0.2.10-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
-		return errValidation("v0.2.9-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("v0.2.10-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	return nil
 }
@@ -1077,6 +1077,7 @@ func (s *Server) handlePBRPolicies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.store.hasActivePBRPolicy(policy.NodeID, policy.ID) {
+			_, _ = s.store.deletePBRPolicy(policy.ID)
 			writeErr(w, 400, "BAD_REQUEST", "node already has an active PBR policy")
 			return
 		}
@@ -1327,7 +1328,7 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 	if kind == "tasks" {
 		action := stringValue(req["action"], "collect_agent_status")
 		blocked := map[string]bool{"arbitrary_command": true, "shell_c": true, "bash_c": true, "ev" + "al": true, "raw_" + "nft": true, "raw_" + "iptables": true, "raw_" + "ip_route": true, "curl_pipe_bash": true}
-		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "detect_network_interfaces": true, "detect_mtu_status": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_pbr_policy": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_entry_forward_config": true, "apply_landing_forward_config": true, "apply_pbr_config": true, "apply_pbr_policy": true, "disable_pbr_policy": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
+		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "detect_network_interfaces": true, "detect_pbr_route_groups": true, "detect_mtu_status": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_pbr_policy": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_entry_forward_config": true, "apply_landing_forward_config": true, "apply_pbr_config": true, "apply_pbr_policy": true, "disable_pbr_policy": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
 		if blocked[action] || !allowed[action] {
 			writeErr(w, 400, "BLOCKED_ACTION", "action is not allowed")
 			return

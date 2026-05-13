@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.2.9-test"
+	Version = "v0.2.10-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -167,35 +167,40 @@ type Forward struct {
 }
 
 type PBRPolicy struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Enabled          bool      `json:"enabled"`
-	NodeID           string    `json:"node_id"`
-	SourceType       string    `json:"source_type"`
-	ForwardRuleID    string    `json:"forward_rule_id,omitempty"`
-	Domain           string    `json:"domain,omitempty"`
-	StaticDstCIDR    string    `json:"static_dst_cidr,omitempty"`
-	Protocol         string    `json:"protocol"`
-	MatchPort        int       `json:"match_port"`
-	MatchDstHost     string    `json:"match_dst_host,omitempty"`
-	MatchDstPort     int       `json:"match_dst_port,omitempty"`
-	MatchSrcHost     string    `json:"match_src_host,omitempty"`
-	MatchMarkComment string    `json:"match_mark_comment,omitempty"`
-	EgressInterface  string    `json:"egress_interface"`
-	EgressGateway    string    `json:"egress_gateway,omitempty"`
-	EgressSourceIP   string    `json:"egress_source_ip,omitempty"`
-	TableID          int       `json:"table_id"`
-	FWMark           string    `json:"fwmark"`
-	Priority         int       `json:"priority"`
-	MSSClampEnabled  bool      `json:"mss_clamp_enabled"`
-	MSSValue         int       `json:"mss_value,omitempty"`
-	MTU              int       `json:"mtu,omitempty"`
-	Status           string    `json:"status"`
-	LastApplyTaskID  string    `json:"last_apply_task_id,omitempty"`
-	LastVerifyTaskID string    `json:"last_verify_task_id,omitempty"`
-	Remark           string    `json:"remark,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                  string    `json:"id"`
+	Name                string    `json:"name"`
+	Enabled             bool      `json:"enabled"`
+	NodeID              string    `json:"node_id"`
+	SourceType          string    `json:"source_type"`
+	ForwardRuleID       string    `json:"forward_rule_id,omitempty"`
+	Domain              string    `json:"domain,omitempty"`
+	StaticDstCIDR       string    `json:"static_dst_cidr,omitempty"`
+	Protocol            string    `json:"protocol"`
+	MatchPort           int       `json:"match_port"`
+	MatchDstHost        string    `json:"match_dst_host,omitempty"`
+	MatchDstPort        int       `json:"match_dst_port,omitempty"`
+	MatchSrcHost        string    `json:"match_src_host,omitempty"`
+	MatchMarkComment    string    `json:"match_mark_comment,omitempty"`
+	EgressInterface     string    `json:"egress_interface"`
+	EgressGateway       string    `json:"egress_gateway,omitempty"`
+	EgressSourceIP      string    `json:"egress_source_ip,omitempty"`
+	RouteGroupName      string    `json:"route_group_name,omitempty"`
+	RouteGroupGateway   string    `json:"route_group_gateway,omitempty"`
+	RouteGroupTableID   int       `json:"route_group_table_id,omitempty"`
+	RouteGroupTableName string    `json:"route_group_table_name,omitempty"`
+	RouteGroupMatchedIP string    `json:"route_group_matched_ip,omitempty"`
+	TableID             int       `json:"table_id"`
+	FWMark              string    `json:"fwmark"`
+	Priority            int       `json:"priority"`
+	MSSClampEnabled     bool      `json:"mss_clamp_enabled"`
+	MSSValue            int       `json:"mss_value,omitempty"`
+	MTU                 int       `json:"mtu,omitempty"`
+	Status              string    `json:"status"`
+	LastApplyTaskID     string    `json:"last_apply_task_id,omitempty"`
+	LastVerifyTaskID    string    `json:"last_verify_task_id,omitempty"`
+	Remark              string    `json:"remark,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 
 	// Legacy fields kept for older stored data and API clients.
 	MatchSource   string `json:"match_source,omitempty"`

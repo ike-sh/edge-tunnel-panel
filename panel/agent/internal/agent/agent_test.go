@@ -51,6 +51,19 @@ func (f *portConflictRunner) Run(ctx context.Context, name string, args ...strin
 	return CommandResult{Stdout: "ok", ExitCode: 0}
 }
 
+type routeGroupRunner struct {
+	fakeRunner
+	addrOutput string
+}
+
+func (r *routeGroupRunner) Run(ctx context.Context, name string, args ...string) CommandResult {
+	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	if name == "ip" && strings.Join(args, " ") == "-4 addr show" {
+		return CommandResult{Stdout: r.addrOutput, ExitCode: 0}
+	}
+	return CommandResult{Stdout: "ok", ExitCode: 0}
+}
+
 func (f *fakeRunner) LookPath(name string) (string, error) {
 	if f.paths != nil && f.paths[name] {
 		return "/usr/bin/" + name, nil
@@ -88,13 +101,19 @@ func testConfig(t *testing.T) Config {
 	oldSystemdDir := systemdSystemDir
 	oldInstallDir := easyTierInstallDir
 	oldForwardSysctlConfigPath := forwardSysctlConfigPath
+	oldPBRRTTablesPath := pbrRTTablesPath
+	oldLocalIPv4AddressesFunc := localIPv4AddressesFunc
 	systemdSystemDir = filepath.Join(t.TempDir(), "systemd-system")
 	easyTierInstallDir = filepath.Join(t.TempDir(), "bin")
 	forwardSysctlConfigPath = filepath.Join(t.TempDir(), "sysctl.d", "99-edge-tunnel-forward.conf")
+	pbrRTTablesPath = filepath.Join(t.TempDir(), "iproute2", "rt_tables")
+	localIPv4AddressesFunc = func() []string { return nil }
 	t.Cleanup(func() {
 		systemdSystemDir = oldSystemdDir
 		easyTierInstallDir = oldInstallDir
 		forwardSysctlConfigPath = oldForwardSysctlConfigPath
+		pbrRTTablesPath = oldPBRRTTablesPath
+		localIPv4AddressesFunc = oldLocalIPv4AddressesFunc
 	})
 	cfg := DefaultConfig()
 	cfg.ControllerURL = "http://127.0.0.1:18080"
@@ -1212,11 +1231,41 @@ func TestDetectNetworkInterfaces(t *testing.T) {
 	}
 }
 
+func TestDetectPBRRouteGroupsCN2(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &routeGroupRunner{addrOutput: "2: eth1 inet 10.8.2.9/24 brd 10.8.2.255 scope global eth1\n"}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "detect_pbr_route_groups", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, `"name":"CN2"`) || !strings.Contains(result.Result, `"gateway":"10.8.0.1"`) {
+		t.Fatalf("CN2 route group not detected: %+v", result)
+	}
+	if strings.Contains(strings.Join(runner.calls, "\n"), "shell") {
+		t.Fatalf("unexpected shell call: %s", strings.Join(runner.calls, "\n"))
+	}
+}
+
+func TestDetectPBRRouteGroups9929(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &routeGroupRunner{addrOutput: "2: eth1 inet 10.7.9.9/24 scope global eth1\n"}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "detect_pbr_route_groups", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, `"name":"9929"`) || !strings.Contains(result.Result, `"table_name":"T_9929"`) {
+		t.Fatalf("9929 route group not detected: %+v", result)
+	}
+}
+
+func TestDetectPBRRouteGroupsNone(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &routeGroupRunner{addrOutput: "2: eth0 inet 192.0.2.9/24 scope global eth0\n"}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "detect_pbr_route_groups", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, `"route_groups":[]`) || !strings.Contains(result.Result, "未检测到利群多出口线路组") {
+		t.Fatalf("expected no route groups warning: %+v", result)
+	}
+}
+
 func TestApplyPBRPolicyWritesConfigNFTAndUsesFixedArgv(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
 	runner := &fakeRunner{}
-	payload := map[string]any{"pbr_policy": map[string]any{"id": "pbr-1", "protocol": "both", "match_port": 18081.0, "egress_interface": "eth1", "egress_gateway": "203.0.113.1", "table_id": 20001.0, "fwmark": "0x2001", "priority": 20001.0}}
+	payload := map[string]any{"pbr_policy": map[string]any{"id": "pbr-1", "protocol": "both", "match_port": 18081.0, "route_group_name": "CN2", "route_group_gateway": "10.8.0.1", "route_group_table_id": 101.0, "route_group_table_name": "T_CN2", "route_group_matched_ip": "10.8.2.9", "fwmark": "0x2001", "priority": 20001.0}}
 	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_pbr_policy", Payload: payload})
 	if result.Status != "succeeded" {
 		t.Fatalf("apply pbr failed: %+v calls=%s", result, strings.Join(runner.calls, "\n"))
@@ -1232,30 +1281,43 @@ func TestApplyPBRPolicyWritesConfigNFTAndUsesFixedArgv(t *testing.T) {
 		}
 	}
 	calls := strings.Join(runner.calls, "\n")
-	for _, want := range []string{"ip rule add fwmark 0x2001 table 20001 priority 20001", "ip route replace default via 203.0.113.1 dev eth1 table 20001", "nft -c -f " + pbrNFTPath(cfg), "nft -f " + pbrNFTPath(cfg)} {
+	for _, want := range []string{"ip route replace default via 10.8.0.1 table 101", "ip rule add fwmark 0x2001 table 101 priority 20001", "nft -c -f " + pbrNFTPath(cfg), "nft -f " + pbrNFTPath(cfg)} {
 		if !strings.Contains(calls, want) {
 			t.Fatalf("missing fixed argv %q in %s", want, calls)
 		}
 	}
+	rtTables, err := os.ReadFile(pbrRTTablesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rtTables), "101 T_CN2") {
+		t.Fatalf("rt_tables not updated: %s", string(rtTables))
+	}
 }
 
-func TestApplyPBRPolicyRejectsBadInterfaceAndGateway(t *testing.T) {
+func TestApplyPBRPolicyRejectsBadRouteGroupGateway(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
-	badIface := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_pbr_policy", Payload: map[string]any{"pbr_policy": map[string]any{"match_port": 80.0, "egress_interface": "eth0;bad"}}})
-	if badIface.Status != "failed" || !strings.Contains(badIface.Error, "egress_interface") {
-		t.Fatalf("bad interface accepted: %+v", badIface)
-	}
-	badGW := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_pbr_policy", Payload: map[string]any{"pbr_policy": map[string]any{"match_port": 80.0, "egress_interface": "eth0", "egress_gateway": "not-ip"}}})
-	if badGW.Status != "failed" || !strings.Contains(badGW.Error, "egress_gateway") {
+	badGW := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_pbr_policy", Payload: map[string]any{"pbr_policy": map[string]any{"match_port": 80.0, "route_group_name": "CN2", "route_group_gateway": "not-ip", "route_group_table_id": 101.0, "route_group_table_name": "T_CN2"}}})
+	if badGW.Status != "failed" || !strings.Contains(badGW.Error, "route_group_gateway") {
 		t.Fatalf("bad gateway accepted: %+v", badGW)
+	}
+	badTable := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_pbr_policy", Payload: map[string]any{"pbr_policy": map[string]any{"match_port": 80.0, "route_group_name": "CN2", "route_group_gateway": "10.8.0.1", "route_group_table_id": 101.0, "route_group_table_name": "bad table"}}})
+	if badTable.Status != "failed" || !strings.Contains(badTable.Error, "route_group_table_name") {
+		t.Fatalf("bad table name accepted: %+v", badTable)
 	}
 }
 
 func TestVerifyAndDisablePBRPolicy(t *testing.T) {
 	cfg := testConfig(t)
+	if err := os.MkdirAll(filepath.Dir(pbrRTTablesPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pbrRTTablesPath, []byte("101 T_CN2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	runner := &fakeRunner{}
-	payload := map[string]any{"pbr_policy": map[string]any{"table_id": 20001.0, "fwmark": "0x2001", "priority": 20001.0}}
+	payload := map[string]any{"pbr_policy": map[string]any{"route_group_table_id": 101.0, "route_group_table_name": "T_CN2", "fwmark": "0x2001", "priority": 20001.0}}
 	verify := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_pbr_policy", Payload: payload})
 	if verify.Status != "succeeded" || !strings.Contains(strings.Join(runner.calls, "\n"), "nft list table ip edge_tunnel_pbr") {
 		t.Fatalf("verify pbr failed: %+v calls=%s", verify, strings.Join(runner.calls, "\n"))

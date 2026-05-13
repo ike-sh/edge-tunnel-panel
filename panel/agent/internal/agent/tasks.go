@@ -14,6 +14,7 @@ var readonlyActions = map[string]bool{
 	"collect_agent_status":        true,
 	"run_node_preflight":          true,
 	"detect_network_interfaces":   true,
+	"detect_pbr_route_groups":     true,
 	"detect_mtu_status":           true,
 	"verify_agent_config":         true,
 	"verify_easytier_status":      true,

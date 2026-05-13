@@ -280,12 +280,12 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.9-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.10-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.2.9-test") ||
+		!strings.Contains(body, "--version v0.2.10-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, `"root_command"`) ||
@@ -918,7 +918,7 @@ func TestPBRPolicyCRUDAndCreateApply(t *testing.T) {
 	raw, _ := json.Marshal(forwardResp.Data)
 	var forward Forward
 	_ = json.Unmarshal(raw, &forward)
-	createPBR := post(t, h, "/api/v1/pbr-policies/create-and-apply", "operator-token", map[string]any{"forward_rule_id": forward.ID, "egress_interface": "eth1", "egress_gateway": "203.0.113.1"})
+	createPBR := post(t, h, "/api/v1/pbr-policies/create-and-apply", "operator-token", routeGroupPBRRequest(forward.ID))
 	if createPBR.Code != 202 {
 		t.Fatalf("pbr create apply failed: %d %s", createPBR.Code, createPBR.Body.String())
 	}
@@ -934,6 +934,9 @@ func TestPBRPolicyCRUDAndCreateApply(t *testing.T) {
 	}
 	if resp.Data.Policy.NodeID != forward.LandingNodeID || resp.Data.Policy.MatchPort != forward.TunnelTargetPort || resp.Data.Policy.MatchDstPort != forward.LandingPort {
 		t.Fatalf("bad policy defaults: %+v forward=%+v", resp.Data.Policy, forward)
+	}
+	if resp.Data.Policy.RouteGroupName != "CN2" || resp.Data.Policy.RouteGroupGateway != "10.8.0.1" || resp.Data.Policy.RouteGroupTableID != 101 || resp.Data.Policy.RouteGroupTableName != "T_CN2" {
+		t.Fatalf("bad route group fields: %+v", resp.Data.Policy)
 	}
 	if resp.Data.Task.Action != "apply_pbr_policy" || resp.Data.Task.NodeID != forward.LandingNodeID {
 		t.Fatalf("bad pbr task: %+v", resp.Data.Task)
@@ -952,7 +955,7 @@ func TestPBRPolicyApplyVerifyDisableAndStatus(t *testing.T) {
 	raw, _ := json.Marshal(forwardResp.Data)
 	var forward Forward
 	_ = json.Unmarshal(raw, &forward)
-	createPBR := post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"forward_rule_id": forward.ID, "egress_interface": "eth2"})
+	createPBR := post(t, h, "/api/v1/pbr-policies", "operator-token", routeGroupPBRRequest(forward.ID))
 	if createPBR.Code != 200 {
 		t.Fatalf("pbr create failed: %d %s", createPBR.Code, createPBR.Body.String())
 	}
@@ -976,18 +979,89 @@ func TestPBRPolicyApplyVerifyDisableAndStatus(t *testing.T) {
 }
 
 func TestPBRPolicyValidationAndDangerousPayload(t *testing.T) {
-	h, _ := testConnectedNetworkLink(t)
-	bad := post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "missing", "egress_interface": "eth0"})
+	h, link := testConnectedNetworkLink(t)
+	createForward := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-pbr-bad", "protocol": "tcp", "public_listen_port": 18183, "landing_host": "198.51.100.12", "landing_port": 8080, "transport_mode": "easytier", "enabled": true})
+	var forwardResp APIResponse
+	_ = json.Unmarshal(createForward.Body.Bytes(), &forwardResp)
+	raw, _ := json.Marshal(forwardResp.Data)
+	var forward Forward
+	_ = json.Unmarshal(raw, &forward)
+	bad := post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "missing"})
 	if bad.Code != 400 {
 		t.Fatalf("expected missing node failure: %d %s", bad.Code, bad.Body.String())
 	}
-	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "backend-link-forward", "source_type": "static", "script": "bad", "egress_interface": "eth0"})
+	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "backend-link-forward", "source_type": "static", "script": "bad"})
 	if bad.Code != 400 || !strings.Contains(bad.Body.String(), "DANGEROUS_PAYLOAD") {
 		t.Fatalf("dangerous payload not rejected: %d %s", bad.Code, bad.Body.String())
 	}
-	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "backend-link-forward"})
-	if bad.Code != 400 || !strings.Contains(bad.Body.String(), "egress_interface") {
-		t.Fatalf("missing interface not rejected: %d %s", bad.Code, bad.Body.String())
+	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", map[string]any{"node_id": "backend-link-forward", "forward_rule_id": forward.ID})
+	if bad.Code != 400 || !strings.Contains(bad.Body.String(), "route_group_name") {
+		t.Fatalf("missing route group not rejected: %d %s", bad.Code, bad.Body.String())
+	}
+	badReq := routeGroupPBRRequest(forward.ID)
+	badReq["route_group_table_name"] = "CN2"
+	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", badReq)
+	if bad.Code != 400 || !strings.Contains(bad.Body.String(), "route_group_table_name") {
+		t.Fatalf("bad table name not rejected: %d %s", bad.Code, bad.Body.String())
+	}
+	badReq = routeGroupPBRRequest(forward.ID)
+	badReq["route_group_gateway"] = "not-ip"
+	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", badReq)
+	if bad.Code != 400 || !strings.Contains(bad.Body.String(), "route_group_gateway") {
+		t.Fatalf("bad gateway not rejected: %d %s", bad.Code, bad.Body.String())
+	}
+	badReq = routeGroupPBRRequest(forward.ID)
+	badReq["node_id"] = forward.EntryNodeID
+	bad = post(t, h, "/api/v1/pbr-policies", "operator-token", badReq)
+	if bad.Code != 400 || !strings.Contains(bad.Body.String(), "landing node") {
+		t.Fatalf("wrong node not rejected: %d %s", bad.Code, bad.Body.String())
+	}
+}
+
+func TestRunDetectPBRRouteGroupsTaskAllowed(t *testing.T) {
+	h, _ := testConnectedNetworkLink(t)
+	rr := post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "backend-link-forward", "action": "detect_pbr_route_groups", "payload": map[string]any{}})
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "detect_pbr_route_groups") {
+		t.Fatalf("detect route groups task not allowed: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestPBRSingleActivePerNode(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	firstForward := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-pbr-active-1", "protocol": "tcp", "public_listen_port": 18184, "landing_host": "198.51.100.14", "landing_port": 8080, "transport_mode": "easytier", "enabled": true})
+	secondForward := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-pbr-active-2", "protocol": "tcp", "public_listen_port": 18185, "landing_host": "198.51.100.15", "landing_port": 8080, "transport_mode": "easytier", "enabled": true})
+	var firstResp, secondResp APIResponse
+	_ = json.Unmarshal(firstForward.Body.Bytes(), &firstResp)
+	_ = json.Unmarshal(secondForward.Body.Bytes(), &secondResp)
+	firstRaw, _ := json.Marshal(firstResp.Data)
+	secondRaw, _ := json.Marshal(secondResp.Data)
+	var first, second Forward
+	_ = json.Unmarshal(firstRaw, &first)
+	_ = json.Unmarshal(secondRaw, &second)
+	created := post(t, h, "/api/v1/pbr-policies/create-and-apply", "operator-token", routeGroupPBRRequest(first.ID))
+	if created.Code != 202 {
+		t.Fatalf("first pbr failed: %d %s", created.Code, created.Body.String())
+	}
+	duplicateReq := routeGroupPBRRequest(second.ID)
+	duplicateReq["route_group_name"] = "9929"
+	duplicateReq["route_group_gateway"] = "10.7.0.1"
+	duplicateReq["route_group_table_id"] = 102
+	duplicateReq["route_group_table_name"] = "T_9929"
+	duplicate := post(t, h, "/api/v1/pbr-policies/create-and-apply", "operator-token", duplicateReq)
+	if duplicate.Code != 400 || !strings.Contains(duplicate.Body.String(), "active PBR") {
+		t.Fatalf("duplicate active PBR not rejected: %d %s", duplicate.Code, duplicate.Body.String())
+	}
+}
+
+func routeGroupPBRRequest(forwardID string) map[string]any {
+	return map[string]any{
+		"forward_rule_id":        forwardID,
+		"route_group_name":       "CN2",
+		"route_group_gateway":    "10.8.0.1",
+		"route_group_table_id":   101,
+		"route_group_table_name": "T_CN2",
+		"route_group_matched_ip": "10.8.2.9",
+		"enabled":                true,
 	}
 }
 

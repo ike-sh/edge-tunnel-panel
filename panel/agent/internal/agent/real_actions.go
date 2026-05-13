@@ -23,8 +23,10 @@ import (
 var systemdSystemDir = "/etc/systemd/system"
 var easyTierInstallDir = "/usr/local/bin"
 var forwardSysctlConfigPath = "/etc/sysctl.d/99-edge-tunnel-forward.conf"
+var pbrRTTablesPath = "/etc/iproute2/rt_tables"
 var downloadEasyTierArchiveFunc = downloadEasyTierArchive
 var diskFreeBytesFunc = defaultDiskFreeBytes
+var localIPv4AddressesFunc = localIPv4Addresses
 
 const defaultEasyTierVersion = "v2.4.5"
 const maxEasyTierDownloadBytes = 200 << 20
@@ -1259,11 +1261,11 @@ func resolveLandingHostIPv4(raw string) (string, error) {
 		return "", fmt.Errorf("\u843d\u5730\u670d\u52a1\u5668\u5730\u5740\u4e0d\u80fd\u662f CIDR: %s", raw)
 	}
 	if strings.Contains(raw, ":") {
-		return "", fmt.Errorf("v0.2.9-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return "", fmt.Errorf("v0.2.10-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 	}
 	if ip := net.ParseIP(raw); ip != nil {
 		if ip.To4() == nil {
-			return "", fmt.Errorf("v0.2.9-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+			return "", fmt.Errorf("v0.2.10-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
 		}
 		return ip.String(), nil
 	}
@@ -1359,27 +1361,143 @@ func parseDefaultRoute(text string) (string, string) {
 	return iface, gw
 }
 
+type pbrRouteGroupDefinition struct {
+	Name    string
+	Gateway string
+	Pattern string
+}
+
+var pbrRouteGroupDefinitions = []pbrRouteGroupDefinition{
+	{Name: "9929", Gateway: "10.7.0.1", Pattern: `^10\.7\.`},
+	{Name: "CN2", Gateway: "10.8.0.1", Pattern: `^10\.8\.`},
+	{Name: "JPSDWAN", Gateway: "10.3.0.1", Pattern: `^10\.3\.[0-3]\.`},
+	{Name: "DESDWAN", Gateway: "10.3.10.1", Pattern: `^10\.3\.(8|9|10|11)\.`},
+	{Name: "KRSDWAN", Gateway: "10.4.0.1", Pattern: `^10\.4\.[0-3]\.`},
+	{Name: "HKSDWAN", Gateway: "10.3.50.1", Pattern: `^10\.3\.(48|49|50|51)\.`},
+	{Name: "TWSDWAN", Gateway: "10.3.100.1", Pattern: `^10\.3\.(100|101|102|103)\.`},
+	{Name: "SEATTLE", Gateway: "10.3.160.1", Pattern: `^10\.3\.(160|161)\.`},
+	{Name: "MOSCOW", Gateway: "10.3.170.1", Pattern: `^10\.3\.(170|171)\.`},
+	{Name: "SINGAPORE", Gateway: "10.3.180.1", Pattern: `^10\.3\.180\.`},
+	{Name: "USSDWAN-LAX", Gateway: "10.3.150.1", Pattern: `^10\.3\.(150|151)\.`},
+}
+
+func detectPBRRouteGroups(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
+	ipv4s := localIPv4AddressesFunc()
+	addrShow := runner.Run(ctx, "ip", "-4", "addr", "show")
+	for _, ip := range parseIPv4Addresses(addrShow.Stdout) {
+		if !containsString(ipv4s, ip) {
+			ipv4s = append(ipv4s, ip)
+		}
+	}
+	defaultRoute := runner.Run(ctx, "ip", "route", "show", "default")
+	mainRoute := runner.Run(ctx, "ip", "route", "show", "table", "main")
+
+	groups := []map[string]any{}
+	seen := map[string]bool{}
+	tableID := 101
+	for _, def := range pbrRouteGroupDefinitions {
+		re, err := regexp.Compile(def.Pattern)
+		if err != nil {
+			continue
+		}
+		for _, ip := range ipv4s {
+			if seen[def.Name] || !re.MatchString(ip) {
+				continue
+			}
+			groups = append(groups, map[string]any{
+				"name":       def.Name,
+				"gateway":    def.Gateway,
+				"table_id":   tableID,
+				"table_name": "T_" + def.Name,
+				"matched_ip": ip,
+				"pattern":    def.Pattern,
+				"available":  true,
+			})
+			seen[def.Name] = true
+			tableID++
+		}
+	}
+	warnings := []string{}
+	if len(groups) == 0 {
+		warnings = append(warnings, "未检测到利群多出口线路组。")
+	}
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{
+		"route_groups":  groups,
+		"default_route": strings.TrimSpace(defaultRoute.Stdout),
+		"raw_ipv4":      strings.Join(ipv4s, "\n"),
+		"raw_routes":    strings.TrimSpace(defaultRoute.Stdout + "\n" + mainRoute.Stdout),
+		"warnings":      warnings,
+	})}
+}
+
+func localIPv4Addresses() []string {
+	out := []string{}
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok || ipnet.IP.To4() == nil {
+				continue
+			}
+			ip := ipnet.IP.String()
+			if !containsString(out, ip) {
+				out = append(out, ip)
+			}
+		}
+	}
+	return out
+}
+
+func parseIPv4Addresses(text string) []string {
+	out := []string{}
+	re := regexp.MustCompile(`\binet\s+([0-9]+(?:\.[0-9]+){3})(?:/\d+)?`)
+	for _, match := range re.FindAllStringSubmatch(text, -1) {
+		ip := match[1]
+		if net.ParseIP(ip).To4() != nil && !containsString(out, ip) {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
+func containsString(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
 func applyPBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
 	policy := mapPayload(payload, "pbr_policy")
 	if policy == nil {
 		policy = payload
 	}
 	policyID := stringField(policy, "id", stringField(payload, "policy_id", "pbr"))
-	iface := stringField(policy, "egress_interface", stringField(policy, "out_interface", ""))
-	if !regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`).MatchString(iface) {
-		return TaskResult{Status: "failed", Error: "invalid egress_interface"}
+	routeGroupName := stringField(policy, "route_group_name", "")
+	gw := stringField(policy, "route_group_gateway", stringField(policy, "gateway", ""))
+	if routeGroupName == "" {
+		return TaskResult{Status: "failed", Error: "route_group_name is required"}
 	}
-	gw := stringField(policy, "egress_gateway", stringField(policy, "gateway", ""))
-	if gw != "" {
-		ip := net.ParseIP(gw)
-		if ip == nil || ip.To4() == nil {
-			return TaskResult{Status: "failed", Error: "egress_gateway must be IPv4"}
-		}
+	if ip := net.ParseIP(gw); ip == nil || ip.To4() == nil {
+		return TaskResult{Status: "failed", Error: "route_group_gateway must be IPv4"}
+	}
+	tableName := stringField(policy, "route_group_table_name", "")
+	if tableName == "" {
+		tableName = "T_" + routeGroupName
+	}
+	if !validPBRTableName(tableName) {
+		return TaskResult{Status: "failed", Error: "route_group_table_name is invalid"}
 	}
 	fwmark := stringField(policy, "fwmark", stringField(policy, "match_mark", "0x2000"))
-	tableID := intField(policy, "table_id")
+	tableID := intField(policy, "route_group_table_id")
 	if tableID == 0 {
-		tableID = 20000
+		tableID = intField(policy, "table_id")
+	}
+	if tableID == 0 {
+		return TaskResult{Status: "failed", Error: "route_group_table_id is required"}
 	}
 	priority := intField(policy, "priority")
 	if priority == 0 {
@@ -1397,23 +1515,22 @@ func applyPBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, paylo
 	if err := writeFile(pbrNFTPath(cfg), []byte(nftContent), 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
+	rtUpdated, err := ensureRTTableEntry(tableID, tableName)
+	if err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	ipRoute := runner.Run(ctx, "ip", "route", "replace", "default", "via", gw, "table", strconv.Itoa(tableID))
+	if ipRoute.Err != nil || ipRoute.ExitCode != 0 {
+		return TaskResult{Status: "failed", Stdout: ipRoute.Stdout, Stderr: ipRoute.Stderr, Error: "ip route replace failed: " + errorText(ipRoute)}
+	}
 	_ = runner.Run(ctx, "ip", "rule", "del", "fwmark", fwmark, "table", strconv.Itoa(tableID), "priority", strconv.Itoa(priority))
 	ipRule := runner.Run(ctx, "ip", "rule", "add", "fwmark", fwmark, "table", strconv.Itoa(tableID), "priority", strconv.Itoa(priority))
 	if ipRule.Err != nil || ipRule.ExitCode != 0 {
 		return TaskResult{Status: "failed", Stdout: ipRule.Stdout, Stderr: ipRule.Stderr, Error: "ip rule add failed: " + errorText(ipRule)}
 	}
-	args := []string{"route", "replace", "default"}
-	if gw != "" {
-		args = append(args, "via", gw)
-	}
-	args = append(args, "dev", iface, "table", strconv.Itoa(tableID))
-	ipRoute := runner.Run(ctx, "ip", args...)
-	if ipRoute.Err != nil || ipRoute.ExitCode != 0 {
-		return TaskResult{Status: "failed", Stdout: ipRoute.Stdout, Stderr: ipRoute.Stderr, Error: "ip route replace failed: " + errorText(ipRoute)}
-	}
 	_ = runner.Run(ctx, "nft", "delete", "table", "ip", "edge_tunnel_pbr")
 	check := runner.Run(ctx, "nft", "-c", "-f", pbrNFTPath(cfg))
-	result := map[string]any{"applied": false, "pbr_path": pbrPolicyPath(cfg, policyID), "nft_path": pbrNFTPath(cfg), "nft_content": nftContent, "table_id": tableID, "fwmark": fwmark, "priority": priority, "egress_interface": iface, "egress_gateway": gw, "ip_rule_output": strings.TrimSpace(ipRule.Stdout + ipRule.Stderr), "ip_route_output": strings.TrimSpace(ipRoute.Stdout + ipRoute.Stderr)}
+	result := map[string]any{"applied": false, "pbr_path": pbrPolicyPath(cfg, policyID), "nft_path": pbrNFTPath(cfg), "nft_content": nftContent, "route_group_name": routeGroupName, "route_group_gateway": gw, "route_group_table_id": tableID, "route_group_table_name": tableName, "route_group_matched_ip": stringField(policy, "route_group_matched_ip", ""), "table_id": tableID, "table_name": tableName, "fwmark": fwmark, "priority": priority, "match_port": matchPort, "rt_tables_updated": rtUpdated, "ip_rule_output": strings.TrimSpace(ipRule.Stdout + ipRule.Stderr), "ip_route_output": strings.TrimSpace(ipRoute.Stdout + ipRoute.Stderr)}
 	if check.Err != nil || check.ExitCode != 0 {
 		result["nft_check_ok"] = false
 		result["nft_check_stderr"] = check.Stderr
@@ -1429,6 +1546,48 @@ func applyPBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, paylo
 	return TaskResult{Status: "succeeded", Result: jsonResult(result)}
 }
 
+func validPBRTableName(value string) bool {
+	if !strings.HasPrefix(value, "T_") {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func ensureRTTableEntry(tableID int, tableName string) (bool, error) {
+	if tableID <= 0 || !validPBRTableName(tableName) {
+		return false, fmt.Errorf("invalid route table")
+	}
+	if err := os.MkdirAll(filepath.Dir(pbrRTTablesPath), 0o755); err != nil {
+		return false, err
+	}
+	raw, err := os.ReadFile(pbrRTTablesPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return false, err
+		}
+		raw = []byte("255 local\n254 main\n253 default\n0 unspec\n")
+	}
+	line := fmt.Sprintf("%d %s", tableID, tableName)
+	for _, existing := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(existing)
+		if len(fields) >= 2 && fields[0] == strconv.Itoa(tableID) && fields[1] == tableName {
+			return false, nil
+		}
+	}
+	text := strings.TrimRight(string(raw), "\n")
+	if text != "" {
+		text += "\n"
+	}
+	text += line + "\n"
+	return true, os.WriteFile(pbrRTTablesPath, []byte(text), 0o644)
+}
+
 func renderPBRNFT(protocol string, matchPort int, fwmark string) string {
 	lines := []string{}
 	for _, proto := range forwardProtocols(protocol) {
@@ -1442,14 +1601,19 @@ func verifyPBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, payl
 	if policy == nil {
 		policy = payload
 	}
-	tableID := intField(policy, "table_id")
+	tableID := intField(policy, "route_group_table_id")
+	if tableID == 0 {
+		tableID = intField(policy, "table_id")
+	}
+	tableName := stringField(policy, "route_group_table_name", "")
 	fwmark := stringField(policy, "fwmark", stringField(policy, "match_mark", ""))
 	ipRule := runner.Run(ctx, "ip", "rule", "show")
 	ipRoute := runner.Run(ctx, "ip", "route", "show", "table", strconv.Itoa(tableID))
 	nft := runner.Run(ctx, "nft", "list", "table", "ip", "edge_tunnel_pbr")
+	rtTablePresent := rtTableEntryPresent(tableID, tableName)
 	out := strings.TrimSpace(ipRule.Stdout + "\n" + ipRoute.Stdout + "\n" + nft.Stdout)
-	verified := strings.Contains(out, fwmark) && strings.Contains(out, strconv.Itoa(tableID)) && strings.Contains(out, "edge_tunnel_pbr")
-	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"rule_present": strings.Contains(ipRule.Stdout, fwmark), "route_present": strings.TrimSpace(ipRoute.Stdout) != "", "nft_present": nft.Err == nil && nft.ExitCode == 0, "mark_present": strings.Contains(out, fwmark), "verified": verified, "ip_rule_output": ipRule.Stdout, "ip_route_output": ipRoute.Stdout, "nft_output": nft.Stdout})}
+	verified := rtTablePresent && strings.Contains(out, fwmark) && strings.Contains(out, strconv.Itoa(tableID)) && strings.Contains(out, "edge_tunnel_pbr")
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"rt_table_present": rtTablePresent, "rule_present": strings.Contains(ipRule.Stdout, fwmark), "route_present": strings.TrimSpace(ipRoute.Stdout) != "", "nft_present": nft.Err == nil && nft.ExitCode == 0, "mark_present": strings.Contains(out, fwmark), "verified": verified, "ip_rule_output": ipRule.Stdout, "ip_route_output": ipRoute.Stdout, "nft_output": nft.Stdout})}
 }
 
 func disablePBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
@@ -1458,11 +1622,35 @@ func disablePBRPolicy(ctx context.Context, cfg Config, runner CommandRunner, pay
 		policy = payload
 	}
 	fwmark := stringField(policy, "fwmark", stringField(policy, "match_mark", "0x2000"))
-	tableID := intField(policy, "table_id")
+	tableID := intField(policy, "route_group_table_id")
+	if tableID == 0 {
+		tableID = intField(policy, "table_id")
+	}
 	priority := intField(policy, "priority")
 	delRule := runner.Run(ctx, "ip", "rule", "del", "fwmark", fwmark, "table", strconv.Itoa(tableID), "priority", strconv.Itoa(priority))
 	delNFT := runner.Run(ctx, "nft", "delete", "table", "ip", "edge_tunnel_pbr")
 	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"disabled": true, "removed_rule": delRule.Err == nil && delRule.ExitCode == 0, "removed_nft": delNFT.Err == nil && delNFT.ExitCode == 0})}
+}
+
+func rtTableEntryPresent(tableID int, tableName string) bool {
+	raw, err := os.ReadFile(pbrRTTablesPath)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if tableID != 0 && fields[0] != strconv.Itoa(tableID) {
+			continue
+		}
+		if tableName != "" && fields[1] != tableName {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func detectMTUStatus(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {

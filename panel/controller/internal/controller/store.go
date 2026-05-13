@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -891,7 +892,7 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 		return Forward{}, errValidation("landing_host must not be CIDR")
 	}
 	if addr, err := netip.ParseAddr(item.LandingHostRaw); err == nil && addr.Is6() {
-		return Forward{}, errValidation("v0.2.9-test does not support IPv6 landing targets")
+		return Forward{}, errValidation("v0.2.10-test does not support IPv6 landing targets")
 	}
 	if item.PublicListenHost == "" {
 		item.PublicListenHost = "0.0.0.0"
@@ -1062,6 +1063,13 @@ func (s *Store) pbrPolicyFromRequestLocked(req map[string]any, existing *PBRPoli
 	}
 	policy.MatchSrcHost = stringValue(req["match_src_host"], policy.MatchSrcHost)
 	policy.MatchMarkComment = stringValue(req["match_mark_comment"], policy.MatchMarkComment)
+	policy.RouteGroupName = stringValue(req["route_group_name"], policy.RouteGroupName)
+	policy.RouteGroupGateway = stringValue(req["route_group_gateway"], policy.RouteGroupGateway)
+	policy.RouteGroupTableName = stringValue(req["route_group_table_name"], policy.RouteGroupTableName)
+	policy.RouteGroupMatchedIP = stringValue(req["route_group_matched_ip"], policy.RouteGroupMatchedIP)
+	if value := intValue(req["route_group_table_id"]); value != 0 {
+		policy.RouteGroupTableID = value
+	}
 	policy.EgressInterface = stringValue(req["egress_interface"], stringValue(req["out_interface"], policy.EgressInterface))
 	policy.EgressGateway = stringValue(req["egress_gateway"], stringValue(req["gateway"], policy.EgressGateway))
 	policy.EgressSourceIP = stringValue(req["egress_source_ip"], policy.EgressSourceIP)
@@ -1115,11 +1123,35 @@ func (s *Store) pbrPolicyFromRequestLocked(req map[string]any, existing *PBRPoli
 	if policy.Name == "" {
 		policy.Name = "pbr-" + policy.NodeID
 	}
-	if policy.EgressInterface == "" {
-		return PBRPolicy{}, errValidation("egress_interface is required")
-	}
 	if policy.SourceType == "forward" && policy.ForwardRuleID == "" {
 		return PBRPolicy{}, errValidation("forward_rule_id is required for forward source")
+	}
+	if policy.SourceType == "forward" {
+		forward, found := findForwardLocked(s.data.Forwards, policy.ForwardRuleID)
+		if !found {
+			return PBRPolicy{}, errValidation("forward_rule_id not found")
+		}
+		if forward.LandingNodeID != policy.NodeID {
+			return PBRPolicy{}, errValidation("PBR must be applied on the forward rule landing node")
+		}
+	}
+	if policy.RouteGroupName == "" {
+		return PBRPolicy{}, errValidation("route_group_name is required")
+	}
+	if policy.RouteGroupGateway == "" {
+		return PBRPolicy{}, errValidation("route_group_gateway is required")
+	}
+	if ip := net.ParseIP(policy.RouteGroupGateway); ip == nil || ip.To4() == nil {
+		return PBRPolicy{}, errValidation("route_group_gateway must be IPv4")
+	}
+	if policy.RouteGroupTableID == 0 {
+		return PBRPolicy{}, errValidation("route_group_table_id is required")
+	}
+	if policy.RouteGroupTableName == "" {
+		policy.RouteGroupTableName = "T_" + policy.RouteGroupName
+	}
+	if !validRouteTableName(policy.RouteGroupTableName) {
+		return PBRPolicy{}, errValidation("route_group_table_name must start with T_ and contain only letters, numbers, underscore, or dash")
 	}
 	if !validForwardProtocol(policy.Protocol) {
 		return PBRPolicy{}, errValidation("protocol must be tcp, udp, or both")
@@ -1131,7 +1163,7 @@ func (s *Store) pbrPolicyFromRequestLocked(req map[string]any, existing *PBRPoli
 		return PBRPolicy{}, errValidation("match_dst_port must be 1-65535")
 	}
 	if policy.TableID == 0 {
-		policy.TableID = nextPBRNumberLocked(s.data.PBRPolicies, 20000, func(p PBRPolicy) int { return p.TableID })
+		policy.TableID = policy.RouteGroupTableID
 	}
 	if policy.Priority == 0 {
 		policy.Priority = nextPBRNumberLocked(s.data.PBRPolicies, 20000, func(p PBRPolicy) int { return p.Priority })
@@ -1143,9 +1175,23 @@ func (s *Store) pbrPolicyFromRequestLocked(req map[string]any, existing *PBRPoli
 	policy.MatchDst = policy.MatchDstHost
 	policy.MatchProtocol = policy.Protocol
 	policy.MatchMark = policy.FWMark
-	policy.Gateway = policy.EgressGateway
+	policy.EgressGateway = policy.RouteGroupGateway
+	policy.Gateway = policy.RouteGroupGateway
 	policy.OutInterface = policy.EgressInterface
 	return policy, nil
+}
+
+func validRouteTableName(value string) bool {
+	if !strings.HasPrefix(value, "T_") {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func findForwardLocked(forwards []Forward, id string) (Forward, bool) {

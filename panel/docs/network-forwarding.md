@@ -1,6 +1,6 @@
-﻿# Network Forwarding
+# Network Forwarding
 
-v0.2.9-test 的转发链路：
+v0.2.10-test 的转发链路：
 
 ```text
 外部客户端
@@ -46,7 +46,7 @@ v0.2.8-test 起模板使用 `table ip`、numeric priority 和 `dnat to IP:PORT`�
 
 ## MSS clamp
 
-v0.2.9-test 默认启用 MSS clamp，单独渲染到：
+v0.2.10-test 默认启用 MSS clamp，单独渲染到：
 
 ```bash
 nft list table ip edge_tunnel_mss

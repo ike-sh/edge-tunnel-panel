@@ -1,4 +1,4 @@
-﻿# Topology
+# Topology
 
 ## 组网
 
@@ -22,4 +22,4 @@ A 公网入口节点
 
 ## PBR
 
-PBR 作用在 B 节点上，用于给转发流量打 mark，并通过指定 route table 选择出口接口或网关。
+PBR 作用在 B 节点上，用于给转发流量打 mark，并通过自动识别到的线路组 route table 选择出口线路。
