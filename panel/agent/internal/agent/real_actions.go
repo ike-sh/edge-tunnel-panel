@@ -218,19 +218,39 @@ func verifyFile(path string) TaskResult {
 
 func verifyEasyTier(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
 	binary, err := findEasyTierCore(runner)
+	status := map[string]any{
+		"config_path":    easyTierPath(cfg),
+		"service_path":   easyTierServiceSystemPath(),
+		"binary_exists":  err == nil,
+		"config_exists":  false,
+		"service_exists": false,
+		"cli_exists":     false,
+	}
 	if err != nil {
-		return TaskResult{Status: "failed", Result: `{"easytier_status":"missing_binary"}`, Error: "easytier-core not found"}
+		status["easytier_status"] = "missing_binary"
+		return TaskResult{Status: "failed", Result: jsonResult(status), Error: "easytier-core not found"}
 	}
+	status["binary_path"] = binary
 	if _, err := os.Stat(easyTierPath(cfg)); err != nil {
-		return TaskResult{Status: "failed", Result: `{"easytier_status":"missing_config"}`, Error: err.Error()}
+		status["easytier_status"] = "missing_config"
+		return TaskResult{Status: "failed", Result: jsonResult(status), Error: err.Error()}
 	}
+	status["config_exists"] = true
 	if _, err := os.Stat(easyTierServiceSystemPath()); err != nil {
-		return TaskResult{Status: "failed", Result: `{"easytier_status":"service_missing"}`, Error: err.Error()}
+		status["easytier_status"] = "service_missing"
+		return TaskResult{Status: "failed", Result: jsonResult(status), Error: err.Error()}
 	}
+	status["service_exists"] = true
 	version := runner.Run(ctx, binary, "--version")
+	enabled := runner.Run(ctx, "systemctl", "is-enabled", "edge-tunnel-easytier.service")
 	active := runner.Run(ctx, "systemctl", "is-active", "edge-tunnel-easytier.service")
-	status := map[string]any{"easytier_status": "active", "binary_path": binary, "version": strings.TrimSpace(version.Stdout + version.Stderr), "service_active": true}
+	status["easytier_status"] = "active"
+	status["binary_version"] = strings.TrimSpace(version.Stdout + version.Stderr)
+	status["version"] = status["binary_version"]
+	status["service_enabled"] = enabled.Err == nil && enabled.ExitCode == 0
+	status["service_active"] = true
 	if cli, err := findEasyTierCLI(runner); err == nil {
+		status["cli_exists"] = true
 		status["cli_path"] = cli
 		status["node_info"] = strings.TrimSpace(runner.Run(ctx, cli, "node").Stdout)
 		status["peer_info"] = strings.TrimSpace(runner.Run(ctx, cli, "peer").Stdout)
@@ -242,6 +262,25 @@ func verifyEasyTier(ctx context.Context, cfg Config, runner CommandRunner) TaskR
 		return TaskResult{Status: "failed", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(status), Error: errorText(active)}
 	}
 	return TaskResult{Status: "succeeded", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(status)}
+}
+
+func restartEasyTier(ctx context.Context, runner CommandRunner) TaskResult {
+	result := runner.Run(ctx, "systemctl", "restart", "edge-tunnel-easytier.service")
+	active := runner.Run(ctx, "systemctl", "is-active", "edge-tunnel-easytier.service")
+	if result.Err != nil || result.ExitCode != 0 || active.Err != nil || active.ExitCode != 0 {
+		errorSource := result
+		if result.Err == nil && result.ExitCode == 0 {
+			errorSource = active
+		}
+		return TaskResult{
+			Status: "failed",
+			Stdout: strings.TrimSpace(result.Stdout + "\n" + active.Stdout),
+			Stderr: strings.TrimSpace(result.Stderr + "\n" + active.Stderr),
+			Error:  errorText(errorSource),
+			Result: "systemctl status edge-tunnel-easytier --no-pager\njournalctl -u edge-tunnel-easytier -n 100 --no-pager\nsystemctl is-active edge-tunnel-easytier.service",
+		}
+	}
+	return TaskResult{Status: "succeeded", Stdout: result.Stdout, Stderr: result.Stderr, Result: strings.TrimSpace(active.Stdout)}
 }
 
 func verifyPBR(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {

@@ -43,7 +43,7 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 	case "reload_firewall_rules":
 		return runFixed(ctx, runner, "nft", "-f", forwardNFTPath(cfg))
 	case "restart_easytier":
-		return runFixed(ctx, runner, "systemctl", "restart", "edge-tunnel-easytier.service")
+		return restartEasyTier(ctx, runner)
 	case "restart_agent":
 		return runFixed(ctx, runner, "systemctl", "restart", "edge-tunnel-agent.service")
 	case "reboot_node":

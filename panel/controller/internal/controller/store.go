@@ -134,6 +134,18 @@ func (s *Store) upsertReport(node Node) (Node, error) {
 	return node, s.saveLocked()
 }
 
+func (s *Store) deleteNode(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Nodes {
+		if s.data.Nodes[i].ID == id {
+			s.data.Nodes = append(s.data.Nodes[:i], s.data.Nodes[i+1:]...)
+			return true, s.saveLocked()
+		}
+	}
+	return false, nil
+}
+
 func (s *Store) createTask(t Task) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -153,6 +165,22 @@ func (s *Store) tasksForNode(nodeID string) []Task {
 		if t.NodeID == nodeID && t.Status == "pending" {
 			out = append(out, t)
 		}
+	}
+	return out
+}
+
+func (s *Store) listTasks(nodeID, status string) []Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []Task{}
+	for _, task := range s.data.Tasks {
+		if nodeID != "" && task.NodeID != nodeID {
+			continue
+		}
+		if status != "" && status != "all" && task.Status != status {
+			continue
+		}
+		out = append(out, task)
 	}
 	return out
 }

@@ -27,16 +27,19 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-VERSION=v0.1.8-test bash panel/scripts/build-release.sh
+VERSION=v0.1.9-test bash panel/scripts/build-release.sh
 ```
 
-## v0.1.8-test 重点
+## v0.1.9-test 重点
 
 - HTTP 环境下复制命令使用 clipboard fallback。
 - EasyTier 安装前检查磁盘空间。
 - EasyTier 安装优先使用 Agent 状态目录下的临时目录。
 - 新增只读 action：`run_node_preflight`。
 - 任务页对空间不足错误给出中文提示。
+- 节点支持从主控面板删除记录。
+- 任务页支持按节点和状态筛选。
+- Agent purge 会清理 EasyTier service/config，可选删除 EasyTier 二进制。
 
 ## 后续规划
 

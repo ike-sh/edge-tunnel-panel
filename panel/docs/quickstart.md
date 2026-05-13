@@ -4,7 +4,7 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.8-test
+  --version v0.1.9-test
 ```
 
 打开 `http://服务器IP:18080`。
@@ -27,3 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 ## 节点预检
 
 节点上线后可在“节点”页面打开“节点操作”，先执行“节点预检”。预检会检查 root、磁盘空间、系统命令、EasyTier 二进制、systemd 目录和 Controller 连通性。
+
+## 删除测试节点
+
+节点卡片的“危险操作”里可以删除节点记录。这个操作只删除主控面板记录，不会卸载远端 Agent。需要卸载时请到对应服务器执行 `install-agent.sh --purge`。

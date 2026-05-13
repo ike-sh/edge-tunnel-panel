@@ -55,3 +55,13 @@ journalctl --vacuum-size=100M
 apt clean
 rm -rf /tmp/edge-easytier-*
 ```
+
+## Agent purge
+
+`install-agent.sh --purge` 会停止并删除 `edge-tunnel-agent.service`，同时清理 `edge-tunnel-easytier.service` 和 Agent 写入的 EasyTier 配置。默认不会删除 `/usr/local/bin/easytier-core` 与 `/usr/local/bin/easytier-cli`。
+
+如需同时删除 EasyTier 二进制：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge --remove-easytier-binaries
+```

@@ -112,6 +112,11 @@ button.warning {
   border-color: rgba(245, 158, 11, 0.45);
 }
 
+button.danger {
+  background: #991b1b;
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
 .alert {
   margin: 12px 0 18px;
   padding: 12px 14px;
@@ -317,6 +322,11 @@ textarea {
   margin: 12px 0 8px;
 }
 
+.action-panel .inline button {
+  min-width: 150px;
+  justify-content: center;
+}
+
 .warning-text {
   color: #fed7aa;
 }
@@ -390,6 +400,14 @@ pre.small {
 .task-output {
   white-space: pre;
   overflow-x: auto;
+}
+
+.task-kv {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 details summary {

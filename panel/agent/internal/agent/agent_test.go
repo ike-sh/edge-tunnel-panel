@@ -25,6 +25,19 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) Comma
 	return CommandResult{Stdout: "ok", ExitCode: 0}
 }
 
+type failingRunner struct {
+	fakeRunner
+	failName string
+}
+
+func (f *failingRunner) Run(ctx context.Context, name string, args ...string) CommandResult {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	if name == f.failName {
+		return CommandResult{Stderr: "failed", ExitCode: 1}
+	}
+	return CommandResult{Stdout: "ok", ExitCode: 0}
+}
+
 func (f *fakeRunner) LookPath(name string) (string, error) {
 	if f.paths != nil && f.paths[name] {
 		return "/usr/bin/" + name, nil
@@ -622,6 +635,27 @@ func createEasyTierArchiveWithFiles(t *testing.T, files []string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestRestartEasyTierErrorIncludesTroubleshooting(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	result := ExecuteTask(context.Background(), cfg, &failingRunner{failName: "systemctl"}, Task{Action: "restart_easytier", Payload: map[string]any{}})
+	if result.Status != "failed" || !strings.Contains(result.Result, "journalctl -u edge-tunnel-easytier") || !strings.Contains(result.Result, "systemctl is-active") {
+		t.Fatalf("expected troubleshooting details: %+v", result)
+	}
+}
+
+func TestVerifyEasyTierStatusDetailedFields(t *testing.T) {
+	cfg := testConfig(t)
+	_ = writeFile(easyTierPath(cfg), []byte("network_name = \"edge\""), 0o600)
+	_ = writeFile(easyTierServiceSystemPath(), []byte("service"), 0o644)
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true}}, Task{Action: "verify_easytier_status", Payload: map[string]any{}})
+	for _, want := range []string{"service_exists", "service_enabled", "service_active", "config_exists", "binary_exists", "cli_exists", "binary_version", "config_path", "service_path"} {
+		if !strings.Contains(result.Result, want) {
+			t.Fatalf("verify result missing %s: %s", want, result.Result)
+		}
+	}
 }
 
 func TestClientRegisterReportTasksResult(t *testing.T) {

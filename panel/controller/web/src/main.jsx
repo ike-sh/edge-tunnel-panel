@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.8-test';
+const DEFAULT_VERSION = 'v0.1.9-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -128,6 +128,16 @@ function trStatus(status) {
   return statusText[status] || status || '-';
 }
 
+function shortID(value) {
+  return String(value || '-').slice(0, 16);
+}
+
+function taskNodeLabel(task, nodes) {
+  const node = nodes.find((item) => item.id === task.node_id);
+  if (!node) return task.node_id || '-';
+  return `${node.name || node.id} / ${shortID(node.id)}`;
+}
+
 async function copyText(text) {
   if (!text) return false;
   if (navigator.clipboard?.writeText) {
@@ -173,6 +183,7 @@ function App() {
   const [pbrPolicies, setPbrPolicies] = useState([]);
   const [ddnsProfiles, setDdnsProfiles] = useState([]);
   const [taskFilter, setTaskFilter] = useState('all');
+  const [taskNodeFilter, setTaskNodeFilter] = useState('all');
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [openNodeActions, setOpenNodeActions] = useState('');
 
@@ -389,6 +400,15 @@ function App() {
     });
   }
 
+  async function deleteNode(node) {
+    const ok = window.confirm('仅删除主控面板中的节点记录，不会连接远端服务器，也不会卸载 Agent。\n如需卸载 Agent，请到对应服务器执行 install-agent.sh --purge。\n确认删除？');
+    if (!ok) return;
+    await run('删除节点记录', async () => {
+      await api(`/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' });
+      await refreshNodes();
+    });
+  }
+
   async function generateAgentCommand() {
     const data = await run('生成一键命令', async () =>
       api('/bootstrap/agent-install-command', {
@@ -602,7 +622,7 @@ function App() {
                   ['主机名', node.hostname],
                   ['公网 IP', node.public_ip],
                   ['内网 IP', node.private_ip],
-                  ['EasyTier IP', node.easytier_ip],
+                  ['EasyTier IP', node.easytier_ip || (node.easytier_status === 'active' ? '待发现' : '-')],
                   ['EasyTier 状态', trStatus(node.easytier_status)],
                   ['最后上报', formatTime(node.last_seen_at)]
                 ]} />
@@ -614,6 +634,8 @@ function App() {
                   <h4>写入/维护</h4>
                   <div className="inline">{maintenanceActions.map((action) => <button key={action} className="warning" title={action} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}</div>
                   <p className="muted warning-text">这些操作会修改节点服务状态，请只在可信节点执行。</p>
+                  <h4>危险操作</h4>
+                  <div className="inline"><button className="danger" onClick={() => deleteNode(node)}>删除节点记录</button></div>
                 </div>}
               </div>
             ))}
@@ -674,6 +696,9 @@ function App() {
     return (
       <>
         <Card title={editingNetworkId ? '编辑组网配置' : '创建组网配置'}>
+          <div className="alert">
+            <strong>应用提示：</strong>入口节点 listeners 保持默认、peers 留空；后端节点 peers 填入口公网地址，例如 tcp://入口公网IP:11010 和 udp://入口公网IP:11010。应用后到任务页按节点筛选查看结果，并在服务器检查 systemctl status edge-tunnel-easytier --no-pager。
+          </div>
           <form onSubmit={createNetworkProfile} className="grid five form-grid">
             <Field label="名称" value={networkForm.name} onChange={(value) => setNetworkForm({ ...networkForm, name: value })} required />
             <Field label="网络名" value={networkForm.network_name} onChange={(value) => setNetworkForm({ ...networkForm, network_name: value })} />
@@ -784,10 +809,21 @@ function App() {
   }
 
   function renderTasks() {
-    const visibleTasks = taskFilter === 'all' ? tasks : tasks.filter((task) => task.status === taskFilter);
+    const visibleTasks = tasks.filter((task) => {
+      const statusOK = taskFilter === 'all' || task.status === taskFilter;
+      const nodeOK = taskNodeFilter === 'all' || task.node_id === taskNodeFilter;
+      return statusOK && nodeOK;
+    });
     return (
-      <Card title="任务" action={<div className="inline"><select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>{taskStatuses.map((status) => <option key={status} value={status}>{trStatus(status)}</option>)}</select><button onClick={() => run('刷新任务', refreshTasks)}>刷新</button></div>}>
-        <TaskTable tasks={visibleTasks} onCopy={copyOutput} />
+      <Card title="任务" action={<div className="inline">
+        <select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>{taskStatuses.map((status) => <option key={status} value={status}>{trStatus(status)}</option>)}</select>
+        <select value={taskNodeFilter} onChange={(event) => setTaskNodeFilter(event.target.value)}>
+          <option value="all">全部节点</option>
+          {nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id}{nodes.filter((item) => item.name === node.name).length > 1 ? ` / ${shortID(node.id)}` : ''}</option>)}
+        </select>
+        <button onClick={() => run('刷新任务', refreshTasks)}>刷新</button>
+      </div>}>
+        <TaskTable tasks={visibleTasks} nodes={nodes} onCopy={copyOutput} />
       </Card>
     );
   }
@@ -857,12 +893,48 @@ function Field({ label, value, onChange, type = 'text', required = false }) {
 }
 
 function TaskOutput({ task, onCopy }) {
-  const content = formatOutput(task.error || task.result || task.stderr || task.stdout);
+  const payload = formatOutput(task.payload || {});
+  const result = formatOutput(task.result);
+  const stdout = formatOutput(task.stdout);
+  const stderr = formatOutput(task.stderr);
+  const error = formatOutput(task.error);
+  const content = [error, result, stdout, stderr].filter((item) => item && item !== '-').join('\n\n') || '-';
   const noSpace = /no space left on device|磁盘空间不足/i.test(content);
+  const parsedResult = (() => { try { return JSON.parse(task.result || '{}'); } catch { return {}; } })();
   const body = <>
     {noSpace && <div className="alert error">磁盘空间不足，请清理磁盘或调整临时目录。</div>}
     {onCopy && <button className="secondary mini" onClick={() => onCopy(content)}>复制输出</button>}
-    <pre className="small task-output">{content}</pre>
+    {task.action === 'apply_network_profile' && <div className="task-kv">
+      <span>config_path：{parsedResult.config_path || '-'}</span>
+      <span>service_path：{parsedResult.service_path || '-'}</span>
+      <span>binary_path：{parsedResult.binary_path || '-'}</span>
+      <span>easytier_status：{parsedResult.easytier_status || '-'}</span>
+      <span>listeners：{(parsedResult.listeners || []).join(', ') || '-'}</span>
+      <span>peers：{(parsedResult.peers || []).join(', ') || '-'}</span>
+    </div>}
+    <pre className="small task-output">{`task id: ${task.id}
+node id: ${task.node_id || '-'}
+action: ${task.action}
+action label: ${actionText[task.action] || task.action}
+status: ${task.status}
+created_at: ${task.created_at || '-'}
+started_at: ${task.started_at || '-'}
+finished_at: ${task.finished_at || '-'}
+
+payload:
+${payload}
+
+result:
+${result}
+
+stdout:
+${stdout}
+
+stderr:
+${stderr}
+
+error:
+${error}`}</pre>
   </>;
   if (task.status === 'failed') {
     return <details open><summary>查看错误</summary>{body}</details>;
@@ -896,13 +968,13 @@ function ListCard({ title, items, fields, refresh, apply }) {
   );
 }
 
-function TaskTable({ tasks, compact = false, onCopy }) {
+function TaskTable({ tasks, compact = false, nodes = [], onCopy }) {
   if (!tasks.length) return <p className="muted">暂无任务。</p>;
   return (
     <div className="table-wrap">
       <table>
         <thead><tr><th>ID</th><th>节点</th><th>action</th><th>状态</th><th>创建时间</th>{!compact && <th>开始</th>}{!compact && <th>完成</th>}{!compact && <th>输出</th>}</tr></thead>
-        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{task.node_id || '-'}</td><td title={task.action}>{actionText[task.action] || task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><TaskOutput task={task} onCopy={onCopy} /></td>}</tr>)}</tbody>
+        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{taskNodeLabel(task, nodes)}</td><td title={task.action}>{actionText[task.action] || task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><TaskOutput task={task} onCopy={onCopy} /></td>}</tr>)}</tbody>
       </table>
     </div>
   );

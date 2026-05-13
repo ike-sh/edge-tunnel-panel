@@ -71,6 +71,16 @@ func get(t *testing.T, h http.Handler, path, token string) *httptest.ResponseRec
 	return rr
 }
 
+func deleteReq(t *testing.T, h http.Handler, path, token string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodDelete, path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
 func postFromRemote(t *testing.T, h http.Handler, path, token, remoteAddr string, body any) *httptest.ResponseRecorder {
 	raw, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
@@ -154,14 +164,47 @@ func TestReportDoesNotOverwritePrivateIPWithPublicIP(t *testing.T) {
 	}
 }
 
+func TestDeleteNode(t *testing.T) {
+	h := testServer(t)
+	if rr := post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-delete", "node_name": "edge-node"}); rr.Code != 200 {
+		t.Fatalf("register failed: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := deleteReq(t, h, "/api/v1/nodes/node-delete", "operator-token"); rr.Code != 200 {
+		t.Fatalf("delete failed: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := get(t, h, "/api/v1/nodes/node-delete", "operator-token"); rr.Code != 404 {
+		t.Fatalf("expected deleted node 404, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDeleteMissingNodeReturns404(t *testing.T) {
+	if rr := deleteReq(t, testServer(t), "/api/v1/nodes/missing", "operator-token"); rr.Code != 404 {
+		t.Fatalf("expected 404, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDeleteNodeDoesNotDeleteTasks(t *testing.T) {
+	h := testServer(t)
+	_ = post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-with-task", "node_name": "edge-node"})
+	created := post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "node-with-task", "action": "collect_agent_status", "payload": map[string]any{}})
+	if created.Code != 200 {
+		t.Fatalf("task create failed: %d %s", created.Code, created.Body.String())
+	}
+	_ = deleteReq(t, h, "/api/v1/nodes/node-with-task", "operator-token")
+	tasks := get(t, h, "/api/v1/tasks?node_id=node-with-task", "operator-token")
+	if tasks.Code != 200 || !strings.Contains(tasks.Body.String(), "collect_agent_status") {
+		t.Fatalf("task history should remain: %d %s", tasks.Code, tasks.Body.String())
+	}
+}
+
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.8-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.9-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.1.8-test") ||
+		!strings.Contains(body, "--version v0.1.9-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||
@@ -215,6 +258,17 @@ func TestTaskCreateListAndResult(t *testing.T) {
 	result := post(t, h, "/api/v1/agent/tasks/"+task.ID+"/result", "agent-token", map[string]any{"status": "succeeded", "result_stdout": "ok"})
 	if result.Code != 200 || !strings.Contains(result.Body.String(), "succeeded") {
 		t.Fatalf("task result failed: %d %s", result.Code, result.Body.String())
+	}
+}
+
+func TestListTasksByNodeID(t *testing.T) {
+	h := testServer(t)
+	_ = post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "node-a", "action": "collect_agent_status", "payload": map[string]any{}})
+	_ = post(t, h, "/api/v1/tasks", "operator-token", map[string]any{"node_id": "node-b", "action": "collect_agent_status", "payload": map[string]any{}})
+	rr := get(t, h, "/api/v1/tasks?node_id=node-a", "operator-token")
+	body := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(body, "node-a") || strings.Contains(body, "node-b") {
+		t.Fatalf("bad filtered tasks: %d %s", rr.Code, body)
 	}
 }
 

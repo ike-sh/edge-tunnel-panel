@@ -2,7 +2,7 @@
 
 ## 组网配置
 
-`v0.1.8-test` 已支持把组网配置下发到节点：
+`v0.1.9-test` 已支持把组网配置下发到节点：
 
 - Controller 创建 `apply_network_profile` 任务。
 - 任务 payload 包含完整 `network_profile` 和目标 `node`。

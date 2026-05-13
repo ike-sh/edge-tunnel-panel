@@ -240,6 +240,37 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/v1/nodes/") {
+		id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/nodes/"), "/")
+		if id == "" {
+			writeErr(w, 404, "NOT_FOUND", "node not found")
+			return
+		}
+		if r.Method == http.MethodDelete {
+			deleted, err := s.store.deleteNode(id)
+			if err != nil {
+				writeErr(w, 500, "STORE_ERROR", err.Error())
+				return
+			}
+			if !deleted {
+				writeErr(w, 404, "NOT_FOUND", "node not found")
+				return
+			}
+			writeOK(w, 200, map[string]any{"deleted": true, "id": id})
+			return
+		}
+		if r.Method == http.MethodGet {
+			node, found := s.store.getNode(id)
+			if !found {
+				writeErr(w, 404, "NOT_FOUND", "node not found")
+				return
+			}
+			writeOK(w, 200, node)
+			return
+		}
+		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
 	writeOK(w, 200, s.store.listNodes())
 }
 func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
@@ -463,6 +494,10 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if r.Method == http.MethodGet {
+		if kind == "tasks" {
+			writeOK(w, 200, s.store.listTasks(r.URL.Query().Get("node_id"), r.URL.Query().Get("status")))
+			return
+		}
 		s.store.mu.Lock()
 		defer s.store.mu.Unlock()
 		switch kind {
@@ -472,8 +507,6 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 			writeOK(w, 200, s.store.data.Forwards)
 		case "pbr-policies":
 			writeOK(w, 200, s.store.data.PBRPolicies)
-		case "tasks":
-			writeOK(w, 200, s.store.data.Tasks)
 		}
 		return
 	}

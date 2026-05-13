@@ -18,6 +18,7 @@ SOURCE_BUILD=false
 NO_START=false
 UNINSTALL=false
 PURGE=false
+REMOVE_EASYTIER_BINARIES=false
 
 usage() {
   cat <<'USAGE'
@@ -39,6 +40,7 @@ Options:
   --no-start                    Do not start service after install
   --uninstall                   卸载 Agent 服务和二进制，保留配置、状态和日志
   --purge                       彻底删除 Agent 服务、二进制、配置、状态和日志
+  --remove-easytier-binaries    配合 --purge 删除 easytier-core 和 easytier-cli
   -h, --help                    Show help
 USAGE
 }
@@ -114,6 +116,22 @@ uninstall_agent() {
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl reset-failed edge-tunnel-agent.service >/dev/null 2>&1 || true
   if [ "$PURGE" = true ]; then
+    systemctl stop edge-tunnel-easytier.service >/dev/null 2>&1 || true
+    systemctl disable edge-tunnel-easytier.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/edge-tunnel-easytier.service
+    rm -rf "$CONFIG_DIR/systemd"
+    rm -f "$CONFIG_DIR/easytier.toml" "$CONFIG_DIR/network-profile.json"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl reset-failed edge-tunnel-easytier.service >/dev/null 2>&1 || true
+    log "已停止 EasyTier 服务"
+    log "已删除 EasyTier systemd service"
+    log "已删除 EasyTier 配置"
+    if [ "$REMOVE_EASYTIER_BINARIES" = true ]; then
+      rm -f /usr/local/bin/easytier-core /usr/local/bin/easytier-cli
+      log "已删除 easytier-core/easytier-cli"
+    else
+      log "如需删除 easytier-core/easytier-cli，请使用 --remove-easytier-binaries"
+    fi
     rm -rf "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
     rmdir /etc/edge-tunnel >/dev/null 2>&1 || true
     rmdir /var/lib/edge-tunnel >/dev/null 2>&1 || true
@@ -275,6 +293,7 @@ while [ "$#" -gt 0 ]; do
     --no-start) NO_START=true; shift ;;
     --uninstall) UNINSTALL=true; shift ;;
     --purge) PURGE=true; UNINSTALL=true; shift ;;
+    --remove-easytier-binaries) REMOVE_EASYTIER_BINARIES=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown option: $1" ;;
   esac
