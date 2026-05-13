@@ -250,7 +250,7 @@ func (s *Store) updateTaskResult(id string, req map[string]any) (Task, bool, err
 			t.Stderr = capText(stringValue(req["stderr"], stringValue(req["result_stderr"], "")))
 			t.Error = capText(stringValue(req["error"], ""))
 			switch t.Action {
-			case "apply_forward_config", "verify_forward_rules":
+			case "apply_forward_config", "apply_entry_forward_config", "apply_landing_forward_config", "verify_forward_rules", "verify_entry_forward_rules", "verify_landing_forward_rules":
 				s.updateForwardStatusForTaskLocked(*t)
 			case "verify_network_connectivity":
 				s.updateNetworkLinkStatusForTaskLocked(*t)
@@ -266,21 +266,57 @@ func (s *Store) updateForwardStatusForTaskLocked(task Task) {
 	if forwardID == "" {
 		return
 	}
-	status := "failed"
-	if task.Status == "succeeded" && task.Action == "apply_forward_config" {
-		status = "applied"
-	} else if task.Status == "succeeded" && task.Action == "verify_forward_rules" {
-		status = "verified"
-	}
 	for i := range s.data.Forwards {
 		if s.data.Forwards[i].ID != forwardID {
 			continue
 		}
-		s.data.Forwards[i].Status = status
-		if task.Action == "verify_forward_rules" {
-			s.data.Forwards[i].LastVerifyTaskID = task.ID
-		} else {
+		stage := stringValue(task.Payload["stage"], "")
+		if task.Action == "apply_entry_forward_config" || stage == "entry" {
+			if task.Status == "succeeded" {
+				s.data.Forwards[i].EntryStageStatus = "succeeded"
+			} else {
+				s.data.Forwards[i].EntryStageStatus = "failed"
+			}
+			s.data.Forwards[i].LastApplyEntryTaskID = task.ID
 			s.data.Forwards[i].LastApplyTaskID = task.ID
+		} else if task.Action == "apply_landing_forward_config" || stage == "landing" {
+			if task.Status == "succeeded" {
+				s.data.Forwards[i].LandingStageStatus = "succeeded"
+			} else {
+				s.data.Forwards[i].LandingStageStatus = "failed"
+			}
+			s.data.Forwards[i].LastApplyLandingTaskID = task.ID
+			s.data.Forwards[i].LastApplyTaskID = task.ID
+		} else if strings.HasPrefix(task.Action, "verify_") {
+			s.data.Forwards[i].LastVerifyTaskID = task.ID
+			if task.Status == "succeeded" {
+				s.data.Forwards[i].Status = "verified"
+			} else {
+				s.data.Forwards[i].Status = "failed"
+			}
+		} else if task.Action == "apply_forward_config" {
+			if task.Status == "succeeded" {
+				s.data.Forwards[i].EntryStageStatus = "succeeded"
+				s.data.Forwards[i].LandingStageStatus = "succeeded"
+				s.data.Forwards[i].Status = "applied"
+			} else {
+				s.data.Forwards[i].Status = "failed"
+			}
+			s.data.Forwards[i].LastApplyTaskID = task.ID
+		}
+		if task.Action == "apply_entry_forward_config" || task.Action == "apply_landing_forward_config" {
+			entryOK := s.data.Forwards[i].EntryStageStatus == "succeeded"
+			landingOK := s.data.Forwards[i].LandingStageStatus == "succeeded"
+			entryFailed := s.data.Forwards[i].EntryStageStatus == "failed"
+			landingFailed := s.data.Forwards[i].LandingStageStatus == "failed"
+			switch {
+			case entryOK && landingOK:
+				s.data.Forwards[i].Status = "applied"
+			case entryFailed || landingFailed:
+				s.data.Forwards[i].Status = "failed"
+			default:
+				s.data.Forwards[i].Status = "applying"
+			}
 		}
 		s.data.Forwards[i].UpdatedAt = now()
 		return
@@ -430,6 +466,12 @@ func (s *Store) updateForwardTask(id, taskID, field, status string) (Forward, bo
 		switch field {
 		case "apply":
 			s.data.Forwards[i].LastApplyTaskID = taskID
+		case "entry_apply":
+			s.data.Forwards[i].LastApplyEntryTaskID = taskID
+			s.data.Forwards[i].EntryStageStatus = "pending"
+		case "landing_apply":
+			s.data.Forwards[i].LastApplyLandingTaskID = taskID
+			s.data.Forwards[i].LandingStageStatus = "pending"
 		case "verify":
 			s.data.Forwards[i].LastVerifyTaskID = taskID
 		}
@@ -452,6 +494,7 @@ func (s *Store) updateForwardResolvedTarget(id, target string) (Forward, bool, e
 		}
 		s.data.Forwards[i].TargetIP = target
 		s.data.Forwards[i].TargetHost = target
+		s.data.Forwards[i].TunnelTargetHost = target
 		s.data.Forwards[i].UpdatedAt = now()
 		return s.data.Forwards[i], true, s.saveLocked()
 	}
@@ -710,7 +753,7 @@ func firstStringList(values ...[]string) []string {
 }
 
 func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) {
-	item := Forward{Enabled: true, Protocol: "tcp", ListenHost: "0.0.0.0", TargetHostSource: "backend_easytier_ip", TargetNodeIPSource: "easytier_ip", Status: "draft"}
+	item := Forward{Enabled: true, Protocol: "tcp", PublicListenHost: "0.0.0.0", ListenHost: "0.0.0.0", TransportMode: "easytier", Status: "draft"}
 	if existing != nil {
 		item = *existing
 	}
@@ -720,29 +763,41 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 	}
 	item.EntryID = stringValue(req["entry_id"], item.EntryID)
 	item.EntryNodeID = stringValue(req["entry_node_id"], item.EntryNodeID)
-	item.BackendNodeID = stringValue(req["backend_node_id"], stringValue(req["target_node_id"], item.BackendNodeID))
+	item.LandingNodeID = stringValue(req["landing_node_id"], stringValue(req["backend_node_id"], stringValue(req["target_node_id"], item.LandingNodeID)))
+	item.BackendNodeID = item.LandingNodeID
 	item.Protocol = strings.ToLower(stringValue(req["protocol"], item.Protocol))
-	item.ListenHost = stringValue(req["listen_host"], item.ListenHost)
-	if port := intValue(req["listen_port"]); port != 0 {
-		item.ListenPort = port
+	item.PublicListenHost = stringValue(req["public_listen_host"], stringValue(req["listen_host"], item.PublicListenHost))
+	item.ListenHost = item.PublicListenHost
+	if port := intValue(req["public_listen_port"]); port != 0 {
+		item.PublicListenPort = port
+	} else if port := intValue(req["listen_port"]); port != 0 {
+		item.PublicListenPort = port
 	}
-	item.TargetHostSource = normalizeTargetHostSource(stringValue(req["target_host_source"], stringValue(req["target_node_ip_source"], item.TargetHostSource)))
-	item.ManualTargetHost = stringValue(req["manual_target_host"], item.ManualTargetHost)
-	item.TargetIP = normalizeHostIP(stringValue(req["target_ip"], stringValue(req["target_host"], item.TargetIP)))
-	if item.TargetIP == "" && item.TargetHostSource == "manual" {
-		item.TargetIP = normalizeHostIP(item.ManualTargetHost)
+	item.ListenPort = item.PublicListenPort
+	item.TransportMode = normalizeTransportMode(stringValue(req["transport_mode"], item.TransportMode))
+	item.TunnelTargetHost = normalizeHostIP(stringValue(req["tunnel_target_host"], item.TunnelTargetHost))
+	if port := intValue(req["tunnel_target_port"]); port != 0 {
+		item.TunnelTargetPort = port
 	}
-	if port := intValue(req["target_port"]); port != 0 {
-		item.TargetPort = port
+	if item.TunnelTargetPort == 0 {
+		item.TunnelTargetPort = item.PublicListenPort
 	}
-	item.TargetNodeIPSource = stringValue(req["target_node_ip_source"], item.TargetNodeIPSource)
+	item.LandingHostRaw = strings.TrimSpace(stringValue(req["landing_host_raw"], stringValue(req["landing_host"], stringValue(req["target_host"], item.LandingHostRaw))))
+	item.LandingHostResolved = normalizeHostIP(stringValue(req["landing_host_resolved"], item.LandingHostResolved))
+	if port := intValue(req["landing_port"]); port != 0 {
+		item.LandingPort = port
+	} else if port := intValue(req["target_port"]); port != 0 {
+		item.LandingPort = port
+	}
+	item.TargetPort = item.LandingPort
+	item.TargetIP = item.TunnelTargetHost
+	item.TargetHost = item.TunnelTargetHost
 	item.Remark = stringValue(req["remark"], item.Remark)
 	if value, ok := req["enabled"]; ok {
 		item.Enabled = boolValue(value)
 	}
 	item.TargetMode = stringValue(req["target_mode"], item.TargetMode)
 	item.TargetNodeID = stringValue(req["target_node_id"], item.TargetNodeID)
-	item.TargetHost = normalizeHostIP(item.TargetIP)
 	if item.Name == "" {
 		return Forward{}, errValidation("name is required")
 	}
@@ -752,25 +807,49 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 	if item.EntryNodeID == "" {
 		return Forward{}, errValidation("entry_node_id is required")
 	}
-	if item.BackendNodeID == "" {
-		return Forward{}, errValidation("backend_node_id is required")
+	if item.LandingNodeID == "" {
+		return Forward{}, errValidation("landing_node_id is required")
 	}
-	if !validPort(item.ListenPort) {
-		return Forward{}, errValidation("listen_port must be 1-65535")
+	if !validPort(item.PublicListenPort) {
+		return Forward{}, errValidation("public_listen_port must be 1-65535")
 	}
-	if !validPort(item.TargetPort) {
-		return Forward{}, errValidation("target_port must be 1-65535")
+	if !validPort(item.LandingPort) {
+		return Forward{}, errValidation("landing_port must be 1-65535")
 	}
-	if item.ListenHost == "" {
-		item.ListenHost = "0.0.0.0"
+	if item.LandingHostRaw == "" {
+		return Forward{}, errValidation("landing_host is required")
 	}
-	if item.TargetNodeIPSource == "" {
-		item.TargetNodeIPSource = "easytier_ip"
+	if item.TransportMode != "easytier" && item.TransportMode != "public" {
+		return Forward{}, errValidation("transport_mode must be easytier or public")
 	}
-	if item.TargetHostSource == "" {
-		item.TargetHostSource = "backend_easytier_ip"
+	if strings.Contains(item.LandingHostRaw, "/") {
+		return Forward{}, errValidation("landing_host must not be CIDR")
 	}
+	if addr, err := netip.ParseAddr(item.LandingHostRaw); err == nil && addr.Is6() {
+		return Forward{}, errValidation("v0.2.7-test 暂不支持 IPv6 落地目标")
+	}
+	if item.PublicListenHost == "" {
+		item.PublicListenHost = "0.0.0.0"
+	}
+	item.ListenHost = item.PublicListenHost
+	item.ListenPort = item.PublicListenPort
+	item.TargetPort = item.LandingPort
+	item.BackendNodeID = item.LandingNodeID
+	item.TargetIP = item.TunnelTargetHost
+	item.TargetHost = item.TunnelTargetHost
+	item.TargetNodeIPSource = ""
 	return item, nil
+}
+
+func normalizeTransportMode(mode string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case "", "easytier", "tunnel":
+		return "easytier"
+	case "public":
+		return "public"
+	default:
+		return strings.TrimSpace(strings.ToLower(mode))
+	}
 }
 
 func validForwardProtocol(protocol string) bool {

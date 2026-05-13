@@ -38,6 +38,10 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 		return writeJSONAction(entryPath(cfg), task.Payload)
 	case "apply_forward_config":
 		return applyForwardConfig(ctx, cfg, runner, task.Payload)
+	case "apply_entry_forward_config":
+		return applyEntryForwardConfig(ctx, cfg, runner, task.Payload)
+	case "apply_landing_forward_config":
+		return applyLandingForwardConfig(ctx, cfg, runner, task.Payload)
 	case "apply_pbr_config":
 		return applyPBRConfig(cfg, task.Payload)
 	case "apply_ddns_config":

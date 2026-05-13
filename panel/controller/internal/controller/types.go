@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.2.6-test"
+	Version = "v0.2.7-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -119,30 +119,43 @@ type Entry struct {
 }
 
 type Forward struct {
-	ID                 string    `json:"id"`
-	NetworkLinkID      string    `json:"network_link_id,omitempty"`
-	Name               string    `json:"name"`
-	Enabled            bool      `json:"enabled"`
-	Protocol           string    `json:"protocol"`
-	EntryID            string    `json:"entry_id,omitempty"`
-	EntryNodeID        string    `json:"entry_node_id"`
-	BackendNodeID      string    `json:"backend_node_id"`
-	ListenHost         string    `json:"listen_host"`
-	ListenPort         int       `json:"listen_port"`
-	TargetIP           string    `json:"target_ip"`
-	TargetPort         int       `json:"target_port"`
-	TargetHostSource   string    `json:"target_host_source"`
-	ManualTargetHost   string    `json:"manual_target_host,omitempty"`
-	TargetNodeIPSource string    `json:"target_node_ip_source"`
-	Remark             string    `json:"remark"`
-	Status             string    `json:"status"`
-	LastApplyTaskID    string    `json:"last_apply_task_id,omitempty"`
-	LastVerifyTaskID   string    `json:"last_verify_task_id,omitempty"`
-	TargetMode         string    `json:"target_mode,omitempty"`
-	TargetNodeID       string    `json:"target_node_id,omitempty"`
-	TargetHost         string    `json:"target_host,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                     string    `json:"id"`
+	NetworkLinkID          string    `json:"network_link_id,omitempty"`
+	Name                   string    `json:"name"`
+	Enabled                bool      `json:"enabled"`
+	Protocol               string    `json:"protocol"`
+	EntryID                string    `json:"entry_id,omitempty"`
+	EntryNodeID            string    `json:"entry_node_id"`
+	LandingNodeID          string    `json:"landing_node_id"`
+	BackendNodeID          string    `json:"backend_node_id,omitempty"`
+	PublicListenHost       string    `json:"public_listen_host"`
+	PublicListenPort       int       `json:"public_listen_port"`
+	TransportMode          string    `json:"transport_mode"`
+	TunnelTargetHost       string    `json:"tunnel_target_host"`
+	TunnelTargetPort       int       `json:"tunnel_target_port"`
+	LandingHostRaw         string    `json:"landing_host_raw"`
+	LandingHostResolved    string    `json:"landing_host_resolved,omitempty"`
+	LandingPort            int       `json:"landing_port"`
+	Status                 string    `json:"status"`
+	EntryStageStatus       string    `json:"entry_stage_status,omitempty"`
+	LandingStageStatus     string    `json:"landing_stage_status,omitempty"`
+	LastApplyEntryTaskID   string    `json:"last_apply_entry_task_id,omitempty"`
+	LastApplyLandingTaskID string    `json:"last_apply_landing_task_id,omitempty"`
+	LastVerifyTaskID       string    `json:"last_verify_task_id,omitempty"`
+	Remark                 string    `json:"remark"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
+
+	// Legacy fields kept for older stored data and API clients.
+	ListenHost         string `json:"listen_host,omitempty"`
+	ListenPort         int    `json:"listen_port,omitempty"`
+	TargetIP           string `json:"target_ip,omitempty"`
+	TargetPort         int    `json:"target_port,omitempty"`
+	TargetNodeIPSource string `json:"target_node_ip_source,omitempty"`
+	LastApplyTaskID    string `json:"last_apply_task_id,omitempty"`
+	TargetMode         string `json:"target_mode,omitempty"`
+	TargetNodeID       string `json:"target_node_id,omitempty"`
+	TargetHost         string `json:"target_host,omitempty"`
 }
 
 type PBRPolicy struct {

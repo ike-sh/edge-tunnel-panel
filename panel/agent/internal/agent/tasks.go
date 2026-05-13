@@ -22,17 +22,19 @@ var readonlyActions = map[string]bool{
 }
 
 var writeActions = map[string]bool{
-	"configure_node_role":        true,
-	"install_or_update_easytier": true,
-	"apply_network_profile":      true,
-	"apply_entry_config":         true,
-	"apply_forward_config":       true,
-	"apply_pbr_config":           true,
-	"apply_ddns_config":          true,
-	"reload_firewall_rules":      true,
-	"restart_easytier":           true,
-	"restart_agent":              true,
-	"reboot_node":                true,
+	"configure_node_role":          true,
+	"install_or_update_easytier":   true,
+	"apply_network_profile":        true,
+	"apply_entry_config":           true,
+	"apply_forward_config":         true,
+	"apply_entry_forward_config":   true,
+	"apply_landing_forward_config": true,
+	"apply_pbr_config":             true,
+	"apply_ddns_config":            true,
+	"reload_firewall_rules":        true,
+	"restart_easytier":             true,
+	"restart_agent":                true,
+	"reboot_node":                  true,
 }
 
 var blockedActions = map[string]bool{

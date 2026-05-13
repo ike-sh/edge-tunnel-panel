@@ -1,71 +1,102 @@
-﻿# 网络与转发
+# 网络与转发
 
-## 快速组网
+`v0.2.7-test` 把组网和转发拆成两个清晰阶段。
 
-主流程是“快速组网”：选择一个公网入口节点和一个后端节点，面板自动生成入口 listeners 和后端 peers。
+## 组网阶段
 
-- 入口节点：监听 `tcp://0.0.0.0:11010`、`udp://0.0.0.0:11010`，peers 为空。
-- 后端节点：listeners 保持默认，peers 指向入口公网 IP。
-- 两端使用同一组 `network_name`、`network_secret` 和 CIDR。
-- 创建后系统会自动等待约 20 秒并验证组网。
-
-## EasyTier 虚拟 IP
-
-Agent 生成的 EasyTier 启动参数包含 `-d` 和 `-i CIDR`，用于启用 DHCP/虚拟 IP。转发规则默认使用后端节点的 EasyTier 虚拟 IP 作为目标地址。
-
-## 转发规则 MVP
-
-`v0.2.6-test` 支持单端口 TCP/UDP 转发规则。链路是：外部客户端 -> 入口节点公网 IP:公网监听端口 -> 入口节点 nftables DNAT/SNAT -> EasyTier -> 后端落地地址:后端落地端口 -> 后端服务。
-
-后端落地地址来源：
-
-- `backend_easytier_ip`：默认，使用后端 EasyTier 虚拟 IP。
-- `backend_private_ip`：使用后端节点上报的第一个内网 IP。
-- `manual`：手动填写目标地址。Controller 可保存 IPv4 或域名；Agent 当前 nftables 落地只支持 IPv4。
-
-点击“创建并应用转发”时，Controller 会创建规则并只向入口节点下发 `apply_forward_config` 任务。Agent 会写入：
-
-- `/etc/edge-tunnel/agent/forward.json`
-- `/etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft`
-
-Agent 使用固定 argv 执行：
-
-```bash
-nft -c -f /etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft
-nft -f /etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft
+```text
+A 公网入口节点
+<-> EasyTier
+<-> B 落地执行节点
 ```
 
-不支持 raw nft payload。
+快速组网会自动生成：
 
-## 预检和诊断
+- A 侧 listeners。
+- B 侧 peers。
+- 同一组网络名、网络密钥和 CIDR。
+- 两个 `apply_network_profile` 任务。
 
-`apply_forward_config` 会做以下检查：
+## 转发阶段
 
-- 后端落地地址必须是 IPv4 Host，不能带 CIDR。
-- 公网监听端口不能已有进程监听。
-- 已有 nft table 中不能存在相同监听端口规则。
-- `nft -c` 必须通过才会加载规则。
+```text
+外部客户端
+-> A 公网服务器公网端口
+-> A nftables
+-> EasyTier 隧道或 B 公网直连
+-> B 节点
+-> B nftables
+-> 落地服务器 IP/域名:端口
+```
 
-失败时任务页会显示 `nft_check_stderr`、`nft_content`、监听端口、目标地址和目标端口。
+用户只需要填写：
 
-## 真实转发测试
+- 组网链路。
+- 公网监听端口。
+- 落地服务器 IP/域名。
+- 落地服务器端口。
+- 协议 TCP / UDP / TCP+UDP。
+- A 到 B 的传输方式。
 
-后端节点启动测试服务：
+## A 侧入口转发
+
+任务：`apply_entry_forward_config`
+
+路径：
+
+```text
+/etc/edge-tunnel/agent/forwards.d/{rule_id}-entry.json
+/etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
+```
+
+作用：公网监听端口转发到 B 节点的 EasyTier IP 或公网 IP。
+
+## B 侧落地转发
+
+任务：`apply_landing_forward_config`
+
+路径：
+
+```text
+/etc/edge-tunnel/agent/forwards.d/{rule_id}-landing.json
+/etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
+```
+
+作用：B 内部端口转发到落地服务器 IP/域名:端口。
+
+如果落地服务器地址是域名，B Agent 会解析为 IPv4 后写入 nftables。IPv6 落地目标暂不支持。
+
+## nftables 预检
+
+Agent 会执行固定 argv：
+
+```bash
+nft -c -f /etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
+nft -f /etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
+nft -c -f /etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
+nft -f /etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
+```
+
+失败时任务页会展示 `nft_check_stderr` 和 `nft_content`。
+
+## 真实测试
+
+落地服务器：
 
 ```bash
 python3 -m http.server 8080 --bind 0.0.0.0
 ```
 
-面板创建转发规则：选择组网链路 `edge-net`，公网监听端口 `18081`，后端落地端口 `8080`，目标地址默认使用后端虚拟 IP。
+面板：
 
-入口节点检查：
-
-```bash
-nft list table inet edge_tunnel_forward
-cat /proc/sys/net/ipv4/ip_forward
+```text
+组网链路：edge-net
+公网监听端口：18081
+落地服务器地址：1.2.3.4 或 backend.example.com
+落地服务器端口：8080
 ```
 
-外部客户端测试：
+外部访问：
 
 ```bash
 curl -v http://入口公网IP:18081/

@@ -1,24 +1,28 @@
-﻿# 瀹夊叏璇存槑
+# 安全边界
 
 ## Token
 
-- Web/API 浣跨敤 Operator Token锛涙祴璇曟ā寮忓彲鍏抽棴涓ユ牸閴存潈銆?- Agent 浣跨敤 Controller Token 娉ㄥ唽銆佷笂鎶ュ拰杞浠诲姟銆?- 鏃ュ織銆佷换鍔¤緭鍑哄拰閿欒淇℃伅浼氬仛 redaction銆?
-## Agent action allowlist
+- Web/API 使用 Operator Token；测试模式可关闭严格鉴权。
+- Agent 使用 Controller Token 注册、上报和轮询任务。
+- 日志、任务输出和错误信息会做 redaction。
 
-Agent 鍙墽琛屽浐瀹?action锛屼緥濡傦細
+## Action allowlist
+
+Agent 只执行固定 action，例如：
 
 - `collect_agent_status`
-- `run_node_preflight`
+- `verify_agent_config`
 - `verify_easytier_status`
 - `verify_network_connectivity`
 - `apply_network_profile`
-- `install_or_update_easytier`
-- `apply_forward_config`
+- `apply_entry_forward_config`
+- `apply_landing_forward_config`
 - `verify_forward_rules`
+- `restart_easytier`
 
-## 绂佹 payload
+## 禁止 payload
 
-Controller 鍜?Agent 浼氭嫆缁濆嵄闄╁瓧娈碉細
+Controller 和 Agent 都会拒绝危险字段：
 
 - `command`
 - `cmd`
@@ -28,6 +32,10 @@ Controller 鍜?Agent 浼氭嫆缁濆嵄闄╁瓧娈碉細
 - `raw_iptables`
 - `raw_ip_route`
 
-## Root 鏉冮檺
+## 写入边界
 
-Agent 闇€瑕?root 鏉冮檺鏉ュ啓 systemd銆乶ftables 鍜?EasyTier 閰嶇疆銆傚啓鍏ュ姩浣滃簲鍙湪鍙俊鑺傜偣寮€鍚€?
+- 不使用 `shell -c`。
+- 不使用 `bash -c`。
+- 不使用 `eval`。
+- nftables、systemctl、sysctl 都通过固定 argv 调用。
+- Agent 需要 root 权限写 systemd、nftables 和 EasyTier 配置。

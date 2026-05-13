@@ -837,7 +837,8 @@ func (s *Server) handleForwardCreateAndApply(w http.ResponseWriter, r *http.Requ
 func (s *Server) prepareForwardRequest(w http.ResponseWriter, req map[string]any) bool {
 	linkID := stringValue(req["network_link_id"], "")
 	if linkID == "" {
-		return true
+		writeErr(w, 400, "BAD_REQUEST", "network_link_id is required")
+		return false
 	}
 	link, found := s.store.getNetworkLink(linkID)
 	if !found {
@@ -853,91 +854,99 @@ func (s *Server) prepareForwardRequest(w http.ResponseWriter, req map[string]any
 		writeErr(w, 404, "NOT_FOUND", "entry node not found")
 		return false
 	}
-	backendNode, found := s.store.getNode(link.BackendNodeID)
+	landingNode, found := s.store.getNode(link.BackendNodeID)
 	if !found {
-		writeErr(w, 404, "NOT_FOUND", "backend node not found")
+		writeErr(w, 404, "NOT_FOUND", "landing node not found")
 		return false
 	}
-	source := normalizeTargetHostSource(stringValue(req["target_host_source"], stringValue(req["target_node_ip_source"], "backend_easytier_ip")))
-	target, err := resolveForwardTargetHost(req, backendNode, source)
+	publicPort := intValue(req["public_listen_port"])
+	if publicPort == 0 {
+		publicPort = intValue(req["listen_port"])
+	}
+	landingPort := intValue(req["landing_port"])
+	if landingPort == 0 {
+		landingPort = intValue(req["target_port"])
+	}
+	landingHost := strings.TrimSpace(stringValue(req["landing_host"], stringValue(req["landing_host_raw"], stringValue(req["target_host"], ""))))
+	if err := validateLandingHost(landingHost); err != nil {
+		writeErr(w, 400, "BAD_REQUEST", err.Error())
+		return false
+	}
+	mode := normalizeTransportMode(stringValue(req["transport_mode"], "easytier"))
+	tunnelTarget, err := resolveTunnelTargetHost(landingNode, mode)
 	if err != nil {
 		writeErr(w, 400, "BAD_REQUEST", err.Error())
 		return false
 	}
 	if stringValue(req["name"], "") == "" {
-		req["name"] = "forward-" + strconv.Itoa(intValue(req["listen_port"]))
+		req["name"] = "forward-" + strconv.Itoa(publicPort)
 	}
 	req["entry_node_id"] = entryNode.ID
-	req["backend_node_id"] = backendNode.ID
-	req["target_ip"] = target
-	req["target_host"] = target
-	req["target_host_source"] = source
-	req["target_node_ip_source"] = legacyTargetNodeIPSource(source)
+	req["landing_node_id"] = landingNode.ID
+	req["backend_node_id"] = landingNode.ID
+	req["public_listen_host"] = stringValue(req["public_listen_host"], stringValue(req["listen_host"], "0.0.0.0"))
+	req["public_listen_port"] = publicPort
+	req["listen_port"] = publicPort
+	req["transport_mode"] = mode
+	req["tunnel_target_host"] = tunnelTarget
+	req["tunnel_target_port"] = intValueWithDefault(req["tunnel_target_port"], publicPort)
+	req["landing_host_raw"] = landingHost
+	req["landing_host"] = landingHost
+	req["landing_port"] = landingPort
+	req["target_port"] = landingPort
+	req["target_ip"] = tunnelTarget
+	req["target_host"] = tunnelTarget
 	return true
 }
 
-func resolveForwardTargetHost(req map[string]any, backendNode Node, source string) (string, error) {
-	switch strings.TrimSpace(source) {
-	case "", "backend_easytier_ip", "easytier_ip":
-		target := normalizeHostIP(backendNode.EasyTierIP)
+func resolveTunnelTargetHost(landingNode Node, mode string) (string, error) {
+	var target string
+	switch normalizeTransportMode(mode) {
+	case "easytier":
+		target = normalizeHostIP(landingNode.EasyTierIP)
 		if target == "" {
-			return "", errValidation("后端节点暂无 EasyTier 虚拟 IP，请先完成组网并验证虚拟 IP")
+			return "", errValidation("B \u8282\u70b9\u6682\u65e0 EasyTier \u865a\u62df IP\uff0c\u8bf7\u5148\u5b8c\u6210\u7ec4\u7f51\u9a8c\u8bc1")
 		}
-		return target, nil
-	case "backend_private_ip", "private_ip":
-		target := firstAddress(backendNode.PrivateIP)
+	case "public":
+		target = normalizeHostIP(firstString(landingNode.PublicIP, landingNode.ObservedIP))
 		if target == "" {
-			return "", errValidation("后端节点暂无内网 IP，无法作为后端落地地址")
+			return "", errValidation("B \u8282\u70b9\u6682\u65e0\u516c\u7f51 IP\uff0c\u4e0d\u80fd\u4f7f\u7528\u516c\u7f51\u76f4\u8fde\u6a21\u5f0f")
 		}
-		return normalizeHostIP(target), nil
-	case "manual":
-		target := normalizeHostIP(stringValue(req["manual_target_host"], stringValue(req["target_host"], stringValue(req["target_ip"], ""))))
-		if target == "" {
-			return "", errValidation("手动后端目标地址不能为空")
-		}
-		if ip := net.ParseIP(target); ip != nil && ip.To4() == nil {
-			return "", errValidation("转发 MVP 暂只支持 IPv4/域名目标地址，不支持 IPv6")
-		}
-		req["manual_target_host"] = target
-		return target, nil
 	default:
-		return "", errValidation("target_host_source must be backend_easytier_ip, backend_private_ip, or manual")
+		return "", errValidation("transport_mode must be easytier or public")
 	}
+	ip := net.ParseIP(target)
+	if ip == nil || ip.To4() == nil {
+		return "", errValidation("A \u5230 B \u7684\u8f6c\u53d1\u76ee\u6807\u5fc5\u987b\u662f IPv4 \u5730\u5740")
+	}
+	return target, nil
 }
 
-func normalizeTargetHostSource(source string) string {
-	switch strings.TrimSpace(source) {
-	case "", "backend_easytier_ip", "easytier_ip":
-		return "backend_easytier_ip"
-	case "backend_private_ip", "private_ip":
-		return "backend_private_ip"
-	case "manual":
-		return "manual"
-	default:
-		return strings.TrimSpace(source)
+func validateLandingHost(host string) error {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return errValidation("landing_host is required")
 	}
+	if strings.Contains(host, "/") {
+		return errValidation("landing_host must not be CIDR")
+	}
+	if strings.Contains(host, "://") || strings.ContainsAny(host, " \t\r\n") {
+		return errValidation("landing_host must be an IP address or domain")
+	}
+	if strings.Contains(host, ":") {
+		return errValidation("v0.2.7-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		return errValidation("v0.2.7-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+	}
+	return nil
 }
 
-func firstAddress(value string) string {
-	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
-		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
-	}) {
-		if trimmed := strings.TrimSpace(part); trimmed != "" && trimmed != "-" {
-			return trimmed
-		}
+func intValueWithDefault(v any, fallback int) int {
+	if value := intValue(v); value != 0 {
+		return value
 	}
-	return ""
-}
-
-func legacyTargetNodeIPSource(source string) string {
-	switch source {
-	case "backend_private_ip", "private_ip":
-		return "private_ip"
-	case "manual":
-		return "manual"
-	default:
-		return "easytier_ip"
-	}
+	return fallback
 }
 
 func (s *Server) createForwardApplyTask(w http.ResponseWriter, forward Forward) {
@@ -946,43 +955,48 @@ func (s *Server) createForwardApplyTask(w http.ResponseWriter, forward Forward) 
 		writeErr(w, 404, "NOT_FOUND", "entry node not found")
 		return
 	}
-	backendNode, found := s.store.getNode(forward.BackendNodeID)
+	landingNode, found := s.store.getNode(forward.LandingNodeID)
 	if !found {
-		writeErr(w, 404, "NOT_FOUND", "backend node not found")
+		writeErr(w, 404, "NOT_FOUND", "landing node not found")
 		return
 	}
-	if strings.TrimSpace(forward.TargetHost) == "" && strings.TrimSpace(forward.TargetIP) == "" {
-		target, err := resolveForwardTargetHost(map[string]any{"target_host_source": forward.TargetHostSource, "manual_target_host": forward.ManualTargetHost}, backendNode, forward.TargetHostSource)
-		if err != nil {
-			writeErr(w, 400, "BAD_REQUEST", err.Error())
-			return
-		}
-		forward.TargetIP = target
-		forward.TargetHost = target
-	}
-	forward.TargetIP = normalizeHostIP(forward.TargetIP)
-	forward.TargetHost = normalizeHostIP(firstString(forward.TargetHost, forward.TargetIP))
-	if strings.TrimSpace(forward.TargetIP) == "" {
-		writeErr(w, 400, "BAD_REQUEST", "backend node has no EasyTier virtual IP; finish network setup and verify virtual IP first")
+	tunnelTarget, err := resolveTunnelTargetHost(landingNode, forward.TransportMode)
+	if err != nil {
+		writeErr(w, 400, "BAD_REQUEST", err.Error())
 		return
 	}
-	if updatedForward, ok, err := s.store.updateForwardResolvedTarget(forward.ID, forward.TargetIP); err != nil {
+	forward.TunnelTargetHost = tunnelTarget
+	forward.TargetIP = tunnelTarget
+	forward.TargetHost = tunnelTarget
+	if forward.TunnelTargetPort == 0 {
+		forward.TunnelTargetPort = forward.PublicListenPort
+	}
+	if updatedForward, ok, err := s.store.updateForwardResolvedTarget(forward.ID, tunnelTarget); err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	} else if ok {
 		forward = updatedForward
 	}
-	task, err := s.store.createTask(Task{NodeID: entryNode.ID, Action: "apply_forward_config", Payload: map[string]any{"forward_rule": forward, "entry_node": entryNode, "backend_node": backendNode}})
+	entryTask, err := s.store.createTask(Task{NodeID: entryNode.ID, Action: "apply_entry_forward_config", Payload: map[string]any{"stage": "entry", "forward_id": forward.ID, "rule_id": forward.ID, "forward_rule": forward, "entry_node": entryNode, "landing_node": landingNode, "protocol": forward.Protocol, "public_listen_port": forward.PublicListenPort, "tunnel_target_host": forward.TunnelTargetHost, "tunnel_target_port": forward.TunnelTargetPort}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	updated, _, err := s.store.updateForwardTask(forward.ID, task.ID, "apply", "applying")
+	landingTask, err := s.store.createTask(Task{NodeID: landingNode.ID, Action: "apply_landing_forward_config", Payload: map[string]any{"stage": "landing", "forward_id": forward.ID, "rule_id": forward.ID, "forward_rule": forward, "entry_node": entryNode, "landing_node": landingNode, "protocol": forward.Protocol, "tunnel_listen_port": forward.TunnelTargetPort, "landing_host_raw": forward.LandingHostRaw, "landing_port": forward.LandingPort}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	writeOK(w, 202, map[string]any{"forward": updated, "task": task})
+	if _, _, err := s.store.updateForwardTask(forward.ID, entryTask.ID, "entry_apply", "applying"); err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	updated, _, err := s.store.updateForwardTask(forward.ID, landingTask.ID, "landing_apply", "applying")
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	writeOK(w, 202, map[string]any{"forward": updated, "entry_task": entryTask, "landing_task": landingTask})
 }
 
 func (s *Server) handleForwardApply(w http.ResponseWriter, r *http.Request, id string) {
@@ -1016,17 +1030,22 @@ func (s *Server) handleForwardVerify(w http.ResponseWriter, r *http.Request, id 
 		writeErr(w, 404, "NOT_FOUND", "forward not found")
 		return
 	}
-	task, err := s.store.createTask(Task{NodeID: forward.EntryNodeID, Action: "verify_forward_rules", Payload: map[string]any{"forward_id": forward.ID, "name": forward.Name, "listen_port": forward.ListenPort, "target_port": forward.TargetPort}})
+	entryTask, err := s.store.createTask(Task{NodeID: forward.EntryNodeID, Action: "verify_forward_rules", Payload: map[string]any{"stage": "entry", "forward_id": forward.ID, "name": forward.Name, "listen_port": forward.PublicListenPort, "target_port": forward.TunnelTargetPort}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	updated, _, err := s.store.updateForwardTask(id, task.ID, "verify", forward.Status)
+	landingTask, err := s.store.createTask(Task{NodeID: forward.LandingNodeID, Action: "verify_forward_rules", Payload: map[string]any{"stage": "landing", "forward_id": forward.ID, "name": forward.Name, "listen_port": forward.TunnelTargetPort, "target_port": forward.LandingPort}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	writeOK(w, 202, map[string]any{"forward": updated, "task": task})
+	updated, _, err := s.store.updateForwardTask(id, landingTask.ID, "verify", forward.Status)
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	writeOK(w, 202, map[string]any{"forward": updated, "entry_task": entryTask, "landing_task": landingTask})
 }
 
 func (s *Server) handlePBRPolicies(w http.ResponseWriter, r *http.Request) {
@@ -1148,7 +1167,7 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 	if kind == "tasks" {
 		action := stringValue(req["action"], "collect_agent_status")
 		blocked := map[string]bool{"arbitrary_command": true, "shell_c": true, "bash_c": true, "eval": true, "raw_nft": true, "raw_iptables": true, "raw_ip_route": true, "curl_pipe_bash": true}
-		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_pbr_config": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
+		allowed := map[string]bool{"collect_agent_status": true, "run_node_preflight": true, "verify_agent_config": true, "verify_easytier_status": true, "verify_network_connectivity": true, "verify_forward_rules": true, "verify_pbr_rules": true, "verify_ddns_status": true, "configure_node_role": true, "install_or_update_easytier": true, "apply_network_profile": true, "apply_entry_config": true, "apply_forward_config": true, "apply_entry_forward_config": true, "apply_landing_forward_config": true, "apply_pbr_config": true, "apply_ddns_config": true, "reload_firewall_rules": true, "restart_easytier": true, "restart_agent": true, "reboot_node": true}
 		if blocked[action] || !allowed[action] {
 			writeErr(w, 400, "BLOCKED_ACTION", "action is not allowed")
 			return

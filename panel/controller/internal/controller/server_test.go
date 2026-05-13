@@ -280,12 +280,12 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.6-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.7-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.2.6-test") ||
+		!strings.Contains(body, "--version v0.2.7-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, `"root_command"`) ||
@@ -584,95 +584,79 @@ func TestNetworkLinkVerifyCreatesTasks(t *testing.T) {
 	}
 }
 
-func TestForwardRuleCRUDAndApply(t *testing.T) {
-	h := testServer(t)
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "entry-forward", "node_name": "entry", "role": "entry"})
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-forward", "node_name": "backend", "role": "backend", "easytier_ip": "10.144.0.23/16"})
-	create := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"name": "ssh", "protocol": "both", "entry_node_id": "entry-forward", "backend_node_id": "backend-forward", "listen_port": 2222, "target_port": 22})
-	if create.Code != 200 {
-		t.Fatalf("forward create failed: %d %s", create.Code, create.Body.String())
-	}
-	var resp APIResponse
-	_ = json.Unmarshal(create.Body.Bytes(), &resp)
-	raw, _ := json.Marshal(resp.Data)
-	var forward Forward
-	_ = json.Unmarshal(raw, &forward)
-	update := postMethod(t, h, http.MethodPut, "/api/v1/forwards/"+forward.ID, "operator-token", map[string]any{"name": "ssh-updated", "protocol": "tcp", "entry_node_id": "entry-forward", "backend_node_id": "backend-forward", "listen_port": 2222, "target_port": 22})
-	if update.Code != 200 || !strings.Contains(update.Body.String(), "ssh-updated") {
-		t.Fatalf("forward update failed: %d %s", update.Code, update.Body.String())
-	}
-	apply := post(t, h, "/api/v1/forwards/"+forward.ID+"/apply", "operator-token", map[string]any{})
-	if apply.Code != 202 || !strings.Contains(apply.Body.String(), "apply_forward_config") || !strings.Contains(apply.Body.String(), "entry-forward") || !strings.Contains(apply.Body.String(), "10.144.0.23") {
-		t.Fatalf("forward apply failed: %d %s", apply.Code, apply.Body.String())
-	}
-	var applyResp APIResponse
-	_ = json.Unmarshal(apply.Body.Bytes(), &applyResp)
-	applyRaw, _ := json.Marshal(applyResp.Data)
-	var applyData struct {
-		Forward Forward `json:"forward"`
-		Task    Task    `json:"task"`
-	}
-	_ = json.Unmarshal(applyRaw, &applyData)
-	if applyData.Forward.TargetIP != "10.144.0.23" || applyData.Forward.TargetHost != "10.144.0.23" {
-		t.Fatalf("forward target should be normalized: %+v", applyData.Forward)
-	}
-	payloadRaw, _ := json.Marshal(applyData.Task.Payload["forward_rule"])
-	var payloadForward Forward
-	_ = json.Unmarshal(payloadRaw, &payloadForward)
-	if payloadForward.TargetIP != "10.144.0.23" || payloadForward.TargetHost != "10.144.0.23" {
-		t.Fatalf("task payload target should be normalized: %+v", payloadForward)
-	}
-	verify := post(t, h, "/api/v1/forwards/"+forward.ID+"/verify", "operator-token", map[string]any{})
-	if verify.Code != 202 || !strings.Contains(verify.Body.String(), "verify_forward_rules") {
-		t.Fatalf("forward verify failed: %d %s", verify.Code, verify.Body.String())
-	}
-	del := postMethod(t, h, http.MethodDelete, "/api/v1/forwards/"+forward.ID, "operator-token", nil)
-	if del.Code != 200 {
-		t.Fatalf("forward delete failed: %d %s", del.Code, del.Body.String())
+func TestForwardCreateRequiresLandingHost(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-18081", "protocol": "tcp", "public_listen_port": 18081, "landing_port": 8080})
+	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "landing_host") {
+		t.Fatalf("landing host should be required: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestForwardCreateFromNetworkLink(t *testing.T) {
+func TestForwardCreateRejectsCIDRLandingHost(t *testing.T) {
 	h, link := testConnectedNetworkLink(t)
-	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http-18081", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-18081", "protocol": "tcp", "public_listen_port": 18081, "landing_host": "10.0.0.5/24", "landing_port": 8080})
+	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "CIDR") {
+		t.Fatalf("CIDR landing host should be rejected: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForwardCreateRejectsIPv6LandingHost(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-18081", "protocol": "tcp", "public_listen_port": 18081, "landing_host": "fd00::1", "landing_port": 8080})
+	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "IPv6") {
+		t.Fatalf("IPv6 landing host should be rejected: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForwardCreateEasyTierTransportUsesLandingNodeEasyTierIP(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-18081", "protocol": "tcp", "public_listen_port": 18081, "landing_host": "1.2.3.4", "landing_port": 8080, "transport_mode": "easytier"})
 	if rr.Code != 200 {
-		t.Fatalf("forward from link failed: %d %s", rr.Code, rr.Body.String())
+		t.Fatalf("forward create failed: %d %s", rr.Code, rr.Body.String())
 	}
 	var resp APIResponse
 	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 	raw, _ := json.Marshal(resp.Data)
 	var forward Forward
 	_ = json.Unmarshal(raw, &forward)
-	if forward.NetworkLinkID != link.ID || forward.EntryNodeID != "entry-link-forward" || forward.BackendNodeID != "backend-link-forward" {
-		t.Fatalf("forward did not inherit link nodes: %+v", forward)
+	if forward.EntryNodeID != "entry-link-forward" || forward.LandingNodeID != "backend-link-forward" || forward.BackendNodeID != "backend-link-forward" {
+		t.Fatalf("forward did not inherit A/B nodes: %+v", forward)
 	}
-	if forward.TargetIP != "10.144.0.2" || forward.TargetHost != "10.144.0.2" {
-		t.Fatalf("forward target should use backend virtual IP without CIDR: %+v", forward)
+	if forward.TransportMode != "easytier" || forward.TunnelTargetHost != "10.144.0.2" || strings.Contains(forward.TunnelTargetHost, "/") {
+		t.Fatalf("tunnel target should use B EasyTier IP without CIDR: %+v", forward)
 	}
-}
-
-func TestForwardCreateRejectsMissingLink(t *testing.T) {
-	rr := post(t, testServer(t), "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": "missing", "name": "http", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
-	if rr.Code != 404 {
-		t.Fatalf("missing link should be rejected: %d %s", rr.Code, rr.Body.String())
+	if forward.LandingHostRaw != "1.2.3.4" || forward.LandingPort != 8080 || forward.PublicListenPort != 18081 {
+		t.Fatalf("landing fields not saved: %+v", forward)
 	}
 }
 
-func TestForwardCreateRejectsLinkNotReady(t *testing.T) {
+func TestForwardCreatePublicTransportUsesLandingNodePublicIP(t *testing.T) {
+	h := testServer(t)
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.60:12345", map[string]any{"id": "entry-public-forward", "node_name": "entry", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true})
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "198.51.100.77:23456", map[string]any{"id": "backend-public-forward", "node_name": "backend", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true, "easytier_ip": "10.144.0.7/16"})
+	linkResp := post(t, h, "/api/v1/network-links/quick-apply", "operator-token", map[string]any{"name": "edge-net", "entry_node_id": "entry-public-forward", "backend_node_id": "backend-public-forward"})
+	link := networkLinkFromResponse(t, linkResp)
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "public-forward", "protocol": "udp", "public_listen_port": 18082, "landing_host": "backend.example.com", "landing_port": 5353, "transport_mode": "public"})
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"tunnel_target_host":"198.51.100.77"`) || !strings.Contains(rr.Body.String(), `"landing_host_raw":"backend.example.com"`) {
+		t.Fatalf("public transport should use B public IP: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForwardCreateRejectsInactiveNetworkLink(t *testing.T) {
 	h := testServer(t)
 	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.50:12345", map[string]any{"id": "entry-not-ready", "node_name": "entry", "easytier_status": "inactive"})
 	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-not-ready", "node_name": "backend", "easytier_status": "inactive", "easytier_ip": "10.144.0.2/16"})
 	linkResp := post(t, h, "/api/v1/network-links/quick-apply", "operator-token", map[string]any{"entry_node_id": "entry-not-ready", "backend_node_id": "backend-not-ready"})
 	link := networkLinkFromResponse(t, linkResp)
-	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http", "protocol": "tcp", "public_listen_port": 18081, "landing_host": "1.2.3.4", "landing_port": 8080})
 	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "not connected") {
 		t.Fatalf("not-ready link should be rejected: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestForwardCreateAndApplyCreatesTaskOnEntryNode(t *testing.T) {
+func TestForwardCreateAndApplyCreatesTwoTasks(t *testing.T) {
 	h, link := testConnectedNetworkLink(t)
-	rr := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http-18081", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	rr := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-18081", "protocol": "both", "public_listen_port": 18081, "landing_host": "1.2.3.4", "landing_port": 8080})
 	if rr.Code != 202 {
 		t.Fatalf("create-and-apply failed: %d %s", rr.Code, rr.Body.String())
 	}
@@ -680,173 +664,83 @@ func TestForwardCreateAndApplyCreatesTaskOnEntryNode(t *testing.T) {
 	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 	raw, _ := json.Marshal(resp.Data)
 	var data struct {
-		Forward Forward `json:"forward"`
-		Task    Task    `json:"task"`
+		Forward     Forward `json:"forward"`
+		EntryTask   Task    `json:"entry_task"`
+		LandingTask Task    `json:"landing_task"`
 	}
 	_ = json.Unmarshal(raw, &data)
-	if data.Task.NodeID != "entry-link-forward" || data.Task.Action != "apply_forward_config" {
-		t.Fatalf("apply task should target entry node: %+v", data.Task)
+	if data.EntryTask.NodeID != "entry-link-forward" || data.EntryTask.Action != "apply_entry_forward_config" {
+		t.Fatalf("entry task should target A node: %+v", data.EntryTask)
 	}
-	if data.Forward.Status != "applying" || data.Forward.LastApplyTaskID != data.Task.ID {
-		t.Fatalf("forward should be applying: %+v", data.Forward)
+	if data.LandingTask.NodeID != "backend-link-forward" || data.LandingTask.Action != "apply_landing_forward_config" {
+		t.Fatalf("landing task should target B node: %+v", data.LandingTask)
 	}
-	payloadRaw, _ := json.Marshal(data.Task.Payload["forward_rule"])
-	var payloadForward Forward
-	_ = json.Unmarshal(payloadRaw, &payloadForward)
-	if payloadForward.TargetIP != "10.144.0.2" || strings.Contains(payloadForward.TargetIP, "/") {
-		t.Fatalf("apply payload target should not contain CIDR: %+v", payloadForward)
+	if data.Forward.Status != "applying" || data.Forward.LastApplyEntryTaskID != data.EntryTask.ID || data.Forward.LastApplyLandingTaskID != data.LandingTask.ID {
+		t.Fatalf("forward should track both tasks: %+v", data.Forward)
 	}
 }
 
-func TestForwardStatusUpdatesFromApplyResult(t *testing.T) {
+func TestForwardEntryTaskPayload(t *testing.T) {
 	h, link := testConnectedNetworkLink(t)
-	created := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http-18081", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	rr := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "entry-payload", "protocol": "tcp", "public_listen_port": 18083, "landing_host": "1.2.3.4", "landing_port": 8080})
+	var resp APIResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var data struct {
+		EntryTask Task `json:"entry_task"`
+	}
+	_ = json.Unmarshal(raw, &data)
+	if data.EntryTask.Payload["stage"] != "entry" || data.EntryTask.Payload["tunnel_target_host"] != "10.144.0.2" || intValue(data.EntryTask.Payload["public_listen_port"]) != 18083 {
+		t.Fatalf("bad entry payload: %+v", data.EntryTask.Payload)
+	}
+}
+
+func TestForwardLandingTaskPayload(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	rr := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "landing-payload", "protocol": "udp", "public_listen_port": 18084, "landing_host": "backend.example.com", "landing_port": 9090})
+	var resp APIResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var data struct {
+		LandingTask Task `json:"landing_task"`
+	}
+	_ = json.Unmarshal(raw, &data)
+	if data.LandingTask.Payload["stage"] != "landing" || data.LandingTask.Payload["landing_host_raw"] != "backend.example.com" || intValue(data.LandingTask.Payload["landing_port"]) != 9090 {
+		t.Fatalf("bad landing payload: %+v", data.LandingTask.Payload)
+	}
+}
+
+func TestForwardStatusUpdatesFromTwoStageApplyResult(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	created := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "forward-18081", "protocol": "tcp", "public_listen_port": 18081, "landing_host": "1.2.3.4", "landing_port": 8080})
 	var resp APIResponse
 	_ = json.Unmarshal(created.Body.Bytes(), &resp)
 	raw, _ := json.Marshal(resp.Data)
 	var data struct {
-		Forward Forward `json:"forward"`
-		Task    Task    `json:"task"`
+		Forward     Forward `json:"forward"`
+		EntryTask   Task    `json:"entry_task"`
+		LandingTask Task    `json:"landing_task"`
 	}
 	_ = json.Unmarshal(raw, &data)
-	result := post(t, h, "/api/v1/agent/tasks/"+data.Task.ID+"/result", "agent-token", map[string]any{"status": "succeeded", "result": "{}"})
-	if result.Code != 200 {
-		t.Fatalf("task result failed: %d %s", result.Code, result.Body.String())
+	_ = post(t, h, "/api/v1/agent/tasks/"+data.EntryTask.ID+"/result", "agent-token", map[string]any{"status": "succeeded", "result": "{}"})
+	mid := get(t, h, "/api/v1/forwards/"+data.Forward.ID, "operator-token")
+	if !strings.Contains(mid.Body.String(), `"status":"applying"`) || !strings.Contains(mid.Body.String(), `"entry_stage_status":"succeeded"`) {
+		t.Fatalf("entry result should keep rule applying: %d %s", mid.Code, mid.Body.String())
 	}
-	getRule := get(t, h, "/api/v1/forwards/"+data.Forward.ID, "operator-token")
-	if !strings.Contains(getRule.Body.String(), `"status":"applied"`) {
-		t.Fatalf("forward status not updated: %d %s", getRule.Code, getRule.Body.String())
-	}
-}
-
-func TestNormalizeHostIP(t *testing.T) {
-	cases := map[string]string{
-		"10.144.0.2/16": "10.144.0.2",
-		"10.144.0.2":    "10.144.0.2",
-		"fd00::1/64":    "fd00::1",
-		"example.com":   "example.com",
-		"":              "",
-	}
-	for input, want := range cases {
-		if got := normalizeHostIP(input); got != want {
-			t.Fatalf("normalizeHostIP(%q)=%q, want %q", input, got, want)
-		}
+	_ = post(t, h, "/api/v1/agent/tasks/"+data.LandingTask.ID+"/result", "agent-token", map[string]any{"status": "succeeded", "result": "{}"})
+	final := get(t, h, "/api/v1/forwards/"+data.Forward.ID, "operator-token")
+	if !strings.Contains(final.Body.String(), `"status":"applied"`) || !strings.Contains(final.Body.String(), `"landing_stage_status":"succeeded"`) {
+		t.Fatalf("two stage result did not update forward: %d %s", final.Code, final.Body.String())
 	}
 }
 
-func TestForwardApplyRequiresBackendEasyTierIP(t *testing.T) {
-	h := testServer(t)
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "entry-forward-noip", "node_name": "entry"})
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-forward-noip", "node_name": "backend"})
-	create := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"name": "ssh", "protocol": "tcp", "entry_node_id": "entry-forward-noip", "backend_node_id": "backend-forward-noip", "listen_port": 2222, "target_port": 22})
-	var resp APIResponse
-	_ = json.Unmarshal(create.Body.Bytes(), &resp)
-	raw, _ := json.Marshal(resp.Data)
-	var forward Forward
-	_ = json.Unmarshal(raw, &forward)
-	apply := post(t, h, "/api/v1/forwards/"+forward.ID+"/apply", "operator-token", map[string]any{})
-	if apply.Code != 400 || !strings.Contains(apply.Body.String(), "虚拟 IP") {
-		t.Fatalf("expected EasyTier IP validation: %d %s", apply.Code, apply.Body.String())
+func TestForwardRejectsDangerousPayload(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "bad", "protocol": "tcp", "public_listen_port": 1, "landing_host": "1.2.3.4", "landing_port": 2, "raw_nft": "bad"})
+	if rr.Code != 400 {
+		t.Fatalf("dangerous forward payload should fail: %d %s", rr.Code, rr.Body.String())
 	}
 }
-
-func decodeLinkFromResponse(t *testing.T, rr *httptest.ResponseRecorder) NetworkLink {
-	t.Helper()
-	var resp APIResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := json.Marshal(resp.Data)
-	var data map[string]any
-	if err := json.Unmarshal(raw, &data); err != nil {
-		t.Fatal(err)
-	}
-	linkRaw, _ := json.Marshal(data["link"])
-	var link NetworkLink
-	if err := json.Unmarshal(linkRaw, &link); err != nil {
-		t.Fatal(err)
-	}
-	return link
-}
-
-func TestForwardCreateUsesBackendPrivateIP(t *testing.T) {
-	h := testServer(t)
-	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.31:12345", map[string]any{"id": "entry-private", "node_name": "entry", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true})
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-private", "node_name": "backend", "private_ip": "10.0.0.8, 192.168.1.9", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true})
-	linkResp := post(t, h, "/api/v1/network-links/quick-apply", "operator-token", map[string]any{"entry_node_id": "entry-private", "backend_node_id": "backend-private"})
-	link := decodeLinkFromResponse(t, linkResp)
-	created := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "private-target", "protocol": "tcp", "listen_port": 18082, "target_port": 8080, "target_host_source": "backend_private_ip"})
-	body := created.Body.String()
-	if created.Code != 200 || !strings.Contains(body, `"target_host":"10.0.0.8"`) || !strings.Contains(body, `"target_host_source":"backend_private_ip"`) {
-		t.Fatalf("private target not resolved: %d %s", created.Code, body)
-	}
-}
-
-func TestForwardCreateManualTargetHost(t *testing.T) {
-	h := testServer(t)
-	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.32:12345", map[string]any{"id": "entry-manual", "node_name": "entry", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true})
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-manual", "node_name": "backend", "easytier_ip": "10.144.0.9/16", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true})
-	linkResp := post(t, h, "/api/v1/network-links/quick-apply", "operator-token", map[string]any{"entry_node_id": "entry-manual", "backend_node_id": "backend-manual"})
-	link := decodeLinkFromResponse(t, linkResp)
-	created := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "manual-target", "protocol": "tcp", "listen_port": 18083, "target_port": 8080, "target_host_source": "manual", "manual_target_host": "10.10.10.10"})
-	body := created.Body.String()
-	if created.Code != 200 || !strings.Contains(body, `"target_host":"10.10.10.10"`) || !strings.Contains(body, `"manual_target_host":"10.10.10.10"`) {
-		t.Fatalf("manual target not saved: %d %s", created.Code, body)
-	}
-}
-
-func TestForwardCreateAndApplyPayloadTargetHostSource(t *testing.T) {
-	h := testServer(t)
-	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.33:12345", map[string]any{"id": "entry-source", "node_name": "entry", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true})
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-source", "node_name": "backend", "easytier_ip": "10.144.0.20/16", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true})
-	linkResp := post(t, h, "/api/v1/network-links/quick-apply", "operator-token", map[string]any{"entry_node_id": "entry-source", "backend_node_id": "backend-source"})
-	link := decodeLinkFromResponse(t, linkResp)
-	created := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "source-target", "protocol": "tcp", "listen_port": 18084, "target_port": 8080, "target_host_source": "backend_easytier_ip"})
-	if created.Code != 202 {
-		t.Fatalf("create-and-apply failed: %d %s", created.Code, created.Body.String())
-	}
-	var resp APIResponse
-	_ = json.Unmarshal(created.Body.Bytes(), &resp)
-	raw, _ := json.Marshal(resp.Data)
-	var data map[string]any
-	_ = json.Unmarshal(raw, &data)
-	taskRaw, _ := json.Marshal(data["task"])
-	var task Task
-	_ = json.Unmarshal(taskRaw, &task)
-	ruleRaw, _ := json.Marshal(task.Payload["forward_rule"])
-	var rule Forward
-	_ = json.Unmarshal(ruleRaw, &rule)
-	if rule.TargetHost != "10.144.0.20" || rule.TargetIP != "10.144.0.20" {
-		t.Fatalf("apply payload target host should be normalized: %#v", rule)
-	}
-}
-
-func TestForwardStatusUpdatesFromVerifyResult(t *testing.T) {
-	h := testServer(t)
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "entry-verify-forward", "node_name": "entry"})
-	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-verify-forward", "node_name": "backend"})
-	create := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"name": "verify-forward", "protocol": "tcp", "entry_node_id": "entry-verify-forward", "backend_node_id": "backend-verify-forward", "listen_port": 18085, "target_port": 8080, "target_ip": "10.144.0.30"})
-	var resp APIResponse
-	_ = json.Unmarshal(create.Body.Bytes(), &resp)
-	raw, _ := json.Marshal(resp.Data)
-	var forward Forward
-	_ = json.Unmarshal(raw, &forward)
-	verify := post(t, h, "/api/v1/forwards/"+forward.ID+"/verify", "operator-token", map[string]any{})
-	var verifyResp APIResponse
-	_ = json.Unmarshal(verify.Body.Bytes(), &verifyResp)
-	raw, _ = json.Marshal(verifyResp.Data)
-	var data map[string]any
-	_ = json.Unmarshal(raw, &data)
-	taskRaw, _ := json.Marshal(data["task"])
-	var task Task
-	_ = json.Unmarshal(taskRaw, &task)
-	_ = post(t, h, "/api/v1/agent/tasks/"+task.ID+"/result", "agent-token", map[string]any{"status": "succeeded", "result": `{"rule_present":true}`})
-	forwardResp := get(t, h, "/api/v1/forwards/"+forward.ID, "operator-token")
-	if forwardResp.Code != 200 || !strings.Contains(forwardResp.Body.String(), `"status":"verified"`) || !strings.Contains(forwardResp.Body.String(), `"last_verify_task_id"`) {
-		t.Fatalf("verify result did not update forward: %d %s", forwardResp.Code, forwardResp.Body.String())
-	}
-}
-
 func TestNetworkLinkStatusUpdatesFromVerifyResult(t *testing.T) {
 	h := testServer(t)
 	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.34:12345", map[string]any{"id": "entry-link-status", "node_name": "entry"})
@@ -866,14 +760,6 @@ func TestNetworkLinkStatusUpdatesFromVerifyResult(t *testing.T) {
 	updated := get(t, h, "/api/v1/network-links/"+link.ID, "operator-token")
 	if updated.Code != 200 || !strings.Contains(updated.Body.String(), `"status":"active"`) || !strings.Contains(updated.Body.String(), `"best_latency_ms":88.5`) {
 		t.Fatalf("verify result did not update link: %d %s", updated.Code, updated.Body.String())
-	}
-}
-
-func TestForwardRejectsDangerousPayload(t *testing.T) {
-	h := testServer(t)
-	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"name": "bad", "protocol": "tcp", "entry_node_id": "entry", "backend_node_id": "backend", "listen_port": 1, "target_port": 2, "raw_nft": "bad"})
-	if rr.Code != 400 {
-		t.Fatalf("dangerous forward payload should be rejected: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -902,6 +788,25 @@ func networkLinkFromResponse(t *testing.T, rr *httptest.ResponseRecorder) Networ
 		t.Fatalf("missing network link in response: %s", rr.Body.String())
 	}
 	return data.Link
+}
+
+func decodeLinkFromResponse(t *testing.T, rr *httptest.ResponseRecorder) NetworkLink {
+	t.Helper()
+	var resp APIResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(resp.Data)
+	var data map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	linkRaw, _ := json.Marshal(data["link"])
+	var link NetworkLink
+	if err := json.Unmarshal(linkRaw, &link); err != nil {
+		t.Fatal(err)
+	}
+	return link
 }
 
 func postMethod(t *testing.T, h http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {

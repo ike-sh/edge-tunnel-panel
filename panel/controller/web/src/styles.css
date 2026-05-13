@@ -49,7 +49,7 @@ pre {
 }
 
 main {
-  width: min(1500px, calc(100vw - 32px));
+  width: min(1360px, calc(100% - 32px));
   margin: 0 auto;
   padding: 28px 0 48px;
 }
@@ -176,7 +176,7 @@ button.danger {
 
 .card {
   margin-bottom: 16px;
-  padding: 18px;
+  padding: 16px;
 }
 
 .sub-panel,
@@ -191,6 +191,11 @@ button.danger {
 }
 
 .add-agent-card {
+  max-width: 980px;
+}
+
+.network-form,
+.forward-form {
   max-width: 980px;
 }
 
@@ -289,8 +294,16 @@ button.danger {
   border-radius: 18px;
   padding: 16px;
   background: rgba(24, 33, 58, 0.78);
-  max-width: 100%;
+  max-width: 420px;
   overflow-wrap: anywhere;
+}
+
+.network-card {
+  max-width: 460px;
+}
+
+.forward-card {
+  max-width: 480px;
 }
 
 .node-card-head {
@@ -519,6 +532,11 @@ details summary {
   min-width: 0;
 }
 
+.compact-cards {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 420px));
+  align-items: start;
+}
+
 .mini-card {
   padding: 15px;
 }
@@ -561,7 +579,7 @@ details summary {
   }
 
   main {
-    width: min(100vw - 20px, 1500px);
+    width: min(100% - 20px, 1360px);
   }
 
   .action-grid {

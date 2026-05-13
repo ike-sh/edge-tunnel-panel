@@ -48,6 +48,21 @@ func forwardPath(cfg Config) string { return filepath.Join(cfg.ConfigDir, "forwa
 func forwardNFTPath(cfg Config) string {
 	return filepath.Join(cfg.ConfigDir, "nftables", "edge-tunnel-forward.nft")
 }
+func forwardRuleStagePath(cfg Config, ruleID, stage string) string {
+	if ruleID == "" {
+		ruleID = "forward"
+	}
+	if stage == "" {
+		stage = "entry"
+	}
+	return filepath.Join(cfg.ConfigDir, "forwards.d", safeFilePart(ruleID)+"-"+safeFilePart(stage)+".json")
+}
+func entryForwardNFTPath(cfg Config) string {
+	return filepath.Join(cfg.ConfigDir, "nftables", "edge-tunnel-entry-forward.nft")
+}
+func landingForwardNFTPath(cfg Config) string {
+	return filepath.Join(cfg.ConfigDir, "nftables", "edge-tunnel-landing-forward.nft")
+}
 func pbrPath(cfg Config) string      { return filepath.Join(cfg.ConfigDir, "pbr.json") }
 func pbrApplyPath(cfg Config) string { return filepath.Join(cfg.ConfigDir, "pbr-apply.sh") }
 func ddnsPath(cfg Config) string     { return filepath.Join(cfg.ConfigDir, "ddns.json") }
@@ -203,7 +218,7 @@ func applyForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, p
 	}
 	rule["target_ip"] = targetHost
 	rule["target_host"] = targetHost
-	warnings, preflightErr := forwardPreflight(ctx, runner, intField(rule, "listen_port"))
+	warnings, preflightErr := forwardPreflightForTable(ctx, runner, "edge_tunnel_forward", intField(rule, "listen_port"))
 	if preflightErr != nil {
 		return TaskResult{Status: "failed", Error: preflightErr.Error(), Result: jsonResult(map[string]any{"listen_port": intField(rule, "listen_port"), "target_ip": targetHost, "target_host": targetHost, "target_port": intField(rule, "target_port"), "warnings": warnings})}
 	}
@@ -245,7 +260,7 @@ func applyForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, p
 	return TaskResult{Status: "succeeded", Stdout: strings.TrimSpace(check.Stdout + "\n" + apply.Stdout), Stderr: strings.TrimSpace(check.Stderr + "\n" + apply.Stderr), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "applied": true, "warnings": warnings, "listen_port": intField(rule, "listen_port"), "target_ip": targetHost, "target_host": targetHost, "target_port": intField(rule, "target_port"), "ip_forward_before": ipForwardBefore, "ip_forward_after": ipForwardAfter, "ip_forward_changed": ipForwardChanged})}
 }
 
-func forwardPreflight(ctx context.Context, runner CommandRunner, listenPort int) ([]string, error) {
+func forwardPreflightForTable(ctx context.Context, runner CommandRunner, tableName string, listenPort int) ([]string, error) {
 	warnings := []string{}
 	if listenPort <= 0 {
 		return warnings, nil
@@ -253,19 +268,83 @@ func forwardPreflight(ctx context.Context, runner CommandRunner, listenPort int)
 	portNeedle := ":" + strconv.Itoa(listenPort)
 	if ss := runner.Run(ctx, "ss", "-lntup"); ss.Err == nil && ss.ExitCode == 0 {
 		if strings.Contains(ss.Stdout, portNeedle) || strings.Contains(ss.Stderr, portNeedle) {
-			return warnings, fmt.Errorf("端口已被占用或已有转发规则，请更换公网监听端口：%d", listenPort)
+			return warnings, fmt.Errorf("\u7aef\u53e3\u5df2\u88ab\u5360\u7528\u6216\u5df2\u6709\u8f6c\u53d1\u89c4\u5219\uff0c\u8bf7\u66f4\u6362\u7aef\u53e3\uff1a%d", listenPort)
 		}
 	} else {
 		warnings = append(warnings, "ss unavailable; skipped process port preflight")
 	}
-	if nft := runner.Run(ctx, "nft", "list", "table", "inet", "edge_tunnel_forward"); nft.Err == nil && nft.ExitCode == 0 {
+	if tableName == "" {
+		tableName = "edge_tunnel_forward"
+	}
+	if nft := runner.Run(ctx, "nft", "list", "table", "inet", tableName); nft.Err == nil && nft.ExitCode == 0 {
 		if strings.Contains(nft.Stdout, "dport "+strconv.Itoa(listenPort)) || strings.Contains(nft.Stderr, "dport "+strconv.Itoa(listenPort)) {
-			return warnings, fmt.Errorf("端口已被占用或已有转发规则，请更换公网监听端口：%d", listenPort)
+			return warnings, fmt.Errorf("\u7aef\u53e3\u5df2\u88ab\u5360\u7528\u6216\u5df2\u6709\u8f6c\u53d1\u89c4\u5219\uff0c\u8bf7\u66f4\u6362\u7aef\u53e3\uff1a%d", listenPort)
 		}
 	} else {
 		warnings = append(warnings, "nft table unavailable before apply; it may be created on first apply")
 	}
 	return warnings, nil
+}
+
+func applyEntryForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
+	rule := mapPayload(payload, "forward_rule")
+	if len(rule) == 0 {
+		rule = payload
+	}
+	ruleID := firstNonEmptyString(stringField(rule, "id", ""), stringField(payload, "rule_id", ""), stringField(payload, "forward_id", ""))
+	protocol := strings.ToLower(firstNonEmptyString(stringField(payload, "protocol", ""), stringField(rule, "protocol", "tcp")))
+	listenPort := firstNonZeroInt(intField(payload, "public_listen_port"), intField(rule, "public_listen_port"), intField(rule, "listen_port"))
+	targetHost := normalizeHostIP(firstNonEmptyString(stringField(payload, "tunnel_target_host", ""), stringField(rule, "tunnel_target_host", ""), stringField(rule, "target_host", ""), stringField(rule, "target_ip", "")))
+	targetPort := firstNonZeroInt(intField(payload, "tunnel_target_port"), intField(rule, "tunnel_target_port"), intField(rule, "public_listen_port"), intField(rule, "listen_port"))
+	if err := validateIPv4ForwardTarget(targetHost, "A \u5230 B \u7684\u76ee\u6807\u5730\u5740"); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	if !validAgentPort(listenPort) || !validAgentPort(targetPort) {
+		return TaskResult{Status: "failed", Error: "public_listen_port and tunnel_target_port must be 1-65535"}
+	}
+	warnings, preflightErr := forwardPreflightForTable(ctx, runner, "edge_tunnel_entry_forward", listenPort)
+	if preflightErr != nil {
+		return TaskResult{Status: "failed", Error: preflightErr.Error(), Result: jsonResult(map[string]any{"stage": "entry", "listen_port": listenPort, "target_host": targetHost, "target_port": targetPort, "warnings": warnings})}
+	}
+	configPath := forwardRuleStagePath(cfg, ruleID, "entry")
+	entryPayload := map[string]any{"stage": "entry", "rule_id": ruleID, "protocol": protocol, "public_listen_port": listenPort, "tunnel_target_host": targetHost, "tunnel_target_port": targetPort}
+	if err := writeJSONFile(configPath, entryPayload, 0o600); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	nftPath := entryForwardNFTPath(cfg)
+	nftContent := renderStageForwardNFT("edge_tunnel_entry_forward", protocol, listenPort, targetHost, targetPort)
+	return applyForwardNFT(ctx, cfg, runner, nftPath, nftContent, map[string]any{"stage": "entry", "rule_id": ruleID, "config_path": configPath, "nft_path": nftPath, "listen_port": listenPort, "target_host": targetHost, "target_port": targetPort, "warnings": warnings})
+}
+
+func applyLandingForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
+	rule := mapPayload(payload, "forward_rule")
+	if len(rule) == 0 {
+		rule = payload
+	}
+	ruleID := firstNonEmptyString(stringField(rule, "id", ""), stringField(payload, "rule_id", ""), stringField(payload, "forward_id", ""))
+	protocol := strings.ToLower(firstNonEmptyString(stringField(payload, "protocol", ""), stringField(rule, "protocol", "tcp")))
+	listenPort := firstNonZeroInt(intField(payload, "tunnel_listen_port"), intField(rule, "tunnel_target_port"), intField(rule, "public_listen_port"), intField(rule, "listen_port"))
+	landingRaw := strings.TrimSpace(firstNonEmptyString(stringField(payload, "landing_host_raw", ""), stringField(rule, "landing_host_raw", ""), stringField(rule, "landing_host", "")))
+	landingPort := firstNonZeroInt(intField(payload, "landing_port"), intField(rule, "landing_port"), intField(rule, "target_port"))
+	targetHost, err := resolveLandingHostIPv4(landingRaw)
+	if err != nil {
+		return TaskResult{Status: "failed", Error: err.Error(), Result: jsonResult(map[string]any{"stage": "landing", "landing_host_raw": landingRaw, "landing_port": landingPort})}
+	}
+	if !validAgentPort(listenPort) || !validAgentPort(landingPort) {
+		return TaskResult{Status: "failed", Error: "tunnel_listen_port and landing_port must be 1-65535"}
+	}
+	warnings, preflightErr := forwardPreflightForTable(ctx, runner, "edge_tunnel_landing_forward", listenPort)
+	if preflightErr != nil {
+		return TaskResult{Status: "failed", Error: preflightErr.Error(), Result: jsonResult(map[string]any{"stage": "landing", "listen_port": listenPort, "landing_host_raw": landingRaw, "landing_host_resolved": targetHost, "landing_port": landingPort, "warnings": warnings})}
+	}
+	configPath := forwardRuleStagePath(cfg, ruleID, "landing")
+	landingPayload := map[string]any{"stage": "landing", "rule_id": ruleID, "protocol": protocol, "tunnel_listen_port": listenPort, "landing_host_raw": landingRaw, "landing_host_resolved": targetHost, "landing_port": landingPort}
+	if err := writeJSONFile(configPath, landingPayload, 0o600); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	nftPath := landingForwardNFTPath(cfg)
+	nftContent := renderStageForwardNFT("edge_tunnel_landing_forward", protocol, listenPort, targetHost, landingPort)
+	return applyForwardNFT(ctx, cfg, runner, nftPath, nftContent, map[string]any{"stage": "landing", "rule_id": ruleID, "config_path": configPath, "nft_path": nftPath, "listen_port": listenPort, "landing_host_raw": landingRaw, "landing_host_resolved": targetHost, "target_host": targetHost, "target_port": landingPort, "warnings": warnings})
 }
 
 func applyPBRConfig(cfg Config, payload map[string]any) TaskResult {
@@ -922,6 +1001,66 @@ func renderForwardNFT(payload map[string]any) string {
 	return fmt.Sprintf("table inet edge_tunnel_forward {\n  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n%s\n  }\n\n  chain output {\n    type nat hook output priority dstnat; policy accept;\n%s\n  }\n\n  chain postrouting {\n    type nat hook postrouting priority srcnat; policy accept;\n    ip daddr %s masquerade\n  }\n}\n", strings.Join(prerouting, "\n"), strings.Join(output, "\n"), targetHost)
 }
 
+func renderStageForwardNFT(tableName, protocol string, listenPort int, targetHost string, targetPort int) string {
+	prerouting := []string{}
+	output := []string{}
+	for _, proto := range forwardProtocols(protocol) {
+		prerouting = append(prerouting, fmt.Sprintf("    %s dport %d dnat ip to %s:%d", proto, listenPort, targetHost, targetPort))
+		output = append(output, fmt.Sprintf("    ip daddr 127.0.0.1 %s dport %d dnat ip to %s:%d", proto, listenPort, targetHost, targetPort))
+	}
+	return fmt.Sprintf("table inet %s {\n  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n%s\n  }\n\n  chain output {\n    type nat hook output priority dstnat; policy accept;\n%s\n  }\n\n  chain postrouting {\n    type nat hook postrouting priority srcnat; policy accept;\n    ip daddr %s masquerade\n  }\n}\n", tableName, strings.Join(prerouting, "\n"), strings.Join(output, "\n"), targetHost)
+}
+
+func applyForwardNFT(ctx context.Context, cfg Config, runner CommandRunner, nftPath, nftContent string, result map[string]any) TaskResult {
+	if err := writeFile(nftPath, []byte(nftContent), 0o600); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	ipForwardBefore := readIPv4Forwarding()
+	ipForwardChanged := false
+	if cfg.EnableWriteActions && strings.TrimSpace(ipForwardBefore) != "1" {
+		if err := writeFile(forwardSysctlConfigPath, []byte("net.ipv4.ip_forward=1\n"), 0o644); err != nil {
+			result["ip_forward_before"] = ipForwardBefore
+			result["ip_forward_changed"] = false
+			return TaskResult{Status: "failed", Error: err.Error(), Result: jsonResult(result)}
+		}
+		sysctl := runner.Run(ctx, "sysctl", "-w", "net.ipv4.ip_forward=1")
+		if sysctl.Err != nil || sysctl.ExitCode != 0 {
+			result["ip_forward_before"] = ipForwardBefore
+			result["ip_forward_changed"] = false
+			return TaskResult{Status: "failed", Stdout: sysctl.Stdout, Stderr: sysctl.Stderr, Error: "enable ip_forward failed: " + errorText(sysctl), Result: jsonResult(result)}
+		}
+		ipForwardChanged = true
+	}
+	check := runner.Run(ctx, "nft", "-c", "-f", nftPath)
+	result["nft_content"] = nftContent
+	if check.Err != nil || check.ExitCode != 0 {
+		result["nft_check_ok"] = false
+		result["nft_check_stdout"] = check.Stdout
+		result["nft_check_stderr"] = check.Stderr
+		result["applied"] = false
+		return TaskResult{Status: "failed", Stdout: check.Stdout, Stderr: check.Stderr, Error: "nft syntax check failed: " + errorText(check), Result: jsonResult(result)}
+	}
+	apply := runner.Run(ctx, "nft", "-f", nftPath)
+	if apply.Err != nil || apply.ExitCode != 0 {
+		result["nft_check_ok"] = true
+		result["nft_apply_stdout"] = apply.Stdout
+		result["nft_apply_stderr"] = apply.Stderr
+		result["applied"] = false
+		return TaskResult{Status: "failed", Stdout: apply.Stdout, Stderr: apply.Stderr, Error: "nft apply failed: " + errorText(apply), Result: jsonResult(result)}
+	}
+	ipForwardAfter := readIPv4Forwarding()
+	if ipForwardAfter == "" {
+		ipForward := runner.Run(ctx, "sysctl", "-n", "net.ipv4.ip_forward")
+		ipForwardAfter = strings.TrimSpace(ipForward.Stdout)
+	}
+	result["nft_check_ok"] = true
+	result["applied"] = true
+	result["ip_forward_before"] = ipForwardBefore
+	result["ip_forward_after"] = ipForwardAfter
+	result["ip_forward_changed"] = ipForwardChanged
+	return TaskResult{Status: "succeeded", Stdout: strings.TrimSpace(check.Stdout + "\n" + apply.Stdout), Stderr: strings.TrimSpace(check.Stderr + "\n" + apply.Stderr), Result: jsonResult(result)}
+}
+
 func forwardProtocols(protocol string) []string {
 	switch strings.ToLower(strings.TrimSpace(protocol)) {
 	case "udp":
@@ -980,6 +1119,88 @@ func normalizeHostIP(value string) string {
 		return addr.String()
 	}
 	return text
+}
+
+func validateIPv4ForwardTarget(target, label string) error {
+	target = normalizeHostIP(target)
+	if target == "" {
+		return fmt.Errorf("%s\u4e0d\u80fd\u4e3a\u7a7a", label)
+	}
+	if strings.Contains(target, "/") {
+		return fmt.Errorf("%s\u4e0d\u80fd\u662f CIDR: %s", label, target)
+	}
+	ip := net.ParseIP(target)
+	if ip == nil || ip.To4() == nil {
+		return fmt.Errorf("%s\u5fc5\u987b\u662f IPv4 \u5730\u5740: %s", label, target)
+	}
+	return nil
+}
+
+func resolveLandingHostIPv4(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("\u843d\u5730\u670d\u52a1\u5668\u5730\u5740\u4e0d\u80fd\u4e3a\u7a7a")
+	}
+	if strings.Contains(raw, "/") {
+		return "", fmt.Errorf("\u843d\u5730\u670d\u52a1\u5668\u5730\u5740\u4e0d\u80fd\u662f CIDR: %s", raw)
+	}
+	if strings.Contains(raw, ":") {
+		return "", fmt.Errorf("v0.2.7-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+	}
+	if ip := net.ParseIP(raw); ip != nil {
+		if ip.To4() == nil {
+			return "", fmt.Errorf("v0.2.7-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		}
+		return ip.String(), nil
+	}
+	ips, err := net.LookupIP(raw)
+	if err != nil {
+		return "", fmt.Errorf("\u65e0\u6cd5\u89e3\u6790\u843d\u5730\u57df\u540d\u4e3a IPv4: %s: %w", raw, err)
+	}
+	for _, ip := range ips {
+		if ip4 := ip.To4(); ip4 != nil {
+			return ip4.String(), nil
+		}
+	}
+	return "", fmt.Errorf("\u65e0\u6cd5\u89e3\u6790\u843d\u5730\u57df\u540d\u4e3a IPv4: %s", raw)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func firstNonZeroInt(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func validAgentPort(port int) bool {
+	return port >= 1 && port <= 65535
+}
+
+func safeFilePart(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "forward"
+	}
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 func readIPv4Forwarding() string {

@@ -399,6 +399,96 @@ func TestAgentApplyForwardNftCheckFailureIncludesDetails(t *testing.T) {
 	}
 }
 
+func TestApplyEntryForwardWritesSeparateNFT(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{
+		"rule_id":            "forward-1",
+		"protocol":           "both",
+		"public_listen_port": 18081.0,
+		"tunnel_target_host": "10.144.0.2/16",
+		"tunnel_target_port": 18081.0,
+	}
+	runner := &fakeRunner{}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_entry_forward_config", Payload: payload})
+	if result.Status != "succeeded" {
+		t.Fatalf("entry forward apply failed: %+v", result)
+	}
+	raw, err := os.ReadFile(entryForwardNFTPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"table inet edge_tunnel_entry_forward",
+		"tcp dport 18081 dnat ip to 10.144.0.2:18081",
+		"udp dport 18081 dnat ip to 10.144.0.2:18081",
+		"ip daddr 10.144.0.2 masquerade",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("entry nft missing %q: %s", want, text)
+		}
+	}
+	if _, err := os.Stat(forwardRuleStagePath(cfg, "forward-1", "entry")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyLandingForwardWritesSeparateNFTAndResolvesDomain(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{
+		"rule_id":            "forward-1",
+		"protocol":           "tcp",
+		"tunnel_listen_port": 18081.0,
+		"landing_host_raw":   "localhost",
+		"landing_port":       8080.0,
+	}
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_landing_forward_config", Payload: payload})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, `"landing_host_resolved":"127.0.0.1"`) {
+		t.Fatalf("landing forward apply failed: %+v", result)
+	}
+	raw, err := os.ReadFile(landingForwardNFTPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"table inet edge_tunnel_landing_forward",
+		"tcp dport 18081 dnat ip to 127.0.0.1:8080",
+		"ip daddr 127.0.0.1 masquerade",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("landing nft missing %q: %s", want, text)
+		}
+	}
+	if _, err := os.Stat(forwardRuleStagePath(cfg, "forward-1", "landing")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyLandingForwardRejectsCIDRAndIPv6(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	for _, host := range []string{"10.0.0.1/24", "fd00::1"} {
+		payload := map[string]any{"protocol": "tcp", "tunnel_listen_port": 18081.0, "landing_host_raw": host, "landing_port": 8080.0}
+		result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_landing_forward_config", Payload: payload})
+		if result.Status != "failed" {
+			t.Fatalf("expected landing host %q to fail: %+v", host, result)
+		}
+	}
+}
+
+func TestApplyEntryForwardRejectsDomainTarget(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"protocol": "tcp", "public_listen_port": 18081.0, "tunnel_target_host": "example.com", "tunnel_target_port": 18081.0}
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_entry_forward_config", Payload: payload})
+	if result.Status != "failed" || !strings.Contains(result.Error, "IPv4") {
+		t.Fatalf("expected entry target IPv4 rejection: %+v", result)
+	}
+}
+
 func TestApplyPBRWritesStructuredScript(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
