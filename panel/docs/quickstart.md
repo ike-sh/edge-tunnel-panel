@@ -4,7 +4,7 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.5-test
+  --version v0.1.6-test
 ```
 
 打开 `http://服务器IP:18080`。
@@ -21,5 +21,5 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 4. 在配置卡片中选择目标节点。
 5. 点击“应用到节点”。
 6. 到“任务”页面查看 `apply_network_profile` 结果。
-7. 如果提示 `easytier-core not found`，先手动安装 EasyTier 或等待后续自动安装功能。
+7. ?????? `curl`/`wget`/`unzip`???????????????????? EasyTier ????
 8. 回到“节点”页面刷新查看 EasyTier 状态。

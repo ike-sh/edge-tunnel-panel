@@ -40,3 +40,7 @@ systemctl enable edge-tunnel-easytier.service
 systemctl restart edge-tunnel-easytier.service
 systemctl is-active edge-tunnel-easytier.service
 ```
+
+## EasyTier ????
+
+`edge-tunnel-easytier.service` ? `ExecStart` ?? `easytier-core` CLI ?????`--network-name`?`--network-secret`??? `-l` listeners????? `-p` peers?`/etc/edge-tunnel/agent/easytier.toml` ?????????????????

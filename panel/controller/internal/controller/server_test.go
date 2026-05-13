@@ -119,12 +119,12 @@ func TestAgentRegisterAndReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.5-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.6-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.1.5-test") ||
+		!strings.Contains(body, "--version v0.1.6-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||
@@ -220,7 +220,7 @@ func TestApplyCreatesTasks(t *testing.T) {
 
 func TestNetworkProfileCRUD(t *testing.T) {
 	h := testServer(t)
-	create := post(t, h, "/api/v1/network-profiles", "operator-token", map[string]any{"name": "prod", "network_name": "edge-prod"})
+	create := post(t, h, "/api/v1/network-profiles", "operator-token", map[string]any{"name": "prod", "network_name": "edge-prod", "listeners": []any{"tcp://0.0.0.0:11010"}, "peers": []any{"tcp://1.2.3.4:11010"}})
 	if create.Code != 200 {
 		t.Fatalf("create failed: %d %s", create.Code, create.Body.String())
 	}
@@ -233,11 +233,11 @@ func TestNetworkProfileCRUD(t *testing.T) {
 	if err := json.Unmarshal(raw, &profile); err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID == "" || profile.NetworkSecret == "" || profile.CIDR != "10.144.0.0/16" || profile.ProtocolPreference != "auto" {
+	if profile.ID == "" || profile.NetworkSecret == "" || profile.CIDR != "10.144.0.0/16" || profile.ProtocolPreference != "auto" || len(profile.Listeners) != 1 || len(profile.Peers) != 1 {
 		t.Fatalf("defaults not applied: %+v", profile)
 	}
-	update := postMethod(t, h, http.MethodPut, "/api/v1/network-profiles/"+profile.ID, "operator-token", map[string]any{"name": "prod-updated", "cidr": "10.200.0.0/16"})
-	if update.Code != 200 || !strings.Contains(update.Body.String(), "prod-updated") {
+	update := postMethod(t, h, http.MethodPut, "/api/v1/network-profiles/"+profile.ID, "operator-token", map[string]any{"name": "prod-updated", "cidr": "10.200.0.0/16", "peers": []any{"udp://1.2.3.4:11010"}})
+	if update.Code != 200 || !strings.Contains(update.Body.String(), "prod-updated") || !strings.Contains(update.Body.String(), "udp://1.2.3.4:11010") {
 		t.Fatalf("update failed: %d %s", update.Code, update.Body.String())
 	}
 	list := get(t, h, "/api/v1/network-profiles", "operator-token")
@@ -262,14 +262,14 @@ func TestNetworkProfileApplyCreatesTask(t *testing.T) {
 	if rr := post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-a", "node_name": "edge-a", "role": "backend"}); rr.Code != 200 {
 		t.Fatalf("register failed: %d %s", rr.Code, rr.Body.String())
 	}
-	create := post(t, h, "/api/v1/network-profiles", "operator-token", map[string]any{"name": "prod", "network_name": "edge-prod"})
+	create := post(t, h, "/api/v1/network-profiles", "operator-token", map[string]any{"name": "prod", "network_name": "edge-prod", "listeners": []any{"tcp://0.0.0.0:11010"}, "peers": []any{"tcp://1.2.3.4:11010"}})
 	var resp APIResponse
 	_ = json.Unmarshal(create.Body.Bytes(), &resp)
 	raw, _ := json.Marshal(resp.Data)
 	var profile NetworkProfile
 	_ = json.Unmarshal(raw, &profile)
 	apply := post(t, h, "/api/v1/network-profiles/"+profile.ID+"/apply", "operator-token", map[string]any{"node_id": "node-a"})
-	if apply.Code != 202 || !strings.Contains(apply.Body.String(), "apply_network_profile") || !strings.Contains(apply.Body.String(), "network_profile") || !strings.Contains(apply.Body.String(), "node-a") {
+	if apply.Code != 202 || !strings.Contains(apply.Body.String(), "apply_network_profile") || !strings.Contains(apply.Body.String(), "network_profile") || !strings.Contains(apply.Body.String(), "node-a") || !strings.Contains(apply.Body.String(), "tcp://1.2.3.4:11010") {
 		t.Fatalf("apply did not create task: %d %s", apply.Code, apply.Body.String())
 	}
 }

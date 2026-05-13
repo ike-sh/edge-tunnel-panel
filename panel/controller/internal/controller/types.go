@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.1.5-test"
+	Version = "v0.1.6-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )

@@ -27,7 +27,7 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 	case "configure_node_role":
 		return configureNodeRole(cfg, task.Payload)
 	case "install_or_update_easytier":
-		return installOrUpdateEasyTier(ctx, runner)
+		return installOrUpdateEasyTier(ctx, cfg, runner, task.Payload)
 	case "apply_network_profile":
 		return applyNetworkProfile(ctx, cfg, runner, task.Payload)
 	case "apply_entry_config":

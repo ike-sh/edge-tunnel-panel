@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
 	"net/http"
@@ -28,6 +29,60 @@ func (f *fakeRunner) LookPath(name string) (string, error) {
 		return "/usr/bin/" + name, nil
 	}
 	return "", errors.New("missing")
+}
+
+type installRunner struct {
+	fakeRunner
+	archive    string
+	installDir string
+}
+
+func (r *installRunner) Run(ctx context.Context, name string, args ...string) CommandResult {
+	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	if name == "curl" || name == "wget" {
+		dest := args[len(args)-1]
+		if name == "curl" {
+			dest = args[len(args)-1]
+		}
+		if name == "wget" {
+			dest = args[1]
+		}
+		raw, err := os.ReadFile(r.archive)
+		if err != nil {
+			return CommandResult{Err: err, ExitCode: 1}
+		}
+		if err := os.WriteFile(dest, raw, 0o644); err != nil {
+			return CommandResult{Err: err, ExitCode: 1}
+		}
+		return CommandResult{Stdout: "downloaded", ExitCode: 0}
+	}
+	if name == "unzip" {
+		dest := args[len(args)-1]
+		if err := os.MkdirAll(filepath.Join(dest, "pkg"), 0o755); err != nil {
+			return CommandResult{Err: err, ExitCode: 1}
+		}
+		if err := os.WriteFile(filepath.Join(dest, "pkg", "easytier-core"), []byte("core"), 0o755); err != nil {
+			return CommandResult{Err: err, ExitCode: 1}
+		}
+		if err := os.WriteFile(filepath.Join(dest, "pkg", "easytier-cli"), []byte("cli"), 0o755); err != nil {
+			return CommandResult{Err: err, ExitCode: 1}
+		}
+		return CommandResult{Stdout: "unzipped", ExitCode: 0}
+	}
+	if strings.HasSuffix(name, "easytier-core") && len(args) == 1 && args[0] == "--version" {
+		return CommandResult{Stdout: "easytier v2.4.5", ExitCode: 0}
+	}
+	return r.fakeRunner.Run(ctx, name, args...)
+}
+
+func (r *installRunner) LookPath(name string) (string, error) {
+	if r.installDir != "" {
+		candidate := filepath.Join(r.installDir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return r.fakeRunner.LookPath(name)
 }
 
 func testConfig(t *testing.T) Config {
@@ -252,7 +307,7 @@ func TestApplyNetworkProfileWritesEasyTierConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if !strings.Contains(text, `network_name = "edge-prod"`) || !strings.Contains(text, `protocol_preference = "tcp"`) || !strings.Contains(text, `node_name`) {
+	if !strings.Contains(text, `network_name = "edge-prod"`) || !strings.Contains(text, `default_protocol = "tcp"`) || !strings.Contains(text, `instance_name`) || !strings.Contains(text, `peer = ["tcp://1.2.3.4:11010"]`) {
 		t.Fatalf("unexpected easytier config: %s", text)
 	}
 	if _, err := os.Stat(networkProfilePath(cfg)); err != nil {
@@ -270,7 +325,7 @@ func TestApplyNetworkProfileWritesSystemdService(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if !strings.Contains(text, "Description=Edge Tunnel EasyTier") || !strings.Contains(text, "edge-tunnel-easytier.service") && !strings.Contains(text, "easytier.toml") {
+	if !strings.Contains(text, "Description=Edge Tunnel EasyTier") || !strings.Contains(text, "--network-name edge-prod") || !strings.Contains(text, "-l tcp://0.0.0.0:11010") {
 		t.Fatalf("unexpected service: %s", text)
 	}
 }
@@ -279,7 +334,7 @@ func TestApplyNetworkProfileMissingBinaryReturnsError(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
 	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_network_profile", Payload: map[string]any{"network_name": "edge-prod"}})
-	if result.Status != "failed" || !strings.Contains(result.Error, "easytier-core not found") {
+	if result.Status != "failed" || !strings.Contains(result.Error, "missing dependency") {
 		t.Fatalf("expected missing binary failure: %+v", result)
 	}
 	if _, err := os.Stat(easyTierPath(cfg)); err != nil {
@@ -320,9 +375,104 @@ func TestApplyNetworkProfileUsesFixedSystemctlArgv(t *testing.T) {
 			t.Fatalf("missing fixed call %q in %s", expected, joined)
 		}
 	}
-	if strings.Contains(joined, "shell") || strings.Contains(joined, "-c") {
+	if strings.Contains(joined, "shell -c") || strings.Contains(joined, "bash -c") {
 		t.Fatalf("unexpected shell usage: %s", joined)
 	}
+}
+
+func TestInstallEasyTierAlreadyInstalled(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{paths: map[string]bool{"easytier-core": true}}, Task{Action: "install_or_update_easytier", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, "already installed") {
+		t.Fatalf("expected already installed: %+v", result)
+	}
+}
+
+func TestInstallEasyTierMissingDependencies(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "install_or_update_easytier", Payload: map[string]any{}})
+	if result.Status != "failed" || !strings.Contains(result.Error, "missing dependency") {
+		t.Fatalf("expected dependency failure: %+v", result)
+	}
+}
+
+func TestApplyNetworkProfileAutoInstallCalledWhenMissingBinary(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	oldInstallDir := easyTierInstallDir
+	easyTierInstallDir = filepath.Join(t.TempDir(), "bin")
+	t.Cleanup(func() { easyTierInstallDir = oldInstallDir })
+	archive := createEasyTierArchive(t)
+	runner := &installRunner{archive: archive, installDir: easyTierInstallDir}
+	runner.paths = map[string]bool{"curl": true, "unzip": true}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_network_profile", Payload: map[string]any{"network_name": "edge-prod", "network_secret": "secret"}})
+	if result.Status != "succeeded" {
+		t.Fatalf("expected auto install apply success: %+v", result)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	if !strings.Contains(joined, "curl -fL") || !strings.Contains(joined, "unzip -o") {
+		t.Fatalf("expected download and unzip calls: %s", joined)
+	}
+}
+
+func TestGenerateEasyTierServiceUsesCLIArgs(t *testing.T) {
+	cfg := testConfig(t)
+	service := edgeTunnelEasyTierService(cfg, map[string]any{"network_name": "edge", "network_secret": "secret"}, "/usr/local/bin/easytier-core", []string{"tcp://0.0.0.0:11010"}, []string{"tcp://1.2.3.4:11010"})
+	for _, want := range []string{"--network-name edge", "--network-secret secret", "-l tcp://0.0.0.0:11010", "-p tcp://1.2.3.4:11010"} {
+		if !strings.Contains(service, want) {
+			t.Fatalf("service missing %q: %s", want, service)
+		}
+	}
+}
+
+func TestVerifyEasyTierStatusIncludesVersion(t *testing.T) {
+	cfg := testConfig(t)
+	_ = writeFile(easyTierPath(cfg), []byte("network_name = \"edge\""), 0o600)
+	_ = writeFile(easyTierServiceSystemPath(), []byte("service"), 0o644)
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{paths: map[string]bool{"easytier-core": true}}, Task{Action: "verify_easytier_status", Payload: map[string]any{}})
+	if !strings.Contains(result.Result, "version") || !strings.Contains(result.Result, "binary_path") {
+		t.Fatalf("verify result missing version details: %+v", result)
+	}
+}
+
+func TestVerifyEasyTierStatusUsesEasyTierCLIWhenAvailable(t *testing.T) {
+	cfg := testConfig(t)
+	_ = writeFile(easyTierPath(cfg), []byte("network_name = \"edge\""), 0o600)
+	_ = writeFile(easyTierServiceSystemPath(), []byte("service"), 0o644)
+	runner := &fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true}}
+	_ = ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_easytier_status", Payload: map[string]any{}})
+	joined := strings.Join(runner.calls, "\n")
+	for _, want := range []string{"easytier-cli node", "easytier-cli peer", "easytier-cli route"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing cli call %q in %s", want, joined)
+		}
+	}
+}
+
+func createEasyTierArchive(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "easytier.zip")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(file)
+	for _, name := range []string{"pkg/easytier-core", "pkg/easytier-cli"} {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte("#!/bin/sh\n"))
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestClientRegisterReportTasksResult(t *testing.T) {

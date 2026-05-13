@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.5-test';
+const DEFAULT_VERSION = 'v0.1.6-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -88,6 +88,10 @@ function safeList(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function lines(value) {
+  return String(value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+}
+
 function summarize(value) {
   if (value === null || value === undefined || value === '') return '-';
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -141,7 +145,9 @@ function App() {
     network_name: 'edge-net',
     network_secret: '',
     cidr: '10.144.0.0/16',
-    protocol_preference: 'auto'
+    protocol_preference: 'auto',
+    listeners: 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010',
+    peers: ''
   });
   const [networkApplyNode, setNetworkApplyNode] = useState({});
   const [editingNetworkId, setEditingNetworkId] = useState('');
@@ -356,15 +362,24 @@ function App() {
     setAlert({ type: 'success', message: '已复制' + label + '，请到被控服务器执行。' });
   }
 
+  function networkPayload() {
+    return {
+      ...networkForm,
+      listeners: lines(networkForm.listeners),
+      peers: lines(networkForm.peers)
+    };
+  }
+
   async function createNetworkProfile(event) {
     event.preventDefault();
     await run(editingNetworkId ? '更新组网配置' : '创建组网配置', async () => {
+      const body = networkPayload();
       if (editingNetworkId) {
-        await api('/network-profiles/' + editingNetworkId, { method: 'PUT', body: networkForm });
+        await api('/network-profiles/' + editingNetworkId, { method: 'PUT', body });
       } else {
-        await api('/network-profiles', { body: networkForm });
+        await api('/network-profiles', { body });
       }
-      setNetworkForm({ name: '', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', protocol_preference: 'auto' });
+      setNetworkForm({ name: '', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', protocol_preference: 'auto', listeners: 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010', peers: '' });
       setEditingNetworkId('');
       await refreshNetworkProfiles();
     });
@@ -377,7 +392,9 @@ function App() {
       network_name: profile.network_name || 'edge-net',
       network_secret: profile.network_secret || '',
       cidr: profile.cidr || '10.144.0.0/16',
-      protocol_preference: profile.protocol_preference || 'auto'
+      protocol_preference: profile.protocol_preference || 'auto',
+      listeners: (profile.listeners || []).join('\n') || 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010',
+      peers: (profile.peers || []).join('\n')
     });
   }
 
@@ -518,47 +535,32 @@ function App() {
             <button onClick={() => setShowAddAgent(true)}>添加节点</button>
           </div>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>节点 ID</th>
-                  <th>名称</th>
-                  <th>角色</th>
-                  <th>状态</th>
-                  <th>主机名</th>
-                  <th>公网 IP</th>
-                  <th>内网 IP</th>
-                  <th>EasyTier</th>
-                  <th>最后上报</th>
-                  <th>能力</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {nodes.map((node) => (
-                  <tr key={node.id}>
-                    <td title={node.id}><code>{String(node.id || '-').slice(0, 16)}</code></td>
-                    <td>{node.name || node.id}</td>
-                    <td>{roleText[node.role] || node.role || '-'}</td>
-                    <td><span className={statusClass(node.status)}>{trStatus(node.status)}</span></td>
-                    <td>{node.hostname || '-'}</td>
-                    <td>{node.public_ip || '-'}</td>
-                    <td>{node.private_ip || '-'}</td>
-                    <td>{node.easytier_ip || '-'}<br /><small>{trStatus(node.easytier_status)}</small></td>
-                    <td>{formatTime(node.last_seen_at)}</td>
-                    <td><div className="cap-list">{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).map((key) => <span className="cap" key={key}>{key}</span>)}</div></td>
-                    <td>
-                      <button className="secondary" onClick={() => setOpenNodeActions(openNodeActions === node.id ? '' : node.id)}>节点操作</button>
-                      {openNodeActions === node.id && <div className="action-panel">
-                        {readonlyActions.map((action) => <button key={action} className={action.startsWith('restart_') ? 'warning' : 'secondary'} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}
-                        <p className="muted">重启动作会修改节点服务状态，请只在可信节点执行。</p>
-                      </div>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="node-grid">
+            {nodes.map((node) => (
+              <div className="node-card" key={node.id}>
+                <div className="node-card-head">
+                  <div>
+                    <h3>{node.name || node.id}</h3>
+                    <code title={node.id}>{String(node.id || '-').slice(0, 16)}</code>
+                  </div>
+                  <div className="inline"><span className="badge">{roleText[node.role] || node.role || '-'}</span><span className={statusClass(node.status)}>{trStatus(node.status)}</span></div>
+                </div>
+                <KeyValues rows={[
+                  ['主机名', node.hostname],
+                  ['公网 IP', node.public_ip],
+                  ['内网 IP', node.private_ip],
+                  ['EasyTier IP', node.easytier_ip],
+                  ['EasyTier 状态', trStatus(node.easytier_status)],
+                  ['最后上报', formatTime(node.last_seen_at)]
+                ]} />
+                <div className="cap-list">{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).map((key) => <span className="cap" key={key}>{key}</span>)}</div>
+                <div className="actions"><button className="secondary" onClick={() => setOpenNodeActions(openNodeActions === node.id ? '' : node.id)}>节点操作</button></div>
+                {openNodeActions === node.id && <div className="action-panel">
+                  {readonlyActions.map((action) => <button key={action} className={action.startsWith('restart_') ? 'warning' : 'secondary'} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}
+                  <p className="muted">重启动作会修改节点服务状态，请只在可信节点执行。</p>
+                </div>}
+              </div>
+            ))}
           </div>
         )}
       </Card>
@@ -621,8 +623,10 @@ function App() {
             <Field label="网络密钥" value={networkForm.network_secret} onChange={(value) => setNetworkForm({ ...networkForm, network_secret: value })} />
             <Field label="CIDR" value={networkForm.cidr} onChange={(value) => setNetworkForm({ ...networkForm, cidr: value })} />
             <Select label="协议偏好" value={networkForm.protocol_preference} options={['auto', 'tcp', 'udp', 'wg', 'ws', 'wss']} onChange={(value) => setNetworkForm({ ...networkForm, protocol_preference: value })} />
+            <label>监听地址 listeners<textarea value={networkForm.listeners} onChange={(event) => setNetworkForm({ ...networkForm, listeners: event.target.value })} /></label>
+            <label>对端 peers<textarea value={networkForm.peers} onChange={(event) => setNetworkForm({ ...networkForm, peers: event.target.value })} placeholder="tcp://公网入口IP:11010" /></label>
             <button type="submit">{editingNetworkId ? '保存' : '创建'}</button>
-            {editingNetworkId && <button type="button" className="secondary" onClick={() => { setEditingNetworkId(''); setNetworkForm({ name: '', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', protocol_preference: 'auto' }); }}>取消编辑</button>}
+            {editingNetworkId && <button type="button" className="secondary" onClick={() => { setEditingNetworkId(''); setNetworkForm({ name: '', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', protocol_preference: 'auto', listeners: 'tcp://0.0.0.0:11010\nudp://0.0.0.0:11010', peers: '' }); }}>取消编辑</button>}
           </form>
         </Card>
         <Card title="组网配置" action={<button onClick={() => run('刷新组网配置', refreshNetworkProfiles)}>刷新</button>}>
@@ -631,6 +635,8 @@ function App() {
               <div className="mini-card" key={profile.id}>
                 <h3>{profile.name}</h3>
                 <p>{profile.network_name} · {profile.cidr} · {profile.protocol_preference}</p>
+                <p><strong>listeners</strong>: {(profile.listeners || []).join(', ') || '-'}</p>
+                <p><strong>peers</strong>: {(profile.peers || []).join(', ') || '-'}</p>
                 <div className="inline">
                   <select value={networkApplyNode[profile.id] || ''} onChange={(event) => setNetworkApplyNode({ ...networkApplyNode, [profile.id]: event.target.value })}>
                     <option value="">选择目标节点</option>
