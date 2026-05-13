@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.2-test';
+const DEFAULT_VERSION = 'v0.1.3-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -28,10 +28,21 @@ const readonlyActions = [
 
 const roleOptions = [
   ['backend', '后端节点'],
-  ['entry', '公网入口'],
-  ['relay', '中继'],
+  ['entry', '公网入口节点'],
+  ['relay', '中继节点'],
   ['exit', '出口节点']
 ];
+
+const roleText = Object.fromEntries(roleOptions);
+
+const actionText = {
+  collect_agent_status: '状态检查',
+  verify_agent_config: '验证配置',
+  verify_easytier_status: '验证 EasyTier',
+  verify_forward_rules: '验证转发',
+  verify_pbr_rules: '验证出口策略',
+  verify_ddns_status: '验证 DDNS'
+};
 
 const statusText = {
   online: '在线',
@@ -113,6 +124,7 @@ function App() {
   });
   const [maskedCommand, setMaskedCommand] = useState('');
   const [fullCommand, setFullCommand] = useState('');
+  const [canCopyAgentCommand, setCanCopyAgentCommand] = useState(false);
 
   const [networkForm, setNetworkForm] = useState({
     name: '',
@@ -320,13 +332,17 @@ function App() {
     if (!data?.masked_command && !data?.command) return;
     setMaskedCommand(data.masked_command || data.command);
     setFullCommand(data.full_command || '');
+    setCanCopyAgentCommand(Boolean(data.can_copy && data.full_command));
     setAgentForm((current) => ({ ...current, show_full_token: showFull }));
   }
 
-  async function copyText(text) {
-    if (!text) return;
-    await navigator.clipboard.writeText(text);
-    setAlert({ type: 'success', message: '已复制，去被控服务器执行即可' });
+  async function copyAgentCommand() {
+    if (!agentForm.show_full_token || !canCopyAgentCommand || !fullCommand) {
+      setAlert({ type: 'error', message: '请先勾选“显示完整 Token”，再复制可执行命令。' });
+      return;
+    }
+    await navigator.clipboard.writeText(fullCommand);
+    setAlert({ type: 'success', message: '已复制完整一键命令，请到被控服务器执行。' });
   }
 
   async function createNetworkProfile(event) {
@@ -455,11 +471,12 @@ function App() {
   function renderNodes() {
     return (
       <Card title="节点" action={<div className="inline"><button onClick={() => run('刷新节点', refreshNodes)}>刷新</button><button onClick={() => setShowAddAgent(true)}>添加节点</button></div>}>
+        <p className="muted">管理已接入的被控服务器。点击“添加节点”生成一键命令，在被控服务器执行后会自动上线。</p>
         {showAddAgent && renderAddAgentPanel()}
         {!nodes.length ? (
           <div className="empty-state">
-            <h3>暂无节点。</h3>
-            <p>点击“添加节点”生成一键接入命令，把 Agent 安装到被控服务器。</p>
+            <h3>暂无节点</h3>
+            <p>点击“添加节点”生成一键 Agent 接入命令。</p>
             <button onClick={() => setShowAddAgent(true)}>添加节点</button>
           </div>
         ) : (
@@ -482,8 +499,8 @@ function App() {
               <tbody>
                 {nodes.map((node) => (
                   <tr key={node.id}>
-                    <td>{node.name || node.id}</td>
-                    <td>{node.role || '-'}</td>
+                  <td>{node.name || node.id}</td>
+                  <td>{roleText[node.role] || node.role || '-'}</td>
                     <td><span className={statusClass(node.status)}>{trStatus(node.status)}</span></td>
                     <td>{node.hostname || '-'}</td>
                     <td>{node.public_ip || '-'}</td>
@@ -494,7 +511,7 @@ function App() {
                     <td>
                       <select onChange={(event) => event.target.value && createTask(node.id, event.target.value)} defaultValue="">
                         <option value="">创建任务</option>
-                        {readonlyActions.map((action) => <option key={action} value={action}>{action}</option>)}
+                      {readonlyActions.map((action) => <option key={action} value={action}>{actionText[action] || action}</option>)}
                       </select>
                     </td>
                   </tr>
@@ -508,7 +525,6 @@ function App() {
   }
 
   function renderAddAgentPanel() {
-    const visibleCommand = agentForm.show_full_token && fullCommand ? fullCommand : maskedCommand;
     return (
       <div className="sub-panel">
         <div className="card-head">
@@ -532,11 +548,25 @@ function App() {
         }} /> 显示完整 Token</label>
         <div className="actions">
           <button onClick={() => generateAgentCommand(agentForm.show_full_token)}>生成一键命令</button>
-          <button className="secondary" onClick={() => copyText(visibleCommand)}>复制命令</button>
+          <button className="secondary" onClick={copyAgentCommand}>复制命令</button>
           <button className="secondary" onClick={() => setShowAddAgent(false)}>关闭</button>
         </div>
-        <pre>{visibleCommand || '点击“生成一键命令”后，这里会显示可复制的 Agent 接入命令。'}</pre>
-        {visibleCommand && <p className="muted">下一步：复制后到被控服务器执行，然后回到“节点”页面刷新查看在线状态。</p>}
+        <div className="command-block">
+          <div className="command-title"><strong>预览命令</strong><span>打码命令不可直接执行。</span></div>
+          <pre>{maskedCommand || '点击“生成一键命令”后，这里会显示打码预览。'}</pre>
+        </div>
+        {agentForm.show_full_token && (
+          <div className="command-block danger">
+            <div className="command-title"><strong>完整命令</strong><span>完整命令包含 Agent 接入 Token，请勿泄露。</span></div>
+            <pre>{fullCommand || '请点击“生成一键命令”获取完整可执行命令。'}</pre>
+          </div>
+        )}
+        {maskedCommand && <ol className="steps">
+          <li>勾选“显示完整 Token”</li>
+          <li>点击“复制命令”</li>
+          <li>到被控服务器执行</li>
+          <li>回到“节点”页面点击刷新查看在线状态</li>
+        </ol>}
       </div>
     );
   }

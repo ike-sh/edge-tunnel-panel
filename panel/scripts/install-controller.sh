@@ -239,8 +239,12 @@ if [ "$NO_START" = false ]; then
   systemctl restart edge-tunnel-controller.service
 fi
 
-log "installed /usr/local/bin/edge-tunnel-controller"
-log "controller URL: http://${LISTEN}"
-log "operator token: ${OPERATOR_TOKEN}"
-log "agent token: ${AGENT_TOKEN}"
-log "tokens are shown once; keep them safe"
+log "Controller 安装完成。"
+log "访问地址：http://${LISTEN}"
+log "Operator Token：${OPERATOR_TOKEN}"
+log "Agent 接入 Token：${AGENT_TOKEN}"
+log "Token 只在安装输出中显示一次，请妥善保存。"
+log "下一步："
+log "1. 打开主控 Web"
+log "2. 保存 Operator Token"
+log "3. 进入“节点”页面，点击“添加节点”生成一键接入命令"

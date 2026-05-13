@@ -4,7 +4,7 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.2-test
+  --version v0.1.3-test
 ```
 
 打开 `http://服务器IP:18080`，保存安装输出中的 Operator Token。
@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.1.2-test \
+  --version v0.1.3-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \

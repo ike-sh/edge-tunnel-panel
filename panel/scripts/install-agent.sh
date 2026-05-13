@@ -191,6 +191,38 @@ WantedBy=multi-user.target
 EOF
 }
 
+run_once_registration_check() {
+  local args=(
+    --controller-url "$CONTROLLER_URL"
+    --token "$CONTROLLER_TOKEN"
+    --node-name "$NODE_NAME"
+    --role "$NODE_ROLE"
+    --config-dir "$CONFIG_DIR"
+    --state-dir "$STATE_DIR"
+    --once
+  )
+  if [ -n "$NODE_ID" ]; then
+    args+=(--node-id "$NODE_ID")
+  fi
+  if [ "$ENABLE_TASKS" = true ]; then
+    args+=(--enable-tasks)
+  fi
+  if [ "$ENABLE_WRITE_ACTIONS" = true ]; then
+    args+=(--enable-write-actions)
+  fi
+  log "正在尝试一次性注册"
+  if ! "$INSTALL_DIR/edge-tunnel-agent" "${args[@]}"; then
+    log "一次性注册失败"
+    log "Controller 地址：${CONTROLLER_URL}"
+    log "节点名称：${NODE_NAME}"
+    log "节点角色：${NODE_ROLE}"
+    log "请检查 Controller 地址、Token、防火墙和服务日志："
+    log "journalctl -u edge-tunnel-agent -n 100 --no-pager"
+    return 1
+  fi
+  log "一次性注册完成"
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
@@ -230,13 +262,19 @@ write_env
 write_service
 systemctl daemon-reload
 systemctl enable edge-tunnel-agent.service
-"$INSTALL_DIR/edge-tunnel-agent" --once || log "one-time registration check failed; inspect service logs after startup"
+run_once_registration_check || true
 if [ "$NO_START" = false ]; then
   systemctl restart edge-tunnel-agent.service
 fi
 
-log "installed /usr/local/bin/edge-tunnel-agent"
-log "controller URL: ${CONTROLLER_URL}"
-log "controller token: $(mask "$CONTROLLER_TOKEN")"
-log "node name: ${NODE_NAME}"
-log "node role: ${NODE_ROLE}"
+log "Agent 安装完成。"
+log "Controller 地址：${CONTROLLER_URL}"
+log "Controller Token：$(mask "$CONTROLLER_TOKEN")"
+log "节点名称：${NODE_NAME}"
+log "节点角色：${NODE_ROLE}"
+log "下一步："
+log "1. 回到主控面板“节点”页面"
+log "2. 点击“刷新”"
+log "3. 如果节点未上线，查看："
+log "   systemctl status edge-tunnel-agent --no-pager"
+log "   journalctl -u edge-tunnel-agent -n 100 --no-pager"

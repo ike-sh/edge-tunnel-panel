@@ -28,6 +28,7 @@ func ConfigFromEnv() Config {
 	cfg := DefaultConfig()
 	cfg.ControllerURL = strings.TrimSpace(os.Getenv("EDGE_CONTROLLER_URL"))
 	cfg.ControllerToken = strings.TrimSpace(os.Getenv("EDGE_CONTROLLER_TOKEN"))
+	cfg.NodeID = strings.TrimSpace(os.Getenv("EDGE_NODE_ID"))
 	cfg.NodeName = envOrDefault("EDGE_NODE_NAME", cfg.NodeName)
 	cfg.NodeRole = envOrDefault("EDGE_NODE_ROLE", cfg.NodeRole)
 	cfg.ConfigDir = envOrDefault("EDGE_AGENT_CONFIG_DIR", cfg.ConfigDir)
@@ -41,6 +42,7 @@ func ConfigFromEnv() Config {
 func (cfg *Config) Normalize() error {
 	cfg.ControllerURL = strings.TrimRight(strings.TrimSpace(cfg.ControllerURL), "/")
 	cfg.ControllerToken = strings.TrimSpace(cfg.ControllerToken)
+	cfg.NodeID = strings.TrimSpace(cfg.NodeID)
 	cfg.NodeName = strings.TrimSpace(cfg.NodeName)
 	cfg.NodeRole = normalizeRole(cfg.NodeRole)
 	if cfg.NodeName == "" {

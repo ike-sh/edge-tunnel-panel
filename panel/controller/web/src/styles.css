@@ -167,6 +167,27 @@ button.warning {
   padding: 16px;
 }
 
+.command-block {
+  margin-top: 14px;
+}
+
+.command-block.danger pre {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.command-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.command-title span,
+.steps {
+  color: var(--muted);
+}
+
 .card-head {
   display: flex;
   align-items: center;

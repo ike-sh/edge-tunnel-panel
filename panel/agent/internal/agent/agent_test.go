@@ -48,6 +48,7 @@ func testConfig(t *testing.T) Config {
 func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("EDGE_CONTROLLER_URL", "http://controller:18080/")
 	t.Setenv("EDGE_CONTROLLER_TOKEN", "token")
+	t.Setenv("EDGE_NODE_ID", "node-env")
 	t.Setenv("EDGE_NODE_NAME", "edge-a")
 	t.Setenv("EDGE_NODE_ROLE", "entry")
 	t.Setenv("EDGE_ENABLE_TASKS", "true")
@@ -58,11 +59,52 @@ func TestConfigFromEnv(t *testing.T) {
 	if cfg.ControllerURL != "http://controller:18080" || cfg.ControllerToken != "token" {
 		t.Fatalf("env config not loaded: %+v", cfg)
 	}
+	if cfg.NodeID != "node-env" {
+		t.Fatalf("node id env not applied: %+v", cfg)
+	}
 	if cfg.NodeName != "edge-a" || cfg.NodeRole != "entry" || !cfg.EnableTasks || !cfg.EnableWriteActions {
 		t.Fatalf("env values not applied: %+v", cfg)
 	}
 	if cfg.ConfigDir != "/tmp/edge-config" || cfg.StateDir != "/tmp/edge-state" {
 		t.Fatalf("env dirs not applied: %+v", cfg)
+	}
+}
+
+func TestConfigFlagsOverrideEnv(t *testing.T) {
+	t.Setenv("EDGE_CONTROLLER_URL", "http://env-controller:18080")
+	t.Setenv("EDGE_CONTROLLER_TOKEN", "env-token")
+	t.Setenv("EDGE_NODE_ID", "env-node")
+	cfg := ConfigFromEnv()
+	cfg.ControllerURL = "http://flag-controller:18080/"
+	cfg.ControllerToken = "flag-token"
+	cfg.NodeID = "flag-node"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ControllerURL != "http://flag-controller:18080" || cfg.ControllerToken != "flag-token" || cfg.NodeID != "flag-node" {
+		t.Fatalf("flag values should override env values: %+v", cfg)
+	}
+}
+
+func TestAgentOnceAcceptsFlags(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControllerURL = "http://127.0.0.1:18080/"
+	cfg.ControllerToken = "flag-token"
+	cfg.NodeID = "flag-node"
+	cfg.NodeName = "edge-node"
+	cfg.NodeRole = "backend"
+	cfg.EnableTasks = true
+	cfg.EnableWriteActions = true
+	cfg.ConfigDir = t.TempDir()
+	cfg.StateDir = t.TempDir()
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("once-style flag config should validate: %v", err)
 	}
 }
 

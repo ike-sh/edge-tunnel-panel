@@ -198,18 +198,23 @@ func (s *Server) handleBootstrapAgentInstall(w http.ResponseWriter, r *http.Requ
 	role := stringValue(req["role"], "backend")
 	enableTasks := boolRequestValue(req, "enable_tasks", true)
 	enableWrites := boolRequestValue(req, "enable_write_actions", true)
+	showFullToken := boolRequestValue(req, "show_full_token", false)
 	maskedCommand := buildAgentInstallCommand(version, controllerURL, redactToken(s.agentToken), nodeName, role, enableTasks, enableWrites)
 	data := map[string]any{
-		"masked_command":       maskedCommand,
-		"command":              maskedCommand,
-		"version":              version,
-		"role":                 role,
-		"node_name":            nodeName,
-		"enable_tasks":         enableTasks,
-		"enable_write_actions": enableWrites,
+		"masked_command":           maskedCommand,
+		"command":                  maskedCommand,
+		"full_command":             "",
+		"can_copy":                 false,
+		"copy_requires_full_token": true,
+		"version":                  version,
+		"role":                     role,
+		"node_name":                nodeName,
+		"enable_tasks":             enableTasks,
+		"enable_write_actions":     enableWrites,
 	}
-	if boolRequestValue(req, "show_full_token", false) {
+	if showFullToken {
 		data["full_command"] = buildAgentInstallCommand(version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites)
+		data["can_copy"] = true
 	}
 	writeOK(w, 200, data)
 }
