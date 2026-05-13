@@ -2,7 +2,7 @@
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
 
-当前版本：`v0.1.4-test`
+当前版本：`v0.1.5-test`
 
 ## 典型场景
 
@@ -25,7 +25,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.4-test
+  --version v0.1.5-test
 ```
 
 安装完成后打开：
@@ -47,7 +47,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.1.4-test \
+  --version v0.1.5-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -55,6 +55,16 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
   --enable-tasks \
   --enable-write-actions
 ```
+
+## 组网配置
+
+1. 确认节点已上线。
+2. 进入“组网配置”。
+3. 创建组网配置，填写名称、网络名、CIDR、协议偏好和可选 peers/listeners。
+4. 在配置卡片中选择目标节点，点击“应用到节点”。
+5. 进入“任务”页面查看 `apply_network_profile` 结果。
+6. 如果任务提示 `easytier-core not found`，需要先在节点上手动安装 EasyTier，或等待后续自动安装功能。
+7. 回到“节点”页面刷新，查看 EasyTier 状态。
 
 ## 卸载
 
@@ -92,7 +102,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 当前限制
 
-- `v0.1.4-test` 是测试版。
+- `v0.1.5-test` 是测试版。
 - EasyTier 自动下载/安装后续增强。
 - DDNS provider 后续增强。
 - PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
@@ -123,5 +133,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.1.4-test bash panel/scripts/build-release.sh
+VERSION=v0.1.5-test bash panel/scripts/build-release.sh
 ```

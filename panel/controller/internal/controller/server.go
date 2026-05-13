@@ -294,7 +294,72 @@ func (s *Server) handleAgentTaskResult(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, 200, task)
 }
 func (s *Server) handleNetworkProfiles(w http.ResponseWriter, r *http.Request) {
-	s.handleGenericCollection(w, r, "network-profiles")
+	if !s.requireOperator(w, r) {
+		return
+	}
+	if r.Method == http.MethodGet {
+		writeOK(w, 200, s.store.listNetworkProfiles())
+		return
+	}
+	id, action := splitCollectionPath(r.URL.Path, "/api/v1/network-profiles/")
+	if action == "apply" && r.Method == http.MethodPost {
+		s.handleNetworkProfileApply(w, r, id)
+		return
+	}
+	if id != "" {
+		switch r.Method {
+		case http.MethodPut:
+			req, ok := decodeBody(w, r)
+			if !ok {
+				return
+			}
+			if payloadHasDangerousKeys(req) {
+				writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+				return
+			}
+			item, found, err := s.store.updateNetworkProfile(id, req)
+			if err != nil {
+				writeErr(w, 500, "STORE_ERROR", err.Error())
+				return
+			}
+			if !found {
+				writeErr(w, 404, "NOT_FOUND", "network profile not found")
+				return
+			}
+			writeOK(w, 200, item)
+			return
+		case http.MethodDelete:
+			found, err := s.store.deleteNetworkProfile(id)
+			if err != nil {
+				writeErr(w, 500, "STORE_ERROR", err.Error())
+				return
+			}
+			if !found {
+				writeErr(w, 404, "NOT_FOUND", "network profile not found")
+				return
+			}
+			writeOK(w, 200, map[string]bool{"deleted": true})
+			return
+		}
+	}
+	if r.Method != http.MethodPost || r.URL.Path != "/api/v1/network-profiles" {
+		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	req, ok := decodeBody(w, r)
+	if !ok {
+		return
+	}
+	if payloadHasDangerousKeys(req) {
+		writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+		return
+	}
+	item, err := s.store.createNetworkProfile(req)
+	if err != nil {
+		writeErr(w, 400, "BAD_REQUEST", err.Error())
+		return
+	}
+	writeOK(w, 200, item)
 }
 func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) {
 	s.handleGenericCollection(w, r, "entries")
@@ -310,6 +375,69 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) handleDDNS(w http.ResponseWriter, r *http.Request) { writeOK(w, 200, []DDNSProfile{}) }
 
+func splitCollectionPath(requestPath, prefix string) (id string, action string) {
+	if !strings.HasPrefix(requestPath, prefix) {
+		return "", ""
+	}
+	rest := strings.Trim(strings.TrimPrefix(requestPath, prefix), "/")
+	if rest == "" {
+		return "", ""
+	}
+	parts := strings.Split(rest, "/")
+	id = parts[0]
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	return id, action
+}
+
+func (s *Server) handleNetworkProfileApply(w http.ResponseWriter, r *http.Request, id string) {
+	if id == "" {
+		writeErr(w, 404, "NOT_FOUND", "network profile not found")
+		return
+	}
+	req, ok := decodeBody(w, r)
+	if !ok {
+		return
+	}
+	if payloadHasDangerousKeys(req) {
+		writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+		return
+	}
+	profile, found := s.store.getNetworkProfile(id)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "network profile not found")
+		return
+	}
+	nodeIDs := stringListValue(req["node_ids"])
+	if nodeID := stringValue(req["node_id"], ""); nodeID != "" {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	if len(nodeIDs) == 0 {
+		writeErr(w, 400, "BAD_REQUEST", "node_id or node_ids is required")
+		return
+	}
+	tasks := make([]Task, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		node, found := s.store.getNode(nodeID)
+		if !found {
+			writeErr(w, 404, "NOT_FOUND", "node not found")
+			return
+		}
+		task, err := s.store.createTask(Task{NodeID: nodeID, Action: "apply_network_profile", Payload: map[string]any{"network_profile": profile, "node": node}})
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		tasks = append(tasks, task)
+	}
+	if len(tasks) == 1 {
+		writeOK(w, 202, tasks[0])
+		return
+	}
+	writeOK(w, 202, tasks)
+}
+
 func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request, kind string) {
 	if !s.requireOperator(w, r) {
 		return
@@ -318,8 +446,6 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 		s.store.mu.Lock()
 		defer s.store.mu.Unlock()
 		switch kind {
-		case "network-profiles":
-			writeOK(w, 200, s.store.data.NetworkProfiles)
 		case "entries":
 			writeOK(w, 200, s.store.data.Entries)
 		case "forwards":
@@ -374,11 +500,6 @@ func (s *Server) handleGenericCollection(w http.ResponseWriter, r *http.Request,
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
 	switch kind {
-	case "network-profiles":
-		item := NetworkProfile{ID: newID(), Name: stringValue(req["name"], "network"), NetworkName: stringValue(req["network_name"], "edge-net"), NetworkSecret: stringValue(req["network_secret"], "secret"), CIDR: stringValue(req["cidr"], "10.144.0.0/16"), ProtocolPreference: stringValue(req["protocol_preference"], "auto"), CreatedAt: n, UpdatedAt: n}
-		s.store.data.NetworkProfiles = append(s.store.data.NetworkProfiles, item)
-		_ = s.store.saveLocked()
-		writeOK(w, 200, item)
 	case "entries":
 		item := Entry{ID: newID(), Name: stringValue(req["name"], "entry"), NodeID: stringValue(req["node_id"], ""), ListenIP: stringValue(req["listen_ip"], "0.0.0.0"), ListenPortStart: intValue(req["listen_port_start"]), ListenPortEnd: intValue(req["listen_port_end"]), Protocol: stringValue(req["protocol"], "both"), Domain: stringValue(req["domain"], ""), DDNSEnabled: boolValue(req["ddns_enabled"]), DDNSProvider: stringValue(req["ddns_provider"], ""), DDNSTokenRef: stringValue(req["ddns_token_ref"], ""), Status: "draft", CreatedAt: n, UpdatedAt: n}
 		s.store.data.Entries = append(s.store.data.Entries, item)

@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.4-test';
+const DEFAULT_VERSION = 'v0.1.5-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -23,7 +23,9 @@ const readonlyActions = [
   'verify_easytier_status',
   'verify_forward_rules',
   'verify_pbr_rules',
-  'verify_ddns_status'
+  'verify_ddns_status',
+  'restart_easytier',
+  'restart_agent'
 ];
 
 const roleOptions = [
@@ -41,7 +43,10 @@ const actionText = {
   verify_easytier_status: '验证 EasyTier',
   verify_forward_rules: '验证转发',
   verify_pbr_rules: '验证出口策略',
-  verify_ddns_status: '验证 DDNS'
+  verify_ddns_status: '验证 DDNS',
+  restart_easytier: '重启 EasyTier',
+  restart_agent: '重启 Agent',
+  apply_network_profile: '应用组网配置'
 };
 
 const statusText = {
@@ -54,7 +59,12 @@ const statusText = {
   failed: '失败',
   expired: '已过期',
   cancelled: '已取消',
-  all: '全部'
+  all: '全部',
+  active: '运行中',
+  inactive: '未运行',
+  missing_binary: '未安装',
+  missing_config: '缺少配置',
+  service_missing: '服务缺失'
 };
 
 const taskStatuses = ['all', 'pending', 'running', 'succeeded', 'failed', 'expired', 'cancelled'];
@@ -112,6 +122,7 @@ function App() {
   const [ddnsProfiles, setDdnsProfiles] = useState([]);
   const [taskFilter, setTaskFilter] = useState('all');
   const [showAddAgent, setShowAddAgent] = useState(false);
+  const [openNodeActions, setOpenNodeActions] = useState('');
 
   const [agentForm, setAgentForm] = useState({
     controller_url: browserControllerURL(),
@@ -133,6 +144,8 @@ function App() {
     protocol_preference: 'auto'
   });
   const [networkApplyNode, setNetworkApplyNode] = useState({});
+  const [editingNetworkId, setEditingNetworkId] = useState('');
+  const [expandedNetworkId, setExpandedNetworkId] = useState('');
 
   const [entryForm, setEntryForm] = useState({
     name: '',
@@ -345,22 +358,47 @@ function App() {
 
   async function createNetworkProfile(event) {
     event.preventDefault();
-    await run('创建组网配置', async () => {
-      await api('/network-profiles', { body: networkForm });
-      setNetworkForm({ ...networkForm, name: '', network_secret: '' });
+    await run(editingNetworkId ? '更新组网配置' : '创建组网配置', async () => {
+      if (editingNetworkId) {
+        await api('/network-profiles/' + editingNetworkId, { method: 'PUT', body: networkForm });
+      } else {
+        await api('/network-profiles', { body: networkForm });
+      }
+      setNetworkForm({ name: '', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', protocol_preference: 'auto' });
+      setEditingNetworkId('');
+      await refreshNetworkProfiles();
+    });
+  }
+
+  function editNetworkProfile(profile) {
+    setEditingNetworkId(profile.id);
+    setNetworkForm({
+      name: profile.name || '',
+      network_name: profile.network_name || 'edge-net',
+      network_secret: profile.network_secret || '',
+      cidr: profile.cidr || '10.144.0.0/16',
+      protocol_preference: profile.protocol_preference || 'auto'
+    });
+  }
+
+  async function deleteNetworkProfile(profile) {
+    if (!window.confirm('确认删除组网配置“' + (profile.name || profile.id) + '”？')) return;
+    await run('删除组网配置', async () => {
+      await api('/network-profiles/' + profile.id, { method: 'DELETE' });
       await refreshNetworkProfiles();
     });
   }
 
   async function applyNetworkProfile(profile) {
-    const nodeId = networkApplyNode[profile.id] || nodes[0]?.id || '';
+    const nodeId = networkApplyNode[profile.id] || '';
     if (!nodeId) {
       setAlert({ type: 'error', message: '请先选择目标节点' });
       return;
     }
     await run('应用组网配置', async () => {
-      await api(`/network-profiles/${profile.id}/apply`, { body: { node_id: nodeId, profile_id: profile.id } });
+      await api('/network-profiles/' + profile.id + '/apply', { body: { node_id: nodeId } });
       await refreshTasks();
+      setAlert({ type: 'success', message: '已创建组网下发任务，请到任务页面查看结果。' });
     });
   }
 
@@ -485,8 +523,8 @@ function App() {
               <thead>
                 <tr>
                   <th>节点 ID</th>
-                <th>名称</th>
-                <th>角色</th>
+                  <th>名称</th>
+                  <th>角色</th>
                   <th>状态</th>
                   <th>主机名</th>
                   <th>公网 IP</th>
@@ -500,21 +538,22 @@ function App() {
               <tbody>
                 {nodes.map((node) => (
                   <tr key={node.id}>
-                  <td title={node.id}><code>{String(node.id || '-').slice(0, 16)}</code></td>
-                  <td>{node.name || node.id}</td>
-                  <td>{roleText[node.role] || node.role || '-'}</td>
+                    <td title={node.id}><code>{String(node.id || '-').slice(0, 16)}</code></td>
+                    <td>{node.name || node.id}</td>
+                    <td>{roleText[node.role] || node.role || '-'}</td>
                     <td><span className={statusClass(node.status)}>{trStatus(node.status)}</span></td>
                     <td>{node.hostname || '-'}</td>
                     <td>{node.public_ip || '-'}</td>
                     <td>{node.private_ip || '-'}</td>
-                    <td>{node.easytier_ip || '-'}<br /><small>{node.easytier_status || '-'}</small></td>
+                    <td>{node.easytier_ip || '-'}<br /><small>{trStatus(node.easytier_status)}</small></td>
                     <td>{formatTime(node.last_seen_at)}</td>
-                    <td><small>{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).join(', ') || '-'}</small></td>
+                    <td><div className="cap-list">{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).map((key) => <span className="cap" key={key}>{key}</span>)}</div></td>
                     <td>
-                      <select onChange={(event) => event.target.value && createTask(node.id, event.target.value)} defaultValue="">
-                        <option value="">创建任务</option>
-                      {readonlyActions.map((action) => <option key={action} value={action}>{actionText[action] || action}</option>)}
-                      </select>
+                      <button className="secondary" onClick={() => setOpenNodeActions(openNodeActions === node.id ? '' : node.id)}>节点操作</button>
+                      {openNodeActions === node.id && <div className="action-panel">
+                        {readonlyActions.map((action) => <button key={action} className={action.startsWith('restart_') ? 'warning' : 'secondary'} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}
+                        <p className="muted">重启动作会修改节点服务状态，请只在可信节点执行。</p>
+                      </div>}
                     </td>
                   </tr>
                 ))}
@@ -575,14 +614,15 @@ function App() {
   function renderNetworkProfiles() {
     return (
       <>
-        <Card title="创建组网配置">
+        <Card title={editingNetworkId ? '编辑组网配置' : '创建组网配置'}>
           <form onSubmit={createNetworkProfile} className="grid five form-grid">
             <Field label="名称" value={networkForm.name} onChange={(value) => setNetworkForm({ ...networkForm, name: value })} required />
             <Field label="网络名" value={networkForm.network_name} onChange={(value) => setNetworkForm({ ...networkForm, network_name: value })} />
             <Field label="网络密钥" value={networkForm.network_secret} onChange={(value) => setNetworkForm({ ...networkForm, network_secret: value })} />
             <Field label="CIDR" value={networkForm.cidr} onChange={(value) => setNetworkForm({ ...networkForm, cidr: value })} />
             <Select label="协议偏好" value={networkForm.protocol_preference} options={['auto', 'tcp', 'udp', 'wg', 'ws', 'wss']} onChange={(value) => setNetworkForm({ ...networkForm, protocol_preference: value })} />
-            <button type="submit">创建</button>
+            <button type="submit">{editingNetworkId ? '保存' : '创建'}</button>
+            {editingNetworkId && <button type="button" className="secondary" onClick={() => { setEditingNetworkId(''); setNetworkForm({ name: '', network_name: 'edge-net', network_secret: '', cidr: '10.144.0.0/16', protocol_preference: 'auto' }); }}>取消编辑</button>}
           </form>
         </Card>
         <Card title="组网配置" action={<button onClick={() => run('刷新组网配置', refreshNetworkProfiles)}>刷新</button>}>
@@ -596,8 +636,12 @@ function App() {
                     <option value="">选择目标节点</option>
                     {nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id}</option>)}
                   </select>
-                  <button onClick={() => applyNetworkProfile(profile)}>应用</button>
+                  <button onClick={() => applyNetworkProfile(profile)}>应用到节点</button>
+                  <button className="secondary" onClick={() => editNetworkProfile(profile)}>编辑</button>
+                  <button className="secondary" onClick={() => setExpandedNetworkId(expandedNetworkId === profile.id ? '' : profile.id)}>查看配置</button>
+                  <button className="warning" onClick={() => deleteNetworkProfile(profile)}>删除</button>
                 </div>
+                {expandedNetworkId === profile.id && <pre className="small">{JSON.stringify(profile, null, 2)}</pre>}
               </div>
             ))}
           </div>
@@ -781,7 +825,7 @@ function TaskTable({ tasks, compact = false }) {
     <div className="table-wrap">
       <table>
         <thead><tr><th>ID</th><th>节点</th><th>action</th><th>状态</th><th>创建时间</th>{!compact && <th>开始</th>}{!compact && <th>完成</th>}{!compact && <th>输出</th>}</tr></thead>
-        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{task.node_id || '-'}</td><td>{task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><pre className="small">{summarize(task.error || task.stdout || task.stderr || task.result)}</pre></td>}</tr>)}</tbody>
+        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{task.node_id || '-'}</td><td>{actionText[task.action] || task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><pre className="small">{summarize(task.error || task.stdout || task.stderr || task.result)}</pre></td>}</tr>)}</tbody>
       </table>
     </div>
   );

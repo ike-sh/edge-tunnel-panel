@@ -9,10 +9,21 @@ import (
 	"strings"
 )
 
+var systemdSystemDir = "/etc/systemd/system"
+
 func nodePath(cfg Config) string     { return filepath.Join(cfg.ConfigDir, "node.json") }
 func easyTierPath(cfg Config) string { return filepath.Join(cfg.ConfigDir, "easytier.toml") }
-func entryPath(cfg Config) string    { return filepath.Join(cfg.ConfigDir, "entry.json") }
-func forwardPath(cfg Config) string  { return filepath.Join(cfg.ConfigDir, "forward.json") }
+func networkProfilePath(cfg Config) string {
+	return filepath.Join(cfg.ConfigDir, "network-profile.json")
+}
+func easyTierServiceConfigPath(cfg Config) string {
+	return filepath.Join(cfg.ConfigDir, "systemd", "edge-tunnel-easytier.service")
+}
+func easyTierServiceSystemPath() string {
+	return filepath.Join(systemdSystemDir, "edge-tunnel-easytier.service")
+}
+func entryPath(cfg Config) string   { return filepath.Join(cfg.ConfigDir, "entry.json") }
+func forwardPath(cfg Config) string { return filepath.Join(cfg.ConfigDir, "forward.json") }
 func forwardNFTPath(cfg Config) string {
 	return filepath.Join(cfg.ConfigDir, "nftables", "edge-tunnel-forward.nft")
 }
@@ -31,16 +42,30 @@ func installOrUpdateEasyTier(ctx context.Context, runner CommandRunner) TaskResu
 	if _, err := runner.LookPath("easytier-cli"); err == nil {
 		return TaskResult{Status: "succeeded", Result: "easytier-cli already installed"}
 	}
-	return TaskResult{Status: "failed", Error: "EasyTier binary not found; first MVP does not auto-download EasyTier"}
+	return TaskResult{Status: "failed", Error: "easytier-core not found, install EasyTier first or configure EasyTier installer"}
 }
 
 func applyNetworkProfile(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
-	if err := writeFile(easyTierPath(cfg), []byte(renderEasyTierConfig(payload)), 0o600); err != nil {
+	easyTierBinary, binaryErr := findEasyTierCore(runner)
+	profile := mapPayload(payload, "network_profile")
+	if len(profile) == 0 {
+		profile = payload
+	}
+	if err := writeJSONFile(networkProfilePath(cfg), profile, 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
-	servicePath := filepath.Join(cfg.ConfigDir, "systemd", "edge-tunnel-easytier.service")
-	if err := writeFile(servicePath, []byte(edgeTunnelEasyTierService()), 0o644); err != nil {
+	if err := writeFile(easyTierPath(cfg), []byte(renderEasyTierConfig(cfg, profile)), 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	service := edgeTunnelEasyTierService(easyTierBinary)
+	if err := writeFile(easyTierServiceConfigPath(cfg), []byte(service), 0o644); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	if err := writeFile(easyTierServiceSystemPath(), []byte(service), 0o644); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error()}
+	}
+	if binaryErr != nil {
+		return TaskResult{Status: "failed", Error: "easytier-core not found, install EasyTier first or configure EasyTier installer"}
 	}
 	if cfg.EnableWriteActions {
 		for _, args := range [][]string{{"daemon-reload"}, {"enable", "edge-tunnel-easytier.service"}, {"restart", "edge-tunnel-easytier.service"}} {
@@ -50,7 +75,11 @@ func applyNetworkProfile(ctx context.Context, cfg Config, runner CommandRunner, 
 			}
 		}
 	}
-	return TaskResult{Status: "succeeded", Result: "network profile applied"}
+	verify := verifyEasyTier(ctx, cfg, runner)
+	if verify.Status != "succeeded" {
+		return verify
+	}
+	return TaskResult{Status: "succeeded", Result: "network profile applied; " + verify.Result}
 }
 
 func applyForwardConfig(cfg Config, payload map[string]any) TaskResult {
@@ -88,10 +117,20 @@ func verifyFile(path string) TaskResult {
 }
 
 func verifyEasyTier(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
-	if _, err := os.Stat(easyTierPath(cfg)); err != nil {
-		return TaskResult{Status: "failed", Error: err.Error()}
+	if _, err := findEasyTierCore(runner); err != nil {
+		return TaskResult{Status: "failed", Result: `{"easytier_status":"missing_binary"}`, Error: "easytier-core not found"}
 	}
-	return runFixed(ctx, runner, "systemctl", "is-active", "edge-tunnel-easytier.service")
+	if _, err := os.Stat(easyTierPath(cfg)); err != nil {
+		return TaskResult{Status: "failed", Result: `{"easytier_status":"missing_config"}`, Error: err.Error()}
+	}
+	if _, err := os.Stat(easyTierServiceSystemPath()); err != nil {
+		return TaskResult{Status: "failed", Result: `{"easytier_status":"service_missing"}`, Error: err.Error()}
+	}
+	result := runner.Run(ctx, "systemctl", "is-active", "edge-tunnel-easytier.service")
+	if result.Err != nil || result.ExitCode != 0 {
+		return TaskResult{Status: "failed", Stdout: result.Stdout, Stderr: result.Stderr, Result: `{"easytier_status":"inactive"}`, Error: errorText(result)}
+	}
+	return TaskResult{Status: "succeeded", Stdout: result.Stdout, Stderr: result.Stderr, Result: `{"easytier_status":"active"}`}
 }
 
 func verifyPBR(ctx context.Context, cfg Config, runner CommandRunner) TaskResult {
@@ -123,14 +162,33 @@ func writeFile(path string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(path, data, perm)
 }
 
-func renderEasyTierConfig(payload map[string]any) string {
+func renderEasyTierConfig(cfg Config, payload map[string]any) string {
 	networkName := stringField(payload, "network_name", "edge-net")
 	networkSecret := stringField(payload, "network_secret", "")
-	return fmt.Sprintf("network_name = %q\nnetwork_secret = %q\n", networkName, networkSecret)
+	cidr := stringField(payload, "cidr", "10.144.0.0/16")
+	protocol := stringField(payload, "protocol_preference", "auto")
+	listeners := stringSliceField(payload, "listeners")
+	peers := stringSliceField(payload, "peers")
+	lines := []string{
+		"# Generated by Edge Tunnel Panel.",
+		"# If this EasyTier version uses different field names, adjust this template after generation.",
+		fmt.Sprintf("network_name = %q", networkName),
+		fmt.Sprintf("network_secret = %q", networkSecret),
+		fmt.Sprintf("cidr = %q", cidr),
+		fmt.Sprintf("protocol_preference = %q", protocol),
+		fmt.Sprintf("node_name = %q", cfg.NodeName),
+		fmt.Sprintf("node_role = %q", cfg.NodeRole),
+		"listeners = [" + quoteList(listeners) + "]",
+		"peers = [" + quoteList(peers) + "]",
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
-func edgeTunnelEasyTierService() string {
-	return "[Unit]\nDescription=Edge Tunnel Panel EasyTier\nAfter=network-online.target\n\n[Service]\nExecStart=/usr/local/bin/easytier-core -c /etc/edge-tunnel/agent/easytier.toml\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n"
+func edgeTunnelEasyTierService(binary string) string {
+	if binary == "" {
+		binary = "/usr/local/bin/easytier-core"
+	}
+	return fmt.Sprintf("[Unit]\nDescription=Edge Tunnel EasyTier\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=%s -c /etc/edge-tunnel/agent/easytier.toml\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n", binary)
 }
 
 func renderForwardNFT(payload map[string]any) string {
@@ -164,6 +222,54 @@ func stringField(payload map[string]any, key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func mapPayload(payload map[string]any, key string) map[string]any {
+	if value, ok := payload[key].(map[string]any); ok {
+		return value
+	}
+	return nil
+}
+
+func stringSliceField(payload map[string]any, key string) []string {
+	value, ok := payload[key]
+	if !ok {
+		return nil
+	}
+	switch list := value.(type) {
+	case []string:
+		return list
+	case []any:
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func quoteList(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, fmt.Sprintf("%q", value))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func findEasyTierCore(runner CommandRunner) (string, error) {
+	for _, candidate := range []string{"/usr/local/bin/easytier-core", "/usr/bin/easytier-core"} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	if path, err := runner.LookPath("easytier-core"); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("easytier-core not found")
 }
 
 func intField(payload map[string]any, key string) int {

@@ -4,32 +4,22 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.4-test
+  --version v0.1.5-test
 ```
 
-打开 `http://服务器IP:18080`，保存安装输出中的 Operator Token。
+打开 `http://服务器IP:18080`。
 
 ## 添加节点
 
 进入 Web 的“节点”页面，点击“添加节点”，生成一键 Agent 命令，复制到被控服务器执行。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.1.4-test \
-  --controller-url http://YOUR_CONTROLLER:18080 \
-  --token YOUR_AGENT_TOKEN \
-  --node-name edge-node-1 \
-  --role backend \
-  --enable-tasks \
-  --enable-write-actions
-```
+## 创建并应用组网配置
 
-执行后回到“节点”页面刷新，确认节点在线。
-
-## 第一次配置
-
-1. 创建“组网配置”。
-2. 应用到目标节点。
-3. 创建“公网入口”。
-4. 创建“转发规则”。
-5. 在“任务”页面查看执行结果。
+1. 确认节点已上线。
+2. 进入“组网配置”。
+3. 创建组网配置。
+4. 在配置卡片中选择目标节点。
+5. 点击“应用到节点”。
+6. 到“任务”页面查看 `apply_network_profile` 结果。
+7. 如果提示 `easytier-core not found`，先手动安装 EasyTier 或等待后续自动安装功能。
+8. 回到“节点”页面刷新查看 EasyTier 状态。

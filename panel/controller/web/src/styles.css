@@ -188,6 +188,34 @@ button.warning {
   color: var(--muted);
 }
 
+.action-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 8px;
+  min-width: 340px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #0c1326;
+}
+
+.cap-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 220px;
+}
+
+.cap {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--muted);
+  background: rgba(12, 19, 38, 0.85);
+  font-size: 11px;
+}
+
 .card-head {
   display: flex;
   align-items: center;

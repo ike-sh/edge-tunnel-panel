@@ -90,14 +90,23 @@ func ReportFromStatus(cfg Config, status AgentStatus) ReportRequest {
 		OS:             status.OS,
 		Arch:           status.Arch,
 		EasyTierIP:     status.EasyTierIP,
-		EasyTierStatus: boolStatus(status.EasyTierServiceActive),
+		EasyTierStatus: easyTierStatus(cfg, status),
 		Capabilities:   status.Capabilities,
 		Warnings:       status.Warnings,
 	}
 }
 
-func boolStatus(ok bool) string {
-	if ok {
+func easyTierStatus(cfg Config, status AgentStatus) string {
+	if !status.EasyTierBinaryExists {
+		return "missing_binary"
+	}
+	if _, err := os.Stat(easyTierPath(cfg)); err != nil {
+		return "missing_config"
+	}
+	if _, err := os.Stat(easyTierServiceSystemPath()); err != nil {
+		return "service_missing"
+	}
+	if status.EasyTierServiceActive {
 		return "active"
 	}
 	return "inactive"

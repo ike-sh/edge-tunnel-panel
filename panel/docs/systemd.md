@@ -25,3 +25,18 @@ sudo systemctl restart edge-tunnel-easytier.service
 ```
 
 EasyTier 配置默认在 `/etc/edge-tunnel/agent/easytier.toml`。
+
+Agent 应用组网配置时会写入：
+
+- `/etc/edge-tunnel/agent/easytier.toml`
+- `/etc/edge-tunnel/agent/systemd/edge-tunnel-easytier.service`
+- `/etc/systemd/system/edge-tunnel-easytier.service`
+
+随后使用固定参数执行：
+
+```bash
+systemctl daemon-reload
+systemctl enable edge-tunnel-easytier.service
+systemctl restart edge-tunnel-easytier.service
+systemctl is-active edge-tunnel-easytier.service
+```

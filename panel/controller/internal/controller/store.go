@@ -44,6 +44,12 @@ func newID() string {
 	return hex.EncodeToString(b[:])
 }
 
+func randomSecret() string {
+	var b [24]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
 func now() time.Time { return time.Now().UTC() }
 
 func (s *Store) listNodes() []Node {
@@ -54,6 +60,12 @@ func (s *Store) listNodes() []Node {
 		out[i].Status = nodeStatus(out[i].LastSeenAt)
 	}
 	return out
+}
+
+func (s *Store) listNetworkProfiles() []NetworkProfile {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]NetworkProfile(nil), s.data.NetworkProfiles...)
 }
 
 func nodeStatus(lastSeen time.Time) string {
@@ -163,4 +175,107 @@ func (s *Store) updateTaskResult(id string, req map[string]any) (Task, bool, err
 		}
 	}
 	return Task{}, false, nil
+}
+
+func (s *Store) getNetworkProfile(id string) (NetworkProfile, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, profile := range s.data.NetworkProfiles {
+		if profile.ID == id {
+			return profile, true
+		}
+	}
+	return NetworkProfile{}, false
+}
+
+func (s *Store) createNetworkProfile(req map[string]any) (NetworkProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name := stringValue(req["name"], "")
+	if name == "" {
+		return NetworkProfile{}, errValidation("name is required")
+	}
+	n := now()
+	item := NetworkProfile{ID: newID(), Name: name, NetworkName: stringValue(req["network_name"], "edge-net"), NetworkSecret: stringValue(req["network_secret"], randomSecret()), CIDR: stringValue(req["cidr"], "10.144.0.0/16"), ProtocolPreference: stringValue(req["protocol_preference"], "auto"), Listeners: stringListValue(req["listeners"]), Peers: stringListValue(req["peers"]), CreatedAt: n, UpdatedAt: n}
+	s.data.NetworkProfiles = append(s.data.NetworkProfiles, item)
+	return item, s.saveLocked()
+}
+
+func (s *Store) updateNetworkProfile(id string, req map[string]any) (NetworkProfile, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.NetworkProfiles {
+		if s.data.NetworkProfiles[i].ID != id {
+			continue
+		}
+		item := s.data.NetworkProfiles[i]
+		if value := stringValue(req["name"], item.Name); value != "" {
+			item.Name = value
+		}
+		item.NetworkName = stringValue(req["network_name"], item.NetworkName)
+		item.NetworkSecret = stringValue(req["network_secret"], item.NetworkSecret)
+		item.CIDR = stringValue(req["cidr"], item.CIDR)
+		item.ProtocolPreference = stringValue(req["protocol_preference"], item.ProtocolPreference)
+		if listeners, ok := req["listeners"]; ok {
+			item.Listeners = stringListValue(listeners)
+		}
+		if peers, ok := req["peers"]; ok {
+			item.Peers = stringListValue(peers)
+		}
+		item.UpdatedAt = now()
+		s.data.NetworkProfiles[i] = item
+		return item, true, s.saveLocked()
+	}
+	return NetworkProfile{}, false, nil
+}
+
+func (s *Store) deleteNetworkProfile(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.NetworkProfiles {
+		if s.data.NetworkProfiles[i].ID == id {
+			s.data.NetworkProfiles = append(s.data.NetworkProfiles[:i], s.data.NetworkProfiles[i+1:]...)
+			return true, s.saveLocked()
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) getNode(id string) (Node, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, node := range s.data.Nodes {
+		if node.ID == id {
+			node.Status = nodeStatus(node.LastSeenAt)
+			return node, true
+		}
+	}
+	return Node{}, false
+}
+
+type validationError string
+
+func (e validationError) Error() string  { return string(e) }
+func errValidation(message string) error { return validationError(message) }
+
+func stringListValue(value any) []string {
+	switch list := value.(type) {
+	case []string:
+		return append([]string(nil), list...)
+	case []any:
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			if text, ok := item.(string); ok && text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case string:
+		if list == "" {
+			return nil
+		}
+		return []string{list}
+	default:
+		return nil
+	}
 }

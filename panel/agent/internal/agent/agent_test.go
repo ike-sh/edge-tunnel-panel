@@ -32,6 +32,10 @@ func (f *fakeRunner) LookPath(name string) (string, error) {
 
 func testConfig(t *testing.T) Config {
 	t.Helper()
+	t.Setenv("EDGE_TEST", "1")
+	oldSystemdDir := systemdSystemDir
+	systemdSystemDir = filepath.Join(t.TempDir(), "systemd-system")
+	t.Cleanup(func() { systemdSystemDir = oldSystemdDir })
 	cfg := DefaultConfig()
 	cfg.ControllerURL = "http://127.0.0.1:18080"
 	cfg.ControllerToken = "secret-token"
@@ -232,6 +236,92 @@ func TestApplyPBRWritesStructuredScript(t *testing.T) {
 	text := string(raw)
 	if strings.Contains(text, "raw_ip_route") || !strings.Contains(text, "ip rule add") {
 		t.Fatalf("unexpected pbr script: %s", text)
+	}
+}
+
+func TestApplyNetworkProfileWritesEasyTierConfig(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"network_profile": map[string]any{"network_name": "edge-prod", "network_secret": "secret", "cidr": "10.144.0.0/16", "protocol_preference": "tcp", "peers": []any{"tcp://1.2.3.4:11010"}}}
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{paths: map[string]bool{"easytier-core": true}}, Task{Action: "apply_network_profile", Payload: payload})
+	if result.Status != "failed" && result.Status != "succeeded" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	raw, err := os.ReadFile(easyTierPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, `network_name = "edge-prod"`) || !strings.Contains(text, `protocol_preference = "tcp"`) || !strings.Contains(text, `node_name`) {
+		t.Fatalf("unexpected easytier config: %s", text)
+	}
+	if _, err := os.Stat(networkProfilePath(cfg)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyNetworkProfileWritesSystemdService(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"network_name": "edge-prod", "network_secret": "secret"}
+	_ = ExecuteTask(context.Background(), cfg, &fakeRunner{paths: map[string]bool{"easytier-core": true}}, Task{Action: "apply_network_profile", Payload: payload})
+	raw, err := os.ReadFile(easyTierServiceConfigPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "Description=Edge Tunnel EasyTier") || !strings.Contains(text, "edge-tunnel-easytier.service") && !strings.Contains(text, "easytier.toml") {
+		t.Fatalf("unexpected service: %s", text)
+	}
+}
+
+func TestApplyNetworkProfileMissingBinaryReturnsError(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_network_profile", Payload: map[string]any{"network_name": "edge-prod"}})
+	if result.Status != "failed" || !strings.Contains(result.Error, "easytier-core not found") {
+		t.Fatalf("expected missing binary failure: %+v", result)
+	}
+	if _, err := os.Stat(easyTierPath(cfg)); err != nil {
+		t.Fatalf("config should still be written: %v", err)
+	}
+}
+
+func TestVerifyEasyTierStatusMissingBinary(t *testing.T) {
+	cfg := testConfig(t)
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "verify_easytier_status", Payload: map[string]any{}})
+	if result.Status != "failed" || !strings.Contains(result.Result, "missing_binary") {
+		t.Fatalf("expected missing binary status: %+v", result)
+	}
+}
+
+func TestVerifyEasyTierStatusActiveWithFakeRunner(t *testing.T) {
+	cfg := testConfig(t)
+	if err := writeFile(easyTierPath(cfg), []byte("network_name = \"edge\""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(easyTierServiceSystemPath(), []byte("service"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{paths: map[string]bool{"easytier-core": true}}, Task{Action: "verify_easytier_status", Payload: map[string]any{}})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, "active") {
+		t.Fatalf("expected active status: %+v", result)
+	}
+}
+
+func TestApplyNetworkProfileUsesFixedSystemctlArgv(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	runner := &fakeRunner{paths: map[string]bool{"easytier-core": true}}
+	_ = ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_network_profile", Payload: map[string]any{"network_name": "edge-prod"}})
+	joined := strings.Join(runner.calls, "\n")
+	for _, expected := range []string{"systemctl daemon-reload", "systemctl enable edge-tunnel-easytier.service", "systemctl restart edge-tunnel-easytier.service", "systemctl is-active edge-tunnel-easytier.service"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("missing fixed call %q in %s", expected, joined)
+		}
+	}
+	if strings.Contains(joined, "shell") || strings.Contains(joined, "-c") {
+		t.Fatalf("unexpected shell usage: %s", joined)
 	}
 }
 

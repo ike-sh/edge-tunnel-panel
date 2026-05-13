@@ -119,12 +119,12 @@ func TestAgentRegisterAndReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.4-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.5-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.1.4-test") ||
+		!strings.Contains(body, "--version v0.1.5-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||
@@ -206,7 +206,6 @@ func TestRebootRequiresConfirm(t *testing.T) {
 func TestApplyCreatesTasks(t *testing.T) {
 	h := testServer(t)
 	cases := []struct{ path, action string }{
-		{"/api/v1/network-profiles/1/apply", "apply_network_profile"},
 		{"/api/v1/entries/1/apply", "apply_entry_config"},
 		{"/api/v1/forwards/1/apply", "apply_forward_config"},
 		{"/api/v1/pbr-policies/1/apply", "apply_pbr_config"},
@@ -217,6 +216,81 @@ func TestApplyCreatesTasks(t *testing.T) {
 			t.Fatalf("apply failed for %s: %d %s", tc.path, rr.Code, rr.Body.String())
 		}
 	}
+}
+
+func TestNetworkProfileCRUD(t *testing.T) {
+	h := testServer(t)
+	create := post(t, h, "/api/v1/network-profiles", "operator-token", map[string]any{"name": "prod", "network_name": "edge-prod"})
+	if create.Code != 200 {
+		t.Fatalf("create failed: %d %s", create.Code, create.Body.String())
+	}
+	var resp APIResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(resp.Data)
+	var profile NetworkProfile
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID == "" || profile.NetworkSecret == "" || profile.CIDR != "10.144.0.0/16" || profile.ProtocolPreference != "auto" {
+		t.Fatalf("defaults not applied: %+v", profile)
+	}
+	update := postMethod(t, h, http.MethodPut, "/api/v1/network-profiles/"+profile.ID, "operator-token", map[string]any{"name": "prod-updated", "cidr": "10.200.0.0/16"})
+	if update.Code != 200 || !strings.Contains(update.Body.String(), "prod-updated") {
+		t.Fatalf("update failed: %d %s", update.Code, update.Body.String())
+	}
+	list := get(t, h, "/api/v1/network-profiles", "operator-token")
+	if list.Code != 200 || !strings.Contains(list.Body.String(), "prod-updated") {
+		t.Fatalf("list failed: %d %s", list.Code, list.Body.String())
+	}
+	del := postMethod(t, h, http.MethodDelete, "/api/v1/network-profiles/"+profile.ID, "operator-token", nil)
+	if del.Code != 200 {
+		t.Fatalf("delete failed: %d %s", del.Code, del.Body.String())
+	}
+}
+
+func TestNetworkProfileCreateRequiresName(t *testing.T) {
+	rr := post(t, testServer(t), "/api/v1/network-profiles", "operator-token", map[string]any{"network_name": "edge-prod"})
+	if rr.Code != 400 {
+		t.Fatalf("expected name validation: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestNetworkProfileApplyCreatesTask(t *testing.T) {
+	h := testServer(t)
+	if rr := post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-a", "node_name": "edge-a", "role": "backend"}); rr.Code != 200 {
+		t.Fatalf("register failed: %d %s", rr.Code, rr.Body.String())
+	}
+	create := post(t, h, "/api/v1/network-profiles", "operator-token", map[string]any{"name": "prod", "network_name": "edge-prod"})
+	var resp APIResponse
+	_ = json.Unmarshal(create.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var profile NetworkProfile
+	_ = json.Unmarshal(raw, &profile)
+	apply := post(t, h, "/api/v1/network-profiles/"+profile.ID+"/apply", "operator-token", map[string]any{"node_id": "node-a"})
+	if apply.Code != 202 || !strings.Contains(apply.Body.String(), "apply_network_profile") || !strings.Contains(apply.Body.String(), "network_profile") || !strings.Contains(apply.Body.String(), "node-a") {
+		t.Fatalf("apply did not create task: %d %s", apply.Code, apply.Body.String())
+	}
+}
+
+func postMethod(t *testing.T, h http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader *bytes.Reader
+	if body == nil {
+		reader = bytes.NewReader(nil)
+	} else {
+		raw, _ := json.Marshal(body)
+		reader = bytes.NewReader(raw)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
 }
 
 func TestTokenRedaction(t *testing.T) {

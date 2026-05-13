@@ -27,7 +27,7 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-VERSION=v0.1.4-test bash panel/scripts/build-release.sh
+VERSION=v0.1.5-test bash panel/scripts/build-release.sh
 ```
 
 ## 后续规划
