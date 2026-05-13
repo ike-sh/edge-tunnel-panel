@@ -786,10 +786,78 @@ func TestParseEasyTierPeerLatencyLossTunnel(t *testing.T) {
 	}
 }
 
+func markdownPeerSample() string {
+	sep := strings.Repeat("-", 3)
+	return strings.Join([]string{
+		"| ipv4 | hostname | cost | lat(ms) | loss | rx | tx | tunnel | NAT | version |",
+		"| " + strings.Join([]string{sep, sep, sep, sep, sep, sep, sep, sep, sep, sep}, " | ") + " |",
+		"| 10.144.0.1/16 | ECS-dFbLSf | Local | - | - | - | - | - | Restricted | 2.4.5-4c4d172e |",
+		"| 10.144.0.2/16 | localhost | p2p | 143.60 | 0.0% | 17.60 kB | 20.34 kB | udp,tcp | Restricted | 2.4.5-4c4d172e |",
+	}, "\n")
+}
+
+func markdownRouteSample() string {
+	sep := strings.Repeat("-", 3)
+	return strings.Join([]string{
+		"| ipv4 | hostname | next_hop_ipv4 | next_hop_hostname | next_hop_lat | path_latency |",
+		"| " + strings.Join([]string{sep, sep, sep, sep, sep, sep}, " | ") + " |",
+		"| 10.144.0.2/16 | localhost | DIRECT | DIRECT | 143.60 | 143.60 |",
+	}, "\n")
+}
+
+func TestParseEasyTierPeerSkipsSeparatorRows(t *testing.T) {
+	peers := parseEasyTierPeers(markdownPeerSample())
+	if len(peers) != 1 {
+		t.Fatalf("expected one remote peer: %+v", peers)
+	}
+	if strings.Contains(peers[0].Loss, "-") || strings.Contains(peers[0].Tunnel, "-") {
+		t.Fatalf("separator row leaked into peer metrics: %+v", peers[0])
+	}
+}
+
+func TestParseEasyTierPeerRemoteLatencyLossTunnel(t *testing.T) {
+	peers := parseEasyTierPeers(markdownPeerSample())
+	if len(peers) != 1 || peers[0].Hostname != "localhost" || peers[0].LatencyMS != 143.60 || peers[0].Loss != "0.0%" || peers[0].Tunnel != "udp,tcp" {
+		t.Fatalf("bad markdown peer parse: %+v", peers)
+	}
+}
+
+func TestParseEasyTierPeerDoesNotUseRxTxAsTunnel(t *testing.T) {
+	peers := parseEasyTierPeers(markdownPeerSample())
+	if len(peers) != 1 || strings.Contains(strings.Join(peers[0].Tunnels, ","), "kB") {
+		t.Fatalf("rx/tx should not be parsed as tunnel: %+v", peers)
+	}
+}
+
+func TestParseEasyTierPeerBestLatency(t *testing.T) {
+	out := markdownPeerSample() + "\n| 10.144.0.3/16 | remote-2 | p2p | 99.20 | 1.0% | 1 kB | 2 kB | tcp | Restricted | 2.4.5 |"
+	peers := parseEasyTierPeers(out)
+	if got := bestPeerLatency(peers); got != 99.20 {
+		t.Fatalf("expected best latency 99.20, got %v from %+v", got, peers)
+	}
+	if got := bestPeerLoss(peers); got != "1.0%" {
+		t.Fatalf("expected best peer loss, got %q", got)
+	}
+}
+
 func TestParseEasyTierRouteDirect(t *testing.T) {
 	routes := parseEasyTierRoutes(sampleRouteOutput)
 	if len(routes) != 1 || routes[0].RouteType != "DIRECT" || routes[0].NextHopHostname != "ECS-dFbLSf" {
 		t.Fatalf("bad route parse: %+v", routes)
+	}
+}
+
+func TestParseEasyTierRouteDirectFromNextHop(t *testing.T) {
+	routes := parseEasyTierRoutes(markdownRouteSample())
+	if len(routes) != 1 || routes[0].RouteType != "DIRECT" || routes[0].NextHopHostname != "DIRECT" {
+		t.Fatalf("bad markdown route parse: %+v", routes)
+	}
+}
+
+func TestParseEasyTierRouteSkipsSeparatorRows(t *testing.T) {
+	routes := parseEasyTierRoutes(markdownRouteSample())
+	if len(routes) != 1 || strings.Contains(routes[0].NextHopHostname, "-") {
+		t.Fatalf("separator route row leaked: %+v", routes)
 	}
 }
 
@@ -830,6 +898,16 @@ func TestVerifyNetworkConnectivitySuccess(t *testing.T) {
 		if result.Status != "succeeded" || !strings.Contains(result.Result, want) {
 			t.Fatalf("missing %s in result: %+v", want, result)
 		}
+	}
+}
+
+func TestNodeReportNoDashedLossOrTunnel(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true, "nft": true, "ip": true}}, peerOutput: markdownPeerSample(), routeOutput: markdownRouteSample()}
+	status := CollectStatus(context.Background(), cfg, runner)
+	report := ReportFromStatus(cfg, status)
+	if report.EasyTierPacketLoss != "0.0%" || strings.Contains(strings.Join(report.EasyTierTunnels, ","), "-") || strings.Contains(strings.Join(report.EasyTierTunnels, ","), "kB") {
+		t.Fatalf("bad report metrics: %+v", report)
 	}
 }
 

@@ -397,14 +397,14 @@ func easyTierDiagnosticsFromCLI(ctx context.Context, runner CommandRunner, cli s
 	if len(routes) == 0 {
 		diagnostics.Reason = "EasyTier found remote Peer, but no usable route was found."
 		diagnostics.BestLatencyMS = bestPeerLatency(peers)
-		diagnostics.PacketLoss = peers[0].Loss
+		diagnostics.PacketLoss = bestPeerLoss(peers)
 		diagnostics.Tunnels = uniqueTunnels(peers)
 		return diagnostics
 	}
 	diagnostics.NetworkOK = true
 	diagnostics.Reason = "network connected"
 	diagnostics.BestLatencyMS = bestPeerLatency(peers)
-	diagnostics.PacketLoss = peers[0].Loss
+	diagnostics.PacketLoss = bestPeerLoss(peers)
 	diagnostics.Tunnels = uniqueTunnels(peers)
 	if len(routes) > 0 {
 		diagnostics.RouteType = routes[0].RouteType
@@ -415,6 +415,35 @@ func easyTierDiagnosticsFromCLI(ctx context.Context, runner CommandRunner, cli s
 	return diagnostics
 }
 func parseEasyTierPeers(peerInfo string) []EasyTierPeer {
+	if rows := markdownTableRows(peerInfo); len(rows) > 0 {
+		peers := make([]EasyTierPeer, 0, len(rows))
+		for _, row := range rows {
+			cost := row["cost"]
+			if strings.EqualFold(cost, "local") {
+				continue
+			}
+			peer := EasyTierPeer{
+				IPv4:      row["ipv4"],
+				Hostname:  row["hostname"],
+				Cost:      cost,
+				LatencyMS: parseLatency(row["lat(ms)"]),
+				Loss:      cleanLossValue(row["loss"]),
+				RX:        row["rx"],
+				TX:        row["tx"],
+				NAT:       firstString(row["nat"], row["NAT"]),
+				Version:   row["version"],
+			}
+			if validTunnelValue(row["tunnel"]) {
+				peer.Tunnel = strings.TrimSpace(row["tunnel"])
+				peer.Tunnels = splitTunnelList(peer.Tunnel)
+			}
+			if peer.Hostname == "" && peer.IPv4 == "" {
+				continue
+			}
+			peers = append(peers, peer)
+		}
+		return peers
+	}
 	peers := []EasyTierPeer{}
 	for _, line := range strings.Split(peerInfo, "\n") {
 		fields := easyTierTableFields(line)
@@ -434,7 +463,7 @@ func parseEasyTierPeers(peerInfo string) []EasyTierPeer {
 			peer.LatencyMS = parseLatency(fields[2])
 		}
 		if len(fields) > 3 {
-			peer.Loss = fields[3]
+			peer.Loss = cleanLossValue(fields[3])
 		}
 		if len(fields) > 4 {
 			peer.RX = fields[4]
@@ -448,8 +477,9 @@ func parseEasyTierPeers(peerInfo string) []EasyTierPeer {
 				peer.TX += " " + fields[7]
 			}
 		}
-		if len(fields) > 8 {
+		if len(fields) > 8 && validTunnelValue(fields[8]) {
 			peer.Tunnel = fields[8]
+			peer.Tunnels = splitTunnelList(peer.Tunnel)
 		}
 		if len(fields) > 9 {
 			peer.NAT = fields[9]
@@ -463,6 +493,23 @@ func parseEasyTierPeers(peerInfo string) []EasyTierPeer {
 }
 
 func parseEasyTierRoutes(routeInfo string) []EasyTierRoute {
+	if rows := markdownTableRows(routeInfo); len(rows) > 0 {
+		routes := make([]EasyTierRoute, 0, len(rows))
+		for _, row := range rows {
+			routeType := routeTypeFromValues(row)
+			route := EasyTierRoute{
+				NextHopHostname: firstString(row["next_hop_hostname"], row["next_hop_ipv4"], row["hostname"]),
+				NextHopLatency:  parseLatency(row["next_hop_lat"]),
+				PathLatency:     parseLatency(row["path_latency"]),
+				RouteType:       routeType,
+			}
+			if route.RouteType == "" {
+				route.RouteType = "unknown"
+			}
+			routes = append(routes, route)
+		}
+		return routes
+	}
 	routes := []EasyTierRoute{}
 	for _, line := range strings.Split(routeInfo, "\n") {
 		fields := easyTierTableFields(line)
@@ -492,6 +539,141 @@ func parseEasyTierRoutes(routeInfo string) []EasyTierRoute {
 		routes = append(routes, route)
 	}
 	return routes
+}
+
+var tableSeparatorPattern = regexp.MustCompile(`^:?-+:?$`)
+var lossPattern = regexp.MustCompile(`^\d+(?:\.\d+)?%$`)
+var tunnelTokenPattern = regexp.MustCompile(`^(?i:tcp|udp|tcp6|udp6|wg|ws|wss|quic)$`)
+
+func markdownTableRows(text string) []map[string]string {
+	headers := []string{}
+	rows := []map[string]string{}
+	for _, line := range strings.Split(text, "\n") {
+		cols := markdownColumns(line)
+		if len(cols) == 0 || isMarkdownSeparator(cols) {
+			continue
+		}
+		if len(headers) == 0 {
+			headers = make([]string, 0, len(cols))
+			for _, col := range cols {
+				headers = append(headers, normalizeTableHeader(col))
+			}
+			continue
+		}
+		row := map[string]string{}
+		for i, header := range headers {
+			if i >= len(cols) {
+				continue
+			}
+			row[header] = strings.TrimSpace(cols[i])
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func markdownColumns(line string) []string {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "|") {
+		return nil
+	}
+	line = strings.Trim(line, "|")
+	parts := strings.Split(line, "|")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		out = append(out, strings.TrimSpace(part))
+	}
+	return out
+}
+
+func normalizeTableHeader(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, " ", "_")
+	value = strings.ReplaceAll(value, "-", "_")
+	return value
+}
+
+func isMarkdownSeparator(cols []string) bool {
+	if len(cols) == 0 {
+		return false
+	}
+	for _, col := range cols {
+		if !tableSeparatorPattern.MatchString(strings.TrimSpace(col)) {
+			return false
+		}
+	}
+	return true
+}
+
+func cleanLossValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "-" {
+		return ""
+	}
+	if lossPattern.MatchString(value) {
+		return value
+	}
+	return ""
+}
+
+func validTunnelValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "-" {
+		return false
+	}
+	if strings.Contains(value, "://") {
+		return true
+	}
+	for _, token := range strings.Split(value, ",") {
+		token = strings.TrimSpace(token)
+		if token == "" || !tunnelTokenPattern.MatchString(token) {
+			return false
+		}
+	}
+	return true
+}
+
+func splitTunnelList(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if strings.Contains(value, "://") {
+		return []string{value}
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, token := range strings.Split(value, ",") {
+		token = strings.TrimSpace(token)
+		if token == "" || !validTunnelValue(token) || seen[token] {
+			continue
+		}
+		seen[token] = true
+		out = append(out, token)
+	}
+	return out
+}
+
+func routeTypeFromValues(row map[string]string) string {
+	for _, value := range row {
+		upper := strings.ToUpper(strings.TrimSpace(value))
+		switch {
+		case strings.Contains(upper, "DIRECT"):
+			return "DIRECT"
+		case strings.Contains(strings.ToLower(value), "relay"):
+			return "relay"
+		}
+	}
+	return "unknown"
+}
+
+func firstString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 var virtualIPPattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d+)?\b`)
@@ -570,8 +752,7 @@ func uniqueTunnels(peers []EasyTierPeer) []string {
 	seen := map[string]bool{}
 	out := []string{}
 	for _, peer := range peers {
-		for _, tunnel := range strings.Split(peer.Tunnel, ",") {
-			tunnel = strings.TrimSpace(tunnel)
+		for _, tunnel := range splitTunnelList(peer.Tunnel) {
 			if tunnel == "" || seen[tunnel] {
 				continue
 			}
@@ -580,6 +761,24 @@ func uniqueTunnels(peers []EasyTierPeer) []string {
 		}
 	}
 	return out
+}
+
+func bestPeerLoss(peers []EasyTierPeer) string {
+	bestLatency := bestPeerLatency(peers)
+	for _, peer := range peers {
+		if bestLatency > 0 && peer.LatencyMS != bestLatency {
+			continue
+		}
+		if peer.Loss != "" {
+			return peer.Loss
+		}
+	}
+	for _, peer := range peers {
+		if peer.Loss != "" {
+			return peer.Loss
+		}
+	}
+	return ""
 }
 
 func structMap(value any) map[string]any {

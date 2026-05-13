@@ -27,10 +27,10 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-VERSION=v0.2.4-test bash panel/scripts/build-release.sh
+VERSION=v0.2.5-test bash panel/scripts/build-release.sh
 ```
 
-## v0.2.4-test 重点
+## v0.2.5-test 重点
 
 - 添加节点改为紧凑卡片式接入流程，不再让用户选择节点角色。
 - 组网配置收敛为“快速组网”主流程，并生成组网卡片。

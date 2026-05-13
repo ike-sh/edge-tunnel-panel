@@ -4,7 +4,7 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.4-test
+  --version v0.2.5-test
 ```
 
 打开 `http://服务器IP:18080`。
@@ -28,10 +28,11 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 1. 确认后端节点已有 EasyTier 虚拟 IP。
 2. 进入“转发规则”。
-3. 选择入口节点、后端节点、协议、监听端口和目标端口。
-4. 默认目标 IP 使用后端节点虚拟 IP。
-5. 点击“应用规则”。
-6. 到“任务”页面查看 `apply_forward_config` 和 `verify_forward_rules` 结果。
+3. 选择一条已经显示“组网成功”的组网链路。
+4. 只填写公网监听端口、后端落地端口和协议。
+5. 目标 IP 默认自动使用组网链路中后端节点的虚拟 IP，并自动去掉 CIDR。
+6. 点击“创建并应用转发”。
+7. 到“任务”页面查看 `apply_forward_config` 和 `verify_forward_rules` 结果。
 
 ## 排障入口
 

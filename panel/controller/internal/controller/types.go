@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.2.4-test"
+	Version = "v0.2.5-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -119,6 +119,7 @@ type Entry struct {
 
 type Forward struct {
 	ID                 string    `json:"id"`
+	NetworkLinkID      string    `json:"network_link_id,omitempty"`
 	Name               string    `json:"name"`
 	Enabled            bool      `json:"enabled"`
 	Protocol           string    `json:"protocol"`

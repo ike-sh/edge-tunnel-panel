@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const Version = "v0.2.4-test"
+const Version = "v0.2.5-test"
 
 type APIResponse struct {
 	OK    bool            `json:"ok"`
@@ -97,15 +97,17 @@ type AgentStatus struct {
 }
 
 type EasyTierPeer struct {
-	Hostname  string  `json:"hostname,omitempty"`
-	Cost      string  `json:"cost,omitempty"`
-	LatencyMS float64 `json:"latency_ms,omitempty"`
-	Loss      string  `json:"loss,omitempty"`
-	RX        string  `json:"rx,omitempty"`
-	TX        string  `json:"tx,omitempty"`
-	Tunnel    string  `json:"tunnel,omitempty"`
-	NAT       string  `json:"nat,omitempty"`
-	Version   string  `json:"version,omitempty"`
+	IPv4      string   `json:"ipv4,omitempty"`
+	Hostname  string   `json:"hostname,omitempty"`
+	Cost      string   `json:"cost,omitempty"`
+	LatencyMS float64  `json:"latency_ms,omitempty"`
+	Loss      string   `json:"loss,omitempty"`
+	RX        string   `json:"rx,omitempty"`
+	TX        string   `json:"tx,omitempty"`
+	Tunnel    string   `json:"tunnel,omitempty"`
+	Tunnels   []string `json:"tunnels,omitempty"`
+	NAT       string   `json:"nat,omitempty"`
+	Version   string   `json:"version,omitempty"`
 }
 
 type EasyTierRoute struct {

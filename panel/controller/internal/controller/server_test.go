@@ -280,12 +280,12 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.4-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.2.5-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.2.4-test") ||
+		!strings.Contains(body, "--version v0.2.5-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, `"root_command"`) ||
@@ -632,6 +632,93 @@ func TestForwardRuleCRUDAndApply(t *testing.T) {
 	}
 }
 
+func TestForwardCreateFromNetworkLink(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http-18081", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	if rr.Code != 200 {
+		t.Fatalf("forward from link failed: %d %s", rr.Code, rr.Body.String())
+	}
+	var resp APIResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var forward Forward
+	_ = json.Unmarshal(raw, &forward)
+	if forward.NetworkLinkID != link.ID || forward.EntryNodeID != "entry-link-forward" || forward.BackendNodeID != "backend-link-forward" {
+		t.Fatalf("forward did not inherit link nodes: %+v", forward)
+	}
+	if forward.TargetIP != "10.144.0.2" || forward.TargetHost != "10.144.0.2" {
+		t.Fatalf("forward target should use backend virtual IP without CIDR: %+v", forward)
+	}
+}
+
+func TestForwardCreateRejectsMissingLink(t *testing.T) {
+	rr := post(t, testServer(t), "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": "missing", "name": "http", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	if rr.Code != 404 {
+		t.Fatalf("missing link should be rejected: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForwardCreateRejectsLinkNotReady(t *testing.T) {
+	h := testServer(t)
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.50:12345", map[string]any{"id": "entry-not-ready", "node_name": "entry", "easytier_status": "inactive"})
+	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-not-ready", "node_name": "backend", "easytier_status": "inactive", "easytier_ip": "10.144.0.2/16"})
+	linkResp := post(t, h, "/api/v1/network-links/quick-apply", "operator-token", map[string]any{"entry_node_id": "entry-not-ready", "backend_node_id": "backend-not-ready"})
+	link := networkLinkFromResponse(t, linkResp)
+	rr := post(t, h, "/api/v1/forwards", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "not connected") {
+		t.Fatalf("not-ready link should be rejected: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForwardCreateAndApplyCreatesTaskOnEntryNode(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	rr := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http-18081", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	if rr.Code != 202 {
+		t.Fatalf("create-and-apply failed: %d %s", rr.Code, rr.Body.String())
+	}
+	var resp APIResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var data struct {
+		Forward Forward `json:"forward"`
+		Task    Task    `json:"task"`
+	}
+	_ = json.Unmarshal(raw, &data)
+	if data.Task.NodeID != "entry-link-forward" || data.Task.Action != "apply_forward_config" {
+		t.Fatalf("apply task should target entry node: %+v", data.Task)
+	}
+	if data.Forward.Status != "applying" || data.Forward.LastApplyTaskID != data.Task.ID {
+		t.Fatalf("forward should be applying: %+v", data.Forward)
+	}
+	payloadRaw, _ := json.Marshal(data.Task.Payload["forward_rule"])
+	var payloadForward Forward
+	_ = json.Unmarshal(payloadRaw, &payloadForward)
+	if payloadForward.TargetIP != "10.144.0.2" || strings.Contains(payloadForward.TargetIP, "/") {
+		t.Fatalf("apply payload target should not contain CIDR: %+v", payloadForward)
+	}
+}
+
+func TestForwardStatusUpdatesFromApplyResult(t *testing.T) {
+	h, link := testConnectedNetworkLink(t)
+	created := post(t, h, "/api/v1/forwards/create-and-apply", "operator-token", map[string]any{"network_link_id": link.ID, "name": "http-18081", "protocol": "tcp", "listen_port": 18081, "target_port": 8080})
+	var resp APIResponse
+	_ = json.Unmarshal(created.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var data struct {
+		Forward Forward `json:"forward"`
+		Task    Task    `json:"task"`
+	}
+	_ = json.Unmarshal(raw, &data)
+	result := post(t, h, "/api/v1/agent/tasks/"+data.Task.ID+"/result", "agent-token", map[string]any{"status": "succeeded", "result": "{}"})
+	if result.Code != 200 {
+		t.Fatalf("task result failed: %d %s", result.Code, result.Body.String())
+	}
+	getRule := get(t, h, "/api/v1/forwards/"+data.Forward.ID, "operator-token")
+	if !strings.Contains(getRule.Body.String(), `"status":"applied"`) {
+		t.Fatalf("forward status not updated: %d %s", getRule.Code, getRule.Body.String())
+	}
+}
+
 func TestNormalizeHostIP(t *testing.T) {
 	cases := map[string]string{
 		"10.144.0.2/16": "10.144.0.2",
@@ -669,6 +756,33 @@ func TestForwardRejectsDangerousPayload(t *testing.T) {
 	if rr.Code != 400 {
 		t.Fatalf("dangerous forward payload should be rejected: %d %s", rr.Code, rr.Body.String())
 	}
+}
+
+func testConnectedNetworkLink(t *testing.T) (http.Handler, NetworkLink) {
+	t.Helper()
+	h := testServer(t)
+	_ = postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "203.0.113.60:12345", map[string]any{"id": "entry-link-forward", "node_name": "entry", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true, "easytier_best_latency_ms": 140.5, "easytier_packet_loss": "0.0%", "easytier_route_type": "DIRECT"})
+	_ = post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "backend-link-forward", "node_name": "backend", "easytier_status": "active", "easytier_peer_count": 1, "easytier_network_ok": true, "easytier_ip": "10.144.0.2/16"})
+	linkResp := post(t, h, "/api/v1/network-links/quick-apply", "operator-token", map[string]any{"name": "edge-net", "entry_node_id": "entry-link-forward", "backend_node_id": "backend-link-forward"})
+	return h, networkLinkFromResponse(t, linkResp)
+}
+
+func networkLinkFromResponse(t *testing.T, rr *httptest.ResponseRecorder) NetworkLink {
+	t.Helper()
+	if rr.Code != 202 {
+		t.Fatalf("network link create failed: %d %s", rr.Code, rr.Body.String())
+	}
+	var resp APIResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var data struct {
+		Link NetworkLink `json:"link"`
+	}
+	_ = json.Unmarshal(raw, &data)
+	if data.Link.ID == "" {
+		t.Fatalf("missing network link in response: %s", rr.Body.String())
+	}
+	return data.Link
 }
 
 func postMethod(t *testing.T, h http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {

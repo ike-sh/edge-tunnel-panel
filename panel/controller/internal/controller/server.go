@@ -713,6 +713,10 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
 		return
 	}
+	if r.URL.Path == "/api/v1/forwards/create-and-apply" && r.Method == http.MethodPost {
+		s.handleForwardCreateAndApply(w, r)
+		return
+	}
 	if r.URL.Path == "/api/v1/forwards" {
 		switch r.Method {
 		case http.MethodGet:
@@ -725,6 +729,9 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 			}
 			if payloadHasDangerousKeys(req) {
 				writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+				return
+			}
+			if !s.prepareForwardRequest(w, req) {
 				return
 			}
 			item, err := s.store.createForward(req)
@@ -752,6 +759,9 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 		}
 		if payloadHasDangerousKeys(req) {
 			writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+			return
+		}
+		if !s.prepareForwardRequest(w, req) {
 			return
 		}
 		item, found, err := s.store.updateForward(id, req)
@@ -791,20 +801,70 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleForwardApply(w http.ResponseWriter, r *http.Request, id string) {
-	req := map[string]any{}
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+func (s *Server) handleForwardCreateAndApply(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBody(w, r)
+	if !ok {
+		return
 	}
 	if payloadHasDangerousKeys(req) {
 		writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
 		return
 	}
-	forward, found := s.store.getForward(id)
-	if !found {
-		writeErr(w, 404, "NOT_FOUND", "forward not found")
+	if !s.prepareForwardRequest(w, req) {
 		return
 	}
+	forward, err := s.store.createForward(req)
+	if err != nil {
+		writeErr(w, 400, "BAD_REQUEST", err.Error())
+		return
+	}
+	s.createForwardApplyTask(w, forward)
+}
+
+func (s *Server) prepareForwardRequest(w http.ResponseWriter, req map[string]any) bool {
+	linkID := stringValue(req["network_link_id"], "")
+	if linkID == "" {
+		return true
+	}
+	link, found := s.store.getNetworkLink(linkID)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "network link not found")
+		return false
+	}
+	if link.Status != "connected" {
+		writeErr(w, 400, "BAD_REQUEST", "network link is not connected; verify network connectivity before creating forwarding")
+		return false
+	}
+	entryNode, found := s.store.getNode(link.EntryNodeID)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "entry node not found")
+		return false
+	}
+	backendNode, found := s.store.getNode(link.BackendNodeID)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "backend node not found")
+		return false
+	}
+	target := normalizeHostIP(stringValue(req["target_ip"], ""))
+	if target == "" {
+		target = normalizeHostIP(backendNode.EasyTierIP)
+	}
+	if target == "" {
+		writeErr(w, 400, "BAD_REQUEST", "backend node has no EasyTier virtual IP; finish network setup and verify virtual IP first")
+		return false
+	}
+	if stringValue(req["name"], "") == "" {
+		req["name"] = "forward-" + strconv.Itoa(intValue(req["listen_port"]))
+	}
+	req["entry_node_id"] = entryNode.ID
+	req["backend_node_id"] = backendNode.ID
+	req["target_ip"] = target
+	req["target_host"] = target
+	req["target_node_ip_source"] = stringValue(req["target_node_ip_source"], "easytier_ip")
+	return true
+}
+
+func (s *Server) createForwardApplyTask(w http.ResponseWriter, forward Forward) {
 	entryNode, found := s.store.getNode(forward.EntryNodeID)
 	if !found {
 		writeErr(w, 404, "NOT_FOUND", "entry node not found")
@@ -820,12 +880,12 @@ func (s *Server) handleForwardApply(w http.ResponseWriter, r *http.Request, id s
 		forward.TargetHost = forward.TargetIP
 	}
 	forward.TargetIP = normalizeHostIP(forward.TargetIP)
-	forward.TargetHost = normalizeHostIP(forward.TargetHost)
+	forward.TargetHost = normalizeHostIP(firstString(forward.TargetHost, forward.TargetIP))
 	if strings.TrimSpace(forward.TargetIP) == "" {
 		writeErr(w, 400, "BAD_REQUEST", "backend node has no EasyTier virtual IP; finish network setup and verify virtual IP first")
 		return
 	}
-	if updatedForward, ok, err := s.store.updateForwardResolvedTarget(id, forward.TargetIP); err != nil {
+	if updatedForward, ok, err := s.store.updateForwardResolvedTarget(forward.ID, forward.TargetIP); err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	} else if ok {
@@ -836,12 +896,29 @@ func (s *Server) handleForwardApply(w http.ResponseWriter, r *http.Request, id s
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	updated, _, err := s.store.updateForwardTask(id, task.ID, "apply", "pending")
+	updated, _, err := s.store.updateForwardTask(forward.ID, task.ID, "apply", "applying")
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
 	writeOK(w, 202, map[string]any{"forward": updated, "task": task})
+}
+
+func (s *Server) handleForwardApply(w http.ResponseWriter, r *http.Request, id string) {
+	req := map[string]any{}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	if payloadHasDangerousKeys(req) {
+		writeErr(w, 400, "DANGEROUS_PAYLOAD", "dangerous payload keys are not allowed")
+		return
+	}
+	forward, found := s.store.getForward(id)
+	if !found {
+		writeErr(w, 404, "NOT_FOUND", "forward not found")
+		return
+	}
+	s.createForwardApplyTask(w, forward)
 }
 
 func (s *Server) handleForwardVerify(w http.ResponseWriter, r *http.Request, id string) {

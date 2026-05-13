@@ -249,10 +249,54 @@ func (s *Store) updateTaskResult(id string, req map[string]any) (Task, bool, err
 			t.Stdout = capText(stringValue(req["stdout"], stringValue(req["result_stdout"], "")))
 			t.Stderr = capText(stringValue(req["stderr"], stringValue(req["result_stderr"], "")))
 			t.Error = capText(stringValue(req["error"], ""))
+			if t.Action == "apply_forward_config" {
+				s.updateForwardStatusForTaskLocked(*t)
+			}
 			return *t, true, s.saveLocked()
 		}
 	}
 	return Task{}, false, nil
+}
+
+func (s *Store) updateForwardStatusForTaskLocked(task Task) {
+	forwardID := forwardIDFromTaskPayload(task.Payload)
+	if forwardID == "" {
+		return
+	}
+	status := "failed"
+	if task.Status == "succeeded" {
+		status = "applied"
+	}
+	for i := range s.data.Forwards {
+		if s.data.Forwards[i].ID != forwardID {
+			continue
+		}
+		s.data.Forwards[i].Status = status
+		s.data.Forwards[i].LastApplyTaskID = task.ID
+		s.data.Forwards[i].UpdatedAt = now()
+		return
+	}
+}
+
+func forwardIDFromTaskPayload(payload map[string]any) string {
+	for _, key := range []string{"forward_rule", "rule"} {
+		raw, ok := payload[key]
+		if !ok {
+			continue
+		}
+		if item, ok := raw.(Forward); ok {
+			return item.ID
+		}
+		if item, ok := raw.(map[string]any); ok {
+			return stringValue(item["id"], "")
+		}
+		data, _ := json.Marshal(raw)
+		var item Forward
+		if err := json.Unmarshal(data, &item); err == nil && item.ID != "" {
+			return item.ID
+		}
+	}
+	return stringValue(payload["forward_id"], "")
 }
 
 func (s *Store) listForwards() []Forward {
@@ -586,6 +630,7 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 	if existing != nil {
 		item = *existing
 	}
+	item.NetworkLinkID = stringValue(req["network_link_id"], item.NetworkLinkID)
 	if value := stringValue(req["name"], item.Name); value != "" {
 		item.Name = value
 	}
