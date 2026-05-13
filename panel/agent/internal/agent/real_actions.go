@@ -191,18 +191,22 @@ func applyForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, p
 	if len(rule) == 0 {
 		rule = payload
 	}
-	targetHost := normalizeHostIP(stringField(rule, "target_ip", stringField(rule, "target_host", "")))
+	targetHost := normalizeHostIP(stringField(rule, "target_host", stringField(rule, "target_ip", "")))
 	if targetHost == "" {
-		return TaskResult{Status: "failed", Error: "target_ip is required"}
+		return TaskResult{Status: "failed", Error: "target_host is required"}
 	}
 	if strings.Contains(targetHost, "/") {
-		return TaskResult{Status: "failed", Error: "target_ip must be host address, got CIDR: " + targetHost}
+		return TaskResult{Status: "failed", Error: "target_host must be host address, got CIDR: " + targetHost}
 	}
 	if ip := net.ParseIP(targetHost); ip == nil || ip.To4() == nil {
-		return TaskResult{Status: "failed", Error: "forward MVP supports IPv4 target_ip only: " + targetHost}
+		return TaskResult{Status: "failed", Error: "当前 nftables 转发 MVP 仅支持 IPv4 目标地址: " + targetHost}
 	}
 	rule["target_ip"] = targetHost
 	rule["target_host"] = targetHost
+	warnings, preflightErr := forwardPreflight(ctx, runner, intField(rule, "listen_port"))
+	if preflightErr != nil {
+		return TaskResult{Status: "failed", Error: preflightErr.Error(), Result: jsonResult(map[string]any{"listen_port": intField(rule, "listen_port"), "target_ip": targetHost, "target_host": targetHost, "target_port": intField(rule, "target_port"), "warnings": warnings})}
+	}
 	if err := writeJSONFile(forwardPath(cfg), rule, 0o600); err != nil {
 		return TaskResult{Status: "failed", Error: err.Error()}
 	}
@@ -230,7 +234,6 @@ func applyForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, p
 	if apply.Err != nil || apply.ExitCode != 0 {
 		return TaskResult{Status: "failed", Stdout: apply.Stdout, Stderr: apply.Stderr, Error: "nft apply failed: " + errorText(apply), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "nft_apply_stdout": apply.Stdout, "nft_apply_stderr": apply.Stderr, "nft_content": nftContent, "applied": false})}
 	}
-	warnings := []string{}
 	ipForwardAfter := readIPv4Forwarding()
 	if ipForwardAfter == "" {
 		ipForward := runner.Run(ctx, "sysctl", "-n", "net.ipv4.ip_forward")
@@ -240,6 +243,29 @@ func applyForwardConfig(ctx context.Context, cfg Config, runner CommandRunner, p
 		warnings = append(warnings, "net.ipv4.ip_forward is not enabled; forwarding may not work until IP forwarding is enabled")
 	}
 	return TaskResult{Status: "succeeded", Stdout: strings.TrimSpace(check.Stdout + "\n" + apply.Stdout), Stderr: strings.TrimSpace(check.Stderr + "\n" + apply.Stderr), Result: jsonResult(map[string]any{"config_path": forwardPath(cfg), "nft_path": forwardNFTPath(cfg), "nft_check_ok": true, "applied": true, "warnings": warnings, "listen_port": intField(rule, "listen_port"), "target_ip": targetHost, "target_host": targetHost, "target_port": intField(rule, "target_port"), "ip_forward_before": ipForwardBefore, "ip_forward_after": ipForwardAfter, "ip_forward_changed": ipForwardChanged})}
+}
+
+func forwardPreflight(ctx context.Context, runner CommandRunner, listenPort int) ([]string, error) {
+	warnings := []string{}
+	if listenPort <= 0 {
+		return warnings, nil
+	}
+	portNeedle := ":" + strconv.Itoa(listenPort)
+	if ss := runner.Run(ctx, "ss", "-lntup"); ss.Err == nil && ss.ExitCode == 0 {
+		if strings.Contains(ss.Stdout, portNeedle) || strings.Contains(ss.Stderr, portNeedle) {
+			return warnings, fmt.Errorf("端口已被占用或已有转发规则，请更换公网监听端口：%d", listenPort)
+		}
+	} else {
+		warnings = append(warnings, "ss unavailable; skipped process port preflight")
+	}
+	if nft := runner.Run(ctx, "nft", "list", "table", "inet", "edge_tunnel_forward"); nft.Err == nil && nft.ExitCode == 0 {
+		if strings.Contains(nft.Stdout, "dport "+strconv.Itoa(listenPort)) || strings.Contains(nft.Stderr, "dport "+strconv.Itoa(listenPort)) {
+			return warnings, fmt.Errorf("端口已被占用或已有转发规则，请更换公网监听端口：%d", listenPort)
+		}
+	} else {
+		warnings = append(warnings, "nft table unavailable before apply; it may be created on first apply")
+	}
+	return warnings, nil
 }
 
 func applyPBRConfig(cfg Config, payload map[string]any) TaskResult {

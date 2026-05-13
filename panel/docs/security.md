@@ -1,14 +1,11 @@
-# 安全说明
+﻿# 瀹夊叏璇存槑
 
 ## Token
 
-- Web/API 使用 Operator Token；测试模式可关闭严格鉴权。
-- Agent 使用 Controller Token 注册、上报和轮询任务。
-- 日志、任务输出和错误信息会做 redaction。
-
+- Web/API 浣跨敤 Operator Token锛涙祴璇曟ā寮忓彲鍏抽棴涓ユ牸閴存潈銆?- Agent 浣跨敤 Controller Token 娉ㄥ唽銆佷笂鎶ュ拰杞浠诲姟銆?- 鏃ュ織銆佷换鍔¤緭鍑哄拰閿欒淇℃伅浼氬仛 redaction銆?
 ## Agent action allowlist
 
-Agent 只执行固定 action，例如：
+Agent 鍙墽琛屽浐瀹?action锛屼緥濡傦細
 
 - `collect_agent_status`
 - `run_node_preflight`
@@ -19,9 +16,9 @@ Agent 只执行固定 action，例如：
 - `apply_forward_config`
 - `verify_forward_rules`
 
-## 禁止 payload
+## 绂佹 payload
 
-Controller 和 Agent 会拒绝危险字段：
+Controller 鍜?Agent 浼氭嫆缁濆嵄闄╁瓧娈碉細
 
 - `command`
 - `cmd`
@@ -31,6 +28,6 @@ Controller 和 Agent 会拒绝危险字段：
 - `raw_iptables`
 - `raw_ip_route`
 
-## Root 权限
+## Root 鏉冮檺
 
-Agent 需要 root 权限来写 systemd、nftables 和 EasyTier 配置。写入动作应只在可信节点开启。
+Agent 闇€瑕?root 鏉冮檺鏉ュ啓 systemd銆乶ftables 鍜?EasyTier 閰嶇疆銆傚啓鍏ュ姩浣滃簲鍙湪鍙俊鑺傜偣寮€鍚€?

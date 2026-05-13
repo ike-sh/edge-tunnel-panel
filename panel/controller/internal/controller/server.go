@@ -560,7 +560,7 @@ func (s *Server) quickApplyNetwork(w http.ResponseWriter, req map[string]any) {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	link, err := s.store.createNetworkLink(NetworkLink{Name: name, NetworkName: profile.NetworkName, CIDR: profile.CIDR, Port: port, Protocols: protocols, EntryNodeID: entryNode.ID, BackendNodeID: backendNode.ID, EntryTaskID: entryTask.ID, BackendTaskID: backendTask.ID})
+	link, err := s.store.createNetworkLink(NetworkLink{Name: name, NetworkName: profile.NetworkName, CIDR: profile.CIDR, Port: port, Protocols: protocols, EntryNodeID: entryNode.ID, BackendNodeID: backendNode.ID, EntryTaskID: entryTask.ID, BackendTaskID: backendTask.ID, Status: "applying", StatusReason: "network profile apply tasks created"})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
@@ -630,6 +630,19 @@ func (s *Server) handleNetworkLinks(w http.ResponseWriter, r *http.Request) {
 		s.handleNetworkLinkVerify(w, r, id)
 	case r.Method == http.MethodPost && action == "reapply":
 		s.handleNetworkLinkReapply(w, r, id)
+	case r.Method == http.MethodPost && action == "enable":
+		s.handleNetworkLinkReapply(w, r, id)
+	case r.Method == http.MethodPost && action == "disable":
+		link, found, err := s.store.updateNetworkLinkStatus(id, "disabled", "disabled by operator")
+		if err != nil {
+			writeErr(w, 500, "STORE_ERROR", err.Error())
+			return
+		}
+		if !found {
+			writeErr(w, 404, "NOT_FOUND", "network link not found")
+			return
+		}
+		writeOK(w, 200, link)
 	default:
 		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
 	}
@@ -831,7 +844,7 @@ func (s *Server) prepareForwardRequest(w http.ResponseWriter, req map[string]any
 		writeErr(w, 404, "NOT_FOUND", "network link not found")
 		return false
 	}
-	if link.Status != "connected" {
+	if link.Status != "connected" && link.Status != "active" {
 		writeErr(w, 400, "BAD_REQUEST", "network link is not connected; verify network connectivity before creating forwarding")
 		return false
 	}
@@ -845,12 +858,10 @@ func (s *Server) prepareForwardRequest(w http.ResponseWriter, req map[string]any
 		writeErr(w, 404, "NOT_FOUND", "backend node not found")
 		return false
 	}
-	target := normalizeHostIP(stringValue(req["target_ip"], ""))
-	if target == "" {
-		target = normalizeHostIP(backendNode.EasyTierIP)
-	}
-	if target == "" {
-		writeErr(w, 400, "BAD_REQUEST", "backend node has no EasyTier virtual IP; finish network setup and verify virtual IP first")
+	source := normalizeTargetHostSource(stringValue(req["target_host_source"], stringValue(req["target_node_ip_source"], "backend_easytier_ip")))
+	target, err := resolveForwardTargetHost(req, backendNode, source)
+	if err != nil {
+		writeErr(w, 400, "BAD_REQUEST", err.Error())
 		return false
 	}
 	if stringValue(req["name"], "") == "" {
@@ -860,8 +871,73 @@ func (s *Server) prepareForwardRequest(w http.ResponseWriter, req map[string]any
 	req["backend_node_id"] = backendNode.ID
 	req["target_ip"] = target
 	req["target_host"] = target
-	req["target_node_ip_source"] = stringValue(req["target_node_ip_source"], "easytier_ip")
+	req["target_host_source"] = source
+	req["target_node_ip_source"] = legacyTargetNodeIPSource(source)
 	return true
+}
+
+func resolveForwardTargetHost(req map[string]any, backendNode Node, source string) (string, error) {
+	switch strings.TrimSpace(source) {
+	case "", "backend_easytier_ip", "easytier_ip":
+		target := normalizeHostIP(backendNode.EasyTierIP)
+		if target == "" {
+			return "", errValidation("后端节点暂无 EasyTier 虚拟 IP，请先完成组网并验证虚拟 IP")
+		}
+		return target, nil
+	case "backend_private_ip", "private_ip":
+		target := firstAddress(backendNode.PrivateIP)
+		if target == "" {
+			return "", errValidation("后端节点暂无内网 IP，无法作为后端落地地址")
+		}
+		return normalizeHostIP(target), nil
+	case "manual":
+		target := normalizeHostIP(stringValue(req["manual_target_host"], stringValue(req["target_host"], stringValue(req["target_ip"], ""))))
+		if target == "" {
+			return "", errValidation("手动后端目标地址不能为空")
+		}
+		if ip := net.ParseIP(target); ip != nil && ip.To4() == nil {
+			return "", errValidation("转发 MVP 暂只支持 IPv4/域名目标地址，不支持 IPv6")
+		}
+		req["manual_target_host"] = target
+		return target, nil
+	default:
+		return "", errValidation("target_host_source must be backend_easytier_ip, backend_private_ip, or manual")
+	}
+}
+
+func normalizeTargetHostSource(source string) string {
+	switch strings.TrimSpace(source) {
+	case "", "backend_easytier_ip", "easytier_ip":
+		return "backend_easytier_ip"
+	case "backend_private_ip", "private_ip":
+		return "backend_private_ip"
+	case "manual":
+		return "manual"
+	default:
+		return strings.TrimSpace(source)
+	}
+}
+
+func firstAddress(value string) string {
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		if trimmed := strings.TrimSpace(part); trimmed != "" && trimmed != "-" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func legacyTargetNodeIPSource(source string) string {
+	switch source {
+	case "backend_private_ip", "private_ip":
+		return "private_ip"
+	case "manual":
+		return "manual"
+	default:
+		return "easytier_ip"
+	}
 }
 
 func (s *Server) createForwardApplyTask(w http.ResponseWriter, forward Forward) {
@@ -875,9 +951,14 @@ func (s *Server) createForwardApplyTask(w http.ResponseWriter, forward Forward) 
 		writeErr(w, 404, "NOT_FOUND", "backend node not found")
 		return
 	}
-	if strings.TrimSpace(forward.TargetIP) == "" {
-		forward.TargetIP = normalizeHostIP(backendNode.EasyTierIP)
-		forward.TargetHost = forward.TargetIP
+	if strings.TrimSpace(forward.TargetHost) == "" && strings.TrimSpace(forward.TargetIP) == "" {
+		target, err := resolveForwardTargetHost(map[string]any{"target_host_source": forward.TargetHostSource, "manual_target_host": forward.ManualTargetHost}, backendNode, forward.TargetHostSource)
+		if err != nil {
+			writeErr(w, 400, "BAD_REQUEST", err.Error())
+			return
+		}
+		forward.TargetIP = target
+		forward.TargetHost = target
 	}
 	forward.TargetIP = normalizeHostIP(forward.TargetIP)
 	forward.TargetHost = normalizeHostIP(firstString(forward.TargetHost, forward.TargetIP))

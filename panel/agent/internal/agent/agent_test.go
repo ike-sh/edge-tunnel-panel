@@ -38,6 +38,19 @@ func (f *failingRunner) Run(ctx context.Context, name string, args ...string) Co
 	return CommandResult{Stdout: "ok", ExitCode: 0}
 }
 
+type portConflictRunner struct {
+	fakeRunner
+	port string
+}
+
+func (f *portConflictRunner) Run(ctx context.Context, name string, args ...string) CommandResult {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	if name == "ss" {
+		return CommandResult{Stdout: "tcp LISTEN 0 4096 0.0.0.0:" + f.port + " 0.0.0.0:* users:((\"nginx\",pid=1,fd=3))", ExitCode: 0}
+	}
+	return CommandResult{Stdout: "ok", ExitCode: 0}
+}
+
 func (f *fakeRunner) LookPath(name string) (string, error) {
 	if f.paths != nil && f.paths[name] {
 		return "/usr/bin/" + name, nil
@@ -342,6 +355,36 @@ func TestAgentApplyForwardRejectsIPv6Target(t *testing.T) {
 	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_forward_config", Payload: payload})
 	if result.Status != "failed" || !strings.Contains(result.Error, "IPv4") {
 		t.Fatalf("expected IPv4 MVP rejection: %+v", result)
+	}
+}
+
+func TestAgentApplyForwardUsesTargetHostBeforeTargetIP(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"protocol": "tcp", "listen_port": 18082.0, "target_ip": "10.144.0.2", "target_host": "10.144.0.3/16", "target_port": 8080.0}
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_forward_config", Payload: payload})
+	if result.Status != "succeeded" || !strings.Contains(result.Result, `"target_host":"10.144.0.3"`) || strings.Contains(result.Result, "10.144.0.3/16") {
+		t.Fatalf("expected target_host to be normalized and used: %+v", result)
+	}
+}
+
+func TestAgentApplyForwardRejectsDomainTarget(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"protocol": "tcp", "listen_port": 18083.0, "target_host": "backend.local", "target_port": 8080.0}
+	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_forward_config", Payload: payload})
+	if result.Status != "failed" || !strings.Contains(result.Error, "IPv4") {
+		t.Fatalf("expected IPv4-only target rejection: %+v", result)
+	}
+}
+
+func TestAgentApplyForwardPreflightPortConflict(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	payload := map[string]any{"protocol": "tcp", "listen_port": 18084.0, "target_host": "10.144.0.4", "target_port": 8080.0}
+	result := ExecuteTask(context.Background(), cfg, &portConflictRunner{port: "18084"}, Task{Action: "apply_forward_config", Payload: payload})
+	if result.Status != "failed" || !strings.Contains(result.Error, "端口已被占用") {
+		t.Fatalf("expected port conflict failure: %+v", result)
 	}
 }
 

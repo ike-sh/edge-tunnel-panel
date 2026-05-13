@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.2.5-test"
+	Version = "v0.2.6-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -90,6 +90,7 @@ type NetworkLink struct {
 	BackendTaskID    string    `json:"backend_task_id"`
 	LastVerifyAt     time.Time `json:"last_verify_at,omitempty"`
 	Status           string    `json:"status"`
+	StatusReason     string    `json:"status_reason,omitempty"`
 	EntryPeerCount   int       `json:"entry_peer_count"`
 	BackendPeerCount int       `json:"backend_peer_count"`
 	BestLatencyMS    float64   `json:"best_latency_ms,omitempty"`
@@ -130,6 +131,8 @@ type Forward struct {
 	ListenPort         int       `json:"listen_port"`
 	TargetIP           string    `json:"target_ip"`
 	TargetPort         int       `json:"target_port"`
+	TargetHostSource   string    `json:"target_host_source"`
+	ManualTargetHost   string    `json:"manual_target_host,omitempty"`
 	TargetNodeIPSource string    `json:"target_node_ip_source"`
 	Remark             string    `json:"remark"`
 	Status             string    `json:"status"`

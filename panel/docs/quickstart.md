@@ -1,10 +1,10 @@
-# 快速开始
+﻿# 快速开始
 
 ## 安装主控
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.5-test
+  --version v0.2.6-test
 ```
 
 打开 `http://服务器IP:18080`。
@@ -20,17 +20,17 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 3. 在“快速组网”里选择公网入口节点和后端节点。
 4. 保持默认端口 `11010` 和协议 `tcp+udp`。
 5. 点击“创建并应用组网”。
-6. 面板会创建一个组网卡片，并下发入口节点和后端节点两个 `apply_network_profile` 任务。
-7. 等待 10~20 秒后点击“验证组网”。
-8. 组网卡片应显示 Peer、延迟、丢包、隧道和路由。
+6. 面板会创建组网卡片，并下发入口节点和后端节点两个 `apply_network_profile` 任务。
+7. 系统会在约 20 秒后自动创建验证任务。
+8. 组网卡片会显示“应用中 / 验证中 / 组网成功 / 组网失败”。
 
 ## 创建转发规则
 
-1. 确认后端节点已有 EasyTier 虚拟 IP。
+1. 确认组网卡片显示“组网成功”。
 2. 进入“转发规则”。
-3. 选择一条已经显示“组网成功”的组网链路。
-4. 只填写公网监听端口、后端落地端口和协议。
-5. 目标 IP 默认自动使用组网链路中后端节点的虚拟 IP，并自动去掉 CIDR。
+3. 选择一条组网链路。
+4. 填写公网监听端口、后端落地端口和协议。
+5. 后端落地地址默认使用后端 EasyTier 虚拟 IP；也可以选择后端内网 IP 或手动填写。
 6. 点击“创建并应用转发”。
 7. 到“任务”页面查看 `apply_forward_config` 和 `verify_forward_rules` 结果。
 

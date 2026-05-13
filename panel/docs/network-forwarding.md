@@ -1,4 +1,4 @@
-# 网络与转发
+﻿# 网络与转发
 
 ## 快速组网
 
@@ -7,21 +7,21 @@
 - 入口节点：监听 `tcp://0.0.0.0:11010`、`udp://0.0.0.0:11010`，peers 为空。
 - 后端节点：listeners 保持默认，peers 指向入口公网 IP。
 - 两端使用同一组 `network_name`、`network_secret` 和 CIDR。
-- 完成后会生成组网卡片，用于查看状态、Peer、延迟、丢包、隧道和路由。
+- 创建后系统会自动等待约 20 秒并验证组网。
 
 ## EasyTier 虚拟 IP
 
-Agent 生成的 EasyTier 启动参数包含 `-d` 和 `-i CIDR`，用于启用 DHCP/虚拟 IP。后续转发规则默认使用后端节点的 EasyTier 虚拟 IP 作为目标地址。
+Agent 生成的 EasyTier 启动参数包含 `-d` 和 `-i CIDR`，用于启用 DHCP/虚拟 IP。转发规则默认使用后端节点的 EasyTier 虚拟 IP 作为目标地址。
 
 ## 转发规则 MVP
 
-`v0.2.5-test` 支持单端口 TCP/UDP 转发规则。链路是：外部客户端 -> 入口节点公网 IP:公网监听端口 -> 入口节点 nftables DNAT/SNAT -> EasyTier -> 后端节点 EasyTier 虚拟 IP:后端落地端口 -> 后端服务。
+`v0.2.6-test` 支持单端口 TCP/UDP 转发规则。链路是：外部客户端 -> 入口节点公网 IP:公网监听端口 -> 入口节点 nftables DNAT/SNAT -> EasyTier -> 后端落地地址:后端落地端口 -> 后端服务。
 
-- 协议：`tcp`、`udp`、`both`。
-- 组网链路：先从“组网配置”中选择已经成功的入口节点 -> 后端节点链路。
-- 公网监听端口：外部客户端访问入口节点的端口。
-- 后端落地端口：后端服务端口。
-- 目标 IP：默认使用组网链路中后端节点的 EasyTier 虚拟 IP，写入规则前会去掉 CIDR 前缀；高级设置里也可以手动覆盖。
+后端落地地址来源：
+
+- `backend_easytier_ip`：默认，使用后端 EasyTier 虚拟 IP。
+- `backend_private_ip`：使用后端节点上报的第一个内网 IP。
+- `manual`：手动填写目标地址。Controller 可保存 IPv4 或域名；Agent 当前 nftables 落地只支持 IPv4。
 
 点击“创建并应用转发”时，Controller 会创建规则并只向入口节点下发 `apply_forward_config` 任务。Agent 会写入：
 
@@ -37,9 +37,16 @@ nft -f /etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft
 
 不支持 raw nft payload。
 
-## 验证规则
+## 预检和诊断
 
-点击“验证规则”会创建 `verify_forward_rules` 任务，检查 nftables table 是否存在、规则是否包含目标、以及 IPv4 forwarding 状态。
+`apply_forward_config` 会做以下检查：
+
+- 后端落地地址必须是 IPv4 Host，不能带 CIDR。
+- 公网监听端口不能已有进程监听。
+- 已有 nft table 中不能存在相同监听端口规则。
+- `nft -c` 必须通过才会加载规则。
+
+失败时任务页会显示 `nft_check_stderr`、`nft_content`、监听端口、目标地址和目标端口。
 
 ## 真实转发测试
 
@@ -49,7 +56,7 @@ nft -f /etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft
 python3 -m http.server 8080 --bind 0.0.0.0
 ```
 
-面板创建转发规则：选择组网链路 `edge-net`，公网监听端口 `18081`，后端落地端口 `8080`，目标 IP 自动使用后端虚拟 IP。
+面板创建转发规则：选择组网链路 `edge-net`，公网监听端口 `18081`，后端落地端口 `8080`，目标地址默认使用后端虚拟 IP。
 
 入口节点检查：
 

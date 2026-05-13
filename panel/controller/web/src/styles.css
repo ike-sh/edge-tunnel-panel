@@ -14,8 +14,11 @@
   --shadow: 0 18px 55px rgba(0, 0, 0, 0.28);
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+  min-width: 0;
 }
 
 body {
@@ -34,6 +37,15 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+button,
+input,
+select,
+textarea,
+code,
+pre {
+  max-width: 100%;
 }
 
 main {
@@ -136,18 +148,19 @@ button.danger {
 .grid {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .grid.two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
 .grid.four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .grid.five {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .card,
@@ -157,6 +170,8 @@ button.danger {
   border-radius: 20px;
   background: rgba(18, 26, 47, 0.86);
   box-shadow: var(--shadow);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .card {
@@ -171,6 +186,8 @@ button.danger {
   border-radius: 18px;
   background: rgba(24, 33, 58, 0.78);
   padding: 16px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .add-agent-card {
@@ -179,6 +196,8 @@ button.danger {
 
 .command-block {
   margin-top: 14px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .command-block.danger pre {
@@ -191,6 +210,7 @@ button.danger {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 8px;
+  min-width: 0;
 }
 
 .command-title span,
@@ -242,7 +262,7 @@ button.danger {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  min-width: 220px;
+  min-width: 0;
 }
 
 .cap {
@@ -256,7 +276,7 @@ button.danger {
 
 .node-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 14px;
 }
 
@@ -269,6 +289,8 @@ button.danger {
   border-radius: 18px;
   padding: 16px;
   background: rgba(24, 33, 58, 0.78);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .node-card-head {
@@ -318,6 +340,7 @@ input,
 select,
 textarea {
   width: 100%;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 10px 12px;
@@ -348,6 +371,7 @@ textarea {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .actions {
@@ -414,6 +438,8 @@ pre {
   border-radius: 12px;
   background: #050915;
   color: #dbeafe;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 code {
@@ -424,6 +450,7 @@ pre {
   overflow: auto;
   padding: 14px;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 pre.small {
@@ -434,8 +461,9 @@ pre.small {
 }
 
 .task-output {
-  white-space: pre;
+  white-space: pre-wrap;
   overflow-x: auto;
+  word-break: break-word;
 }
 
 .task-kv {
@@ -486,8 +514,9 @@ details summary {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 14px;
+  min-width: 0;
 }
 
 .mini-card {
@@ -506,6 +535,7 @@ details summary {
   display: grid;
   grid-template-columns: minmax(140px, 0.7fr) 1.3fr;
   gap: 10px 16px;
+  min-width: 0;
 }
 
 .kv dt {

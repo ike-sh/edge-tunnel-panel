@@ -1,16 +1,16 @@
-# Edge Tunnel Panel
+﻿# Edge Tunnel Panel
 
-Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发规则、任务和状态。
+Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在面板里管理节点、组网链路、转发规则、任务和状态。
 
-当前版本：`v0.2.5-test`
+当前版本：`v0.2.6-test`
 
 ## 适用场景
 
 - 被控服务器没有公网 IPv4，只能主动连接外部服务。
 - 服务器只有 SSH NAT 端口，业务端口无法直接暴露。
-- 需要一台公网服务器作为入口节点，把请求转发到后端节点。
+- 需要公网服务器作为入口节点，把外部请求转发到后端节点。
 - 需要先通过 EasyTier 建立入口节点和后端节点之间的 overlay 网络。
-- 需要从 Web 面板查看节点在线状态、Peer、延迟、丢包、隧道和路由。
+- 需要从 Web 面板查看节点在线状态、Peer、延迟、丢包、隧道、路由和转发结果。
 
 ## 架构
 
@@ -18,13 +18,13 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 - **Agent**：安装在节点上，主动注册、心跳上报、轮询固定 action 任务。
 - **Web**：React + Vite 面板，默认中文界面。
 - **EasyTier**：负责入口节点和后端节点之间的 overlay 组网。
-- **nftables**：第一版转发规则由 Agent 结构化生成，不接受 raw nft。
+- **nftables**：转发规则由 Agent 结构化生成，不接受 raw nft。
 
 ## 快速安装 Controller
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.5-test
+  --version v0.2.6-test
 ```
 
 安装完成后打开：
@@ -39,7 +39,7 @@ http://服务器IP:18080
 
 1. 打开 Web，进入“节点”。
 2. 点击“添加节点”。
-3. 面板会显示一张“新节点接入”卡片。
+3. 面板会显示“新节点接入”卡片。
 4. 通常只需要修改节点名称，然后点击“获取一键安装命令”。
 5. 复制 root 命令到被控服务器执行。
 6. 执行完成后回到“节点”页面，等待 30 秒或点击刷新。
@@ -48,7 +48,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- \
-  --version v0.2.5-test \
+  --version v0.2.6-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -65,37 +65,52 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 3. 使用“快速组网”选择一个公网入口节点和一个后端节点。
 4. 面板自动生成同一组 `network_name`、`network_secret`、CIDR、listeners 和 peers。
 5. 入口节点 listeners 默认是 `tcp://0.0.0.0:11010` 和 `udp://0.0.0.0:11010`，peers 为空。
-6. 后端节点 peers 自动指向入口公网 IP：`tcp://入口公网IP:11010`、`udp://入口公网IP:11010`。
+6. 后端节点 peers 自动指向入口公网 IP，例如 `tcp://入口公网IP:11010` 和 `udp://入口公网IP:11010`。
 7. Controller 创建两个 `apply_network_profile` 任务，并生成一张组网卡片。
-8. 等待 10~20 秒后点击“验证组网”，或到“任务”页面查看结果。
+8. 系统会在约 20 秒后自动创建验证任务；组网卡片状态会变为“应用中 / 验证中 / 组网成功 / 组网失败”。
 
-组网卡片会展示入口节点、后端节点、Peer 数量、延迟、丢包、隧道、路由和状态。
+组网卡片只保留“修改组网 / 启用 / 禁用 / 删除”，详细诊断可到任务页查看。
 
 ## EasyTier 虚拟 IP
 
-`v0.2.5-test` 生成的 EasyTier systemd 启动参数默认包含：
+`v0.2.6-test` 生成的 EasyTier systemd 启动参数默认包含：
 
 ```text
 -d -i 10.144.0.0/16
 ```
 
-`-d` 用于启用 DHCP/虚拟 IP，`-i` 指定虚拟网段。Agent 会解析 `easytier-cli node` 输出并上报虚拟 IP。若组网已成功但虚拟 IP 仍显示“未分配”，请重新应用组网配置或检查 EasyTier 版本兼容性。
+`-d` 用于启用 DHCP/虚拟 IP，`-i` 指定虚拟网段。Agent 会解析 `easytier-cli node` 输出并上报虚拟 IP。若组网成功但虚拟 IP 仍显示“未分配”，请重新应用组网配置或检查 EasyTier 版本兼容性。
 
 ## 转发规则 MVP
 
-当前版本提供单端口 TCP/UDP 转发规则 MVP。产品链路是：外部客户端 -> 入口节点公网 IP:公网监听端口 -> 入口节点 nftables DNAT/SNAT -> EasyTier -> 后端节点 EasyTier 虚拟 IP:后端落地端口 -> 后端服务。
+当前版本提供单端口 TCP/UDP 转发规则 MVP。产品链路是：
 
-1. 先完成快速组网并确认后端节点有 EasyTier 虚拟 IP。
+```text
+外部客户端
+-> 入口节点公网 IP:公网监听端口
+-> 入口节点 nftables DNAT/SNAT
+-> EasyTier
+-> 后端落地地址:后端落地端口
+-> 后端服务
+```
+
+后端落地地址支持三种来源：
+
+- 后端 EasyTier 虚拟 IP，默认推荐。
+- 后端内网 IP，取节点上报的第一个内网地址。
+- 手动填写 IPv4 地址或域名；当前 Agent nftables 落地只支持 IPv4，域名会在 Agent 侧明确失败。
+
+推荐流程：
+
+1. 先完成快速组网，并等待组网卡片显示“组网成功”。
 2. 进入“转发规则”。
-3. 选择一条已经显示“组网成功”的组网链路，例如 `edge-net：edge-node-1 -> edge-node-2`。
-4. 只填写公网监听端口、后端落地端口和协议。
-5. 默认目标 IP 使用该组网链路后端节点的 EasyTier 虚拟 IP，并自动去掉 CIDR 前缀，例如 `10.144.0.2/16` 会作为 `10.144.0.2` 写入转发规则。
+3. 选择一条组网链路，例如 `edge-net：edge-node-1 -> edge-node-2`。
+4. 填写公网监听端口、后端落地端口和协议。
+5. 选择后端落地地址来源，默认使用后端 EasyTier 虚拟 IP，并自动去掉 CIDR 前缀。
 6. 点击“创建并应用转发”，Controller 会创建规则并只向入口节点下发 `apply_forward_config` 任务。
-6. Agent 写入 `/etc/edge-tunnel/agent/forward.json` 和 `/etc/edge-tunnel/agent/nftables/edge-tunnel-forward.nft`。
-7. Agent 先执行 `nft -c -f` 语法检查，通过后再执行 `nft -f` 加载规则；如果检查失败，任务结果会展示 stderr 和生成的 nft 内容。
-8. 可点击“验证规则”创建 `verify_forward_rules` 任务。
+7. Agent 会先做端口冲突和 nft 预检，再写入 `forward.json` 与 nftables 配置。
+8. 任务页会显示转发链路、`nft -c` 错误、生成的 nft 内容和规则状态。
 
-限制：第一版只支持单端口规则，不支持端口池、限速、计费或用户系统。
 真实测试示例：
 
 ```bash
@@ -169,5 +184,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.5-test bash panel/scripts/build-release.sh
+VERSION=v0.2.6-test bash panel/scripts/build-release.sh
 ```

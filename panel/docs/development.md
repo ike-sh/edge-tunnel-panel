@@ -1,4 +1,4 @@
-# 开发验证
+﻿# 开发验证
 
 ## Controller
 
@@ -27,18 +27,17 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-VERSION=v0.2.5-test bash panel/scripts/build-release.sh
+VERSION=v0.2.6-test bash panel/scripts/build-release.sh
 ```
 
-## v0.2.5-test 重点
+## v0.2.6-test 重点
 
-- 添加节点改为紧凑卡片式接入流程，不再让用户选择节点角色。
-- 组网配置收敛为“快速组网”主流程，并生成组网卡片。
-- NetworkLink 记录入口节点、后端节点、任务、Peer、延迟、丢包、隧道和路由。
-- EasyTier ExecStart 增加 `-d` 和 `-i CIDR`，并解析虚拟 IP。
-- 新增转发规则 MVP：Controller CRUD、Web 表单、Agent 生成 nftables 文件。
-- `apply_forward_config` 先执行 `nft -c` 检查，再执行 `nft -f` 加载。
-- `verify_forward_rules` 可检查 nftables table、规则和 IPv4 forwarding 状态。
+- 修复 Web 卡片、命令、JSON 和任务输出的溢出问题。
+- 快速组网应用后由 Web 自动延迟触发验证任务。
+- NetworkLink 状态回写为 applying、verifying、active、failed、disabled。
+- 转发规则支持后端落地地址来源：后端虚拟 IP、后端内网 IP、手动地址。
+- `apply_forward_config` 增加端口冲突预检和 IPv4 目标校验。
+- ForwardRule 状态会根据 apply/verify 任务结果回写。
 
 ## 后续规划
 

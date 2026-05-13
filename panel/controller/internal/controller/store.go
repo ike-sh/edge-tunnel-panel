@@ -249,8 +249,11 @@ func (s *Store) updateTaskResult(id string, req map[string]any) (Task, bool, err
 			t.Stdout = capText(stringValue(req["stdout"], stringValue(req["result_stdout"], "")))
 			t.Stderr = capText(stringValue(req["stderr"], stringValue(req["result_stderr"], "")))
 			t.Error = capText(stringValue(req["error"], ""))
-			if t.Action == "apply_forward_config" {
+			switch t.Action {
+			case "apply_forward_config", "verify_forward_rules":
 				s.updateForwardStatusForTaskLocked(*t)
+			case "verify_network_connectivity":
+				s.updateNetworkLinkStatusForTaskLocked(*t)
 			}
 			return *t, true, s.saveLocked()
 		}
@@ -264,16 +267,69 @@ func (s *Store) updateForwardStatusForTaskLocked(task Task) {
 		return
 	}
 	status := "failed"
-	if task.Status == "succeeded" {
+	if task.Status == "succeeded" && task.Action == "apply_forward_config" {
 		status = "applied"
+	} else if task.Status == "succeeded" && task.Action == "verify_forward_rules" {
+		status = "verified"
 	}
 	for i := range s.data.Forwards {
 		if s.data.Forwards[i].ID != forwardID {
 			continue
 		}
 		s.data.Forwards[i].Status = status
-		s.data.Forwards[i].LastApplyTaskID = task.ID
+		if task.Action == "verify_forward_rules" {
+			s.data.Forwards[i].LastVerifyTaskID = task.ID
+		} else {
+			s.data.Forwards[i].LastApplyTaskID = task.ID
+		}
 		s.data.Forwards[i].UpdatedAt = now()
+		return
+	}
+}
+
+func (s *Store) updateNetworkLinkStatusForTaskLocked(task Task) {
+	linkID := stringValue(task.Payload["network_link_id"], "")
+	if linkID == "" {
+		return
+	}
+	result := map[string]any{}
+	if strings.TrimSpace(task.Result) != "" {
+		_ = json.Unmarshal([]byte(task.Result), &result)
+	}
+	status := "failed"
+	reason := firstString(task.Error, stringValue(result["reason"], ""), stringValue(result["network_reason"], ""))
+	networkOK := boolValue(result["network_ok"]) || boolValue(result["NetworkOK"])
+	peerCount := intValue(result["peer_count"])
+	if task.Status == "succeeded" && (networkOK || peerCount > 0) {
+		status = "active"
+		reason = "network connectivity verified"
+	}
+	for i := range s.data.NetworkLinks {
+		if s.data.NetworkLinks[i].ID != linkID {
+			continue
+		}
+		n := now()
+		s.data.NetworkLinks[i].Status = status
+		s.data.NetworkLinks[i].StatusReason = reason
+		s.data.NetworkLinks[i].LastVerifyAt = n
+		s.data.NetworkLinks[i].UpdatedAt = n
+		if latency := floatValue(result["best_latency_ms"]); latency > 0 {
+			s.data.NetworkLinks[i].BestLatencyMS = latency
+		}
+		if loss := stringValue(result["packet_loss"], ""); loss != "" && loss != "-" {
+			s.data.NetworkLinks[i].PacketLoss = loss
+		}
+		if tunnels := stringListValue(result["tunnels"]); len(tunnels) > 0 {
+			s.data.NetworkLinks[i].Tunnels = tunnels
+		}
+		if routeType := stringValue(result["route_type"], ""); routeType != "" {
+			s.data.NetworkLinks[i].RouteType = routeType
+		}
+		if mode := stringValue(task.Payload["target_mode"], ""); mode == "entry" {
+			s.data.NetworkLinks[i].EntryPeerCount = peerCount
+		} else if mode == "backend" {
+			s.data.NetworkLinks[i].BackendPeerCount = peerCount
+		}
 		return
 	}
 }
@@ -480,7 +536,27 @@ func (s *Store) updateNetworkLinkTasks(id, entryTaskID, backendTaskID string, ve
 		}
 		if verified {
 			s.data.NetworkLinks[i].LastVerifyAt = now()
+			s.data.NetworkLinks[i].Status = "verifying"
+			s.data.NetworkLinks[i].StatusReason = "connectivity verification tasks created"
+		} else {
+			s.data.NetworkLinks[i].Status = "applying"
+			s.data.NetworkLinks[i].StatusReason = "network profile apply tasks created"
 		}
+		s.data.NetworkLinks[i].UpdatedAt = now()
+		return s.decorateNetworkLinkLocked(s.data.NetworkLinks[i], s.data.Nodes, now()), true, s.saveLocked()
+	}
+	return NetworkLink{}, false, nil
+}
+
+func (s *Store) updateNetworkLinkStatus(id, status, reason string) (NetworkLink, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.NetworkLinks {
+		if s.data.NetworkLinks[i].ID != id {
+			continue
+		}
+		s.data.NetworkLinks[i].Status = status
+		s.data.NetworkLinks[i].StatusReason = reason
 		s.data.NetworkLinks[i].UpdatedAt = now()
 		return s.decorateNetworkLinkLocked(s.data.NetworkLinks[i], s.data.Nodes, now()), true, s.saveLocked()
 	}
@@ -498,24 +574,32 @@ func (s *Store) decorateNetworkLinkLocked(link NetworkLink, nodes []Node, at tim
 			backend = &node
 		}
 	}
-	link.Status = "pending"
-	if entry != nil {
+	storedStatus := link.Status
+	storedReason := link.StatusReason
+	link.Status = firstString(storedStatus, "pending")
+	link.StatusReason = storedReason
+	if entry != nil && entry.EasyTierPeerCount > 0 {
 		link.EntryPeerCount = entry.EasyTierPeerCount
 	}
-	if backend != nil {
+	if backend != nil && backend.EasyTierPeerCount > 0 {
 		link.BackendPeerCount = backend.EasyTierPeerCount
 	}
 	if entry != nil && backend != nil {
-		link.BestLatencyMS = firstPositive(entry.EasyTierBestLatencyMS, backend.EasyTierBestLatencyMS)
-		link.PacketLoss = firstString(entry.EasyTierPacketLoss, backend.EasyTierPacketLoss)
-		link.Tunnels = firstStringList(entry.EasyTierTunnels, backend.EasyTierTunnels)
+		link.BestLatencyMS = firstPositive(entry.EasyTierBestLatencyMS, backend.EasyTierBestLatencyMS, link.BestLatencyMS)
+		link.PacketLoss = firstString(entry.EasyTierPacketLoss, backend.EasyTierPacketLoss, link.PacketLoss)
+		link.Tunnels = firstStringList(entry.EasyTierTunnels, backend.EasyTierTunnels, link.Tunnels)
 		link.RouteType = firstString(entry.EasyTierRouteType, backend.EasyTierRouteType)
 		if entry.EasyTierStatus == "active" && backend.EasyTierStatus == "active" && (entry.EasyTierNetworkOK || backend.EasyTierNetworkOK || entry.EasyTierPeerCount > 0 || backend.EasyTierPeerCount > 0) {
-			link.Status = "connected"
+			link.Status = "active"
+			link.StatusReason = "network connectivity verified by node reports"
 		} else if entry.EasyTierStatus == "active" || backend.EasyTierStatus == "active" {
-			link.Status = "partial"
-		} else {
+			if storedStatus != "disabled" && storedStatus != "applying" && storedStatus != "verifying" && storedStatus != "failed" {
+				link.Status = "partial"
+				link.StatusReason = "one side of EasyTier is active"
+			}
+		} else if storedStatus == "" || storedStatus == "connected" || storedStatus == "partial" {
 			link.Status = "pending"
+			link.StatusReason = "waiting for EasyTier status"
 		}
 	}
 	return link
@@ -626,7 +710,7 @@ func firstStringList(values ...[]string) []string {
 }
 
 func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) {
-	item := Forward{Enabled: true, Protocol: "tcp", ListenHost: "0.0.0.0", TargetNodeIPSource: "easytier_ip", Status: "draft"}
+	item := Forward{Enabled: true, Protocol: "tcp", ListenHost: "0.0.0.0", TargetHostSource: "backend_easytier_ip", TargetNodeIPSource: "easytier_ip", Status: "draft"}
 	if existing != nil {
 		item = *existing
 	}
@@ -642,7 +726,12 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 	if port := intValue(req["listen_port"]); port != 0 {
 		item.ListenPort = port
 	}
+	item.TargetHostSource = normalizeTargetHostSource(stringValue(req["target_host_source"], stringValue(req["target_node_ip_source"], item.TargetHostSource)))
+	item.ManualTargetHost = stringValue(req["manual_target_host"], item.ManualTargetHost)
 	item.TargetIP = normalizeHostIP(stringValue(req["target_ip"], stringValue(req["target_host"], item.TargetIP)))
+	if item.TargetIP == "" && item.TargetHostSource == "manual" {
+		item.TargetIP = normalizeHostIP(item.ManualTargetHost)
+	}
 	if port := intValue(req["target_port"]); port != 0 {
 		item.TargetPort = port
 	}
@@ -677,6 +766,9 @@ func forwardFromRequest(req map[string]any, existing *Forward) (Forward, error) 
 	}
 	if item.TargetNodeIPSource == "" {
 		item.TargetNodeIPSource = "easytier_ip"
+	}
+	if item.TargetHostSource == "" {
+		item.TargetHostSource = "backend_easytier_ip"
 	}
 	return item, nil
 }
