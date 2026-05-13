@@ -18,7 +18,7 @@ func DefaultConfig() Config {
 		ConfigDir:          "/etc/edge-tunnel/agent",
 		StateDir:           "/var/lib/edge-tunnel/agent",
 		PollInterval:       5 * time.Second,
-		ReportInterval:     15 * time.Second,
+		ReportInterval:     30 * time.Second,
 		TaskResultLimitKB:  defaultTaskResultLimitKB,
 		MaxConcurrentTasks: 1,
 	}
@@ -35,6 +35,8 @@ func ConfigFromEnv() Config {
 	cfg.StateDir = envOrDefault("EDGE_AGENT_STATE_DIR", cfg.StateDir)
 	cfg.EnableTasks = parseBool(os.Getenv("EDGE_ENABLE_TASKS"))
 	cfg.EnableWriteActions = parseBool(os.Getenv("EDGE_ENABLE_WRITE_ACTIONS"))
+	cfg.PollInterval = durationEnv("EDGE_TASK_POLL_INTERVAL", cfg.PollInterval)
+	cfg.ReportInterval = durationEnv("EDGE_REPORT_INTERVAL", cfg.ReportInterval)
 	_ = cfg.Normalize()
 	return cfg
 }
@@ -58,7 +60,7 @@ func (cfg *Config) Normalize() error {
 		cfg.PollInterval = 5 * time.Second
 	}
 	if cfg.ReportInterval <= 0 {
-		cfg.ReportInterval = 15 * time.Second
+		cfg.ReportInterval = 30 * time.Second
 	}
 	if cfg.TaskResultLimitKB <= 0 {
 		cfg.TaskResultLimitKB = defaultTaskResultLimitKB
@@ -67,6 +69,18 @@ func (cfg *Config) Normalize() error {
 		cfg.MaxConcurrentTasks = 1
 	}
 	return nil
+}
+
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return duration
 }
 
 func (cfg Config) Validate() error {

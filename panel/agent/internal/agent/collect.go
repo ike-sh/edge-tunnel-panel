@@ -81,23 +81,26 @@ func CollectStatus(ctx context.Context, cfg Config, runner CommandRunner) AgentS
 	if result := runner.Run(ctx, "systemctl", "is-active", "edge-tunnel-agent.service"); result.Err == nil && result.ExitCode == 0 {
 		status.AgentServiceActive = true
 	}
+	status.EasyTierPeerCount, status.EasyTierHasRemotePeer = easyTierPeerSummary(ctx, runner)
 	return status
 }
 
 func ReportFromStatus(cfg Config, status AgentStatus) ReportRequest {
 	return ReportRequest{
-		ID:             cfg.NodeID,
-		Name:           cfg.NodeName,
-		Role:           cfg.NodeRole,
-		PrivateIP:      status.PrivateIP,
-		AgentVersion:   Version,
-		Hostname:       status.Hostname,
-		OS:             status.OS,
-		Arch:           status.Arch,
-		EasyTierIP:     status.EasyTierIP,
-		EasyTierStatus: easyTierStatus(cfg, status),
-		Capabilities:   status.Capabilities,
-		Warnings:       status.Warnings,
+		ID:                    cfg.NodeID,
+		Name:                  cfg.NodeName,
+		Role:                  cfg.NodeRole,
+		PrivateIP:             status.PrivateIP,
+		AgentVersion:          Version,
+		Hostname:              status.Hostname,
+		OS:                    status.OS,
+		Arch:                  status.Arch,
+		EasyTierIP:            status.EasyTierIP,
+		EasyTierStatus:        easyTierStatus(cfg, status),
+		EasyTierPeerCount:     status.EasyTierPeerCount,
+		EasyTierHasRemotePeer: status.EasyTierHasRemotePeer,
+		Capabilities:          status.Capabilities,
+		Warnings:              status.Warnings,
 	}
 }
 
@@ -115,6 +118,19 @@ func easyTierStatus(cfg Config, status AgentStatus) string {
 		return "active"
 	}
 	return "inactive"
+}
+
+func easyTierPeerSummary(ctx context.Context, runner CommandRunner) (int, bool) {
+	cli, err := findEasyTierCLI(runner)
+	if err != nil {
+		return 0, false
+	}
+	result := runner.Run(ctx, cli, "peer")
+	if result.Err != nil || result.ExitCode != 0 {
+		return 0, false
+	}
+	count := countRemotePeers(result.Stdout + "\n" + result.Stderr)
+	return count, count > 0
 }
 
 func privateIP() string {

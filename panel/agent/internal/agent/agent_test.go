@@ -103,6 +103,8 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("EDGE_ENABLE_WRITE_ACTIONS", "true")
 	t.Setenv("EDGE_AGENT_CONFIG_DIR", "/tmp/edge-config")
 	t.Setenv("EDGE_AGENT_STATE_DIR", "/tmp/edge-state")
+	t.Setenv("EDGE_REPORT_INTERVAL", "30s")
+	t.Setenv("EDGE_TASK_POLL_INTERVAL", "10s")
 	cfg := ConfigFromEnv()
 	if cfg.ControllerURL != "http://controller:18080" || cfg.ControllerToken != "token" {
 		t.Fatalf("env config not loaded: %+v", cfg)
@@ -115,6 +117,9 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 	if cfg.ConfigDir != "/tmp/edge-config" || cfg.StateDir != "/tmp/edge-state" {
 		t.Fatalf("env dirs not applied: %+v", cfg)
+	}
+	if cfg.ReportInterval != 30*time.Second || cfg.PollInterval != 10*time.Second {
+		t.Fatalf("interval env not applied: %+v", cfg)
 	}
 }
 
@@ -585,6 +590,16 @@ func TestGenerateEasyTierServiceUsesCLIArgs(t *testing.T) {
 	}
 }
 
+func TestGenerateEasyTierServiceIncludesPeers(t *testing.T) {
+	cfg := testConfig(t)
+	service := edgeTunnelEasyTierService(cfg, map[string]any{"network_name": "edge", "network_secret": "secret"}, "/usr/local/bin/easytier-core", []string{"tcp://0.0.0.0:11010", "udp://0.0.0.0:11010"}, []string{"tcp://1.2.3.4:11010", "udp://1.2.3.4:11010"})
+	for _, want := range []string{"-p tcp://1.2.3.4:11010", "-p udp://1.2.3.4:11010"} {
+		if !strings.Contains(service, want) {
+			t.Fatalf("service missing peer %q: %s", want, service)
+		}
+	}
+}
+
 func TestVerifyEasyTierStatusIncludesVersion(t *testing.T) {
 	cfg := testConfig(t)
 	_ = writeFile(easyTierPath(cfg), []byte("network_name = \"edge\""), 0o600)
@@ -658,6 +673,51 @@ func TestVerifyEasyTierStatusDetailedFields(t *testing.T) {
 	}
 }
 
+type peerRunner struct {
+	fakeRunner
+	peerOutput string
+}
+
+func (r *peerRunner) Run(ctx context.Context, name string, args ...string) CommandResult {
+	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	if strings.HasSuffix(name, "easytier-cli") && len(args) == 1 && args[0] == "peer" {
+		return CommandResult{Stdout: r.peerOutput, ExitCode: 0}
+	}
+	return CommandResult{Stdout: "active", ExitCode: 0}
+}
+
+func TestVerifyEasyTierStatusPeerCountLocalOnly(t *testing.T) {
+	cfg := testConfig(t)
+	_ = writeFile(easyTierPath(cfg), []byte("network_name = \"edge\""), 0o600)
+	_ = writeFile(easyTierServiceSystemPath(), []byte("service"), 0o644)
+	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true}}, peerOutput: "Local"}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_easytier_status", Payload: map[string]any{}})
+	if !strings.Contains(result.Result, `"peer_count":0`) || !strings.Contains(result.Result, `"has_remote_peer":false`) {
+		t.Fatalf("expected no remote peer: %s", result.Result)
+	}
+}
+
+func TestVerifyEasyTierStatusPeerCountRemotePeer(t *testing.T) {
+	cfg := testConfig(t)
+	_ = writeFile(easyTierPath(cfg), []byte("network_name = \"edge\""), 0o600)
+	_ = writeFile(easyTierServiceSystemPath(), []byte("service"), 0o644)
+	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true}}, peerOutput: "Local\npeer-remote tcp://1.2.3.4:11010"}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_easytier_status", Payload: map[string]any{}})
+	if !strings.Contains(result.Result, `"peer_count":1`) || !strings.Contains(result.Result, `"has_remote_peer":true`) {
+		t.Fatalf("expected one remote peer: %s", result.Result)
+	}
+}
+
+func TestAgentReportIncludesEasyTierPeerFields(t *testing.T) {
+	cfg := testConfig(t)
+	runner := &peerRunner{fakeRunner: fakeRunner{paths: map[string]bool{"easytier-core": true, "easytier-cli": true, "nft": true, "ip": true}}, peerOutput: "Local\npeer-remote"}
+	status := CollectStatus(context.Background(), cfg, runner)
+	report := ReportFromStatus(cfg, status)
+	if report.EasyTierPeerCount != 1 || !report.EasyTierHasRemotePeer {
+		t.Fatalf("report missing peer details: %+v", report)
+	}
+}
+
 func TestClientRegisterReportTasksResult(t *testing.T) {
 	var sawRegister, sawReport, sawResult bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -710,6 +770,8 @@ type fakeClient struct {
 	maxInFlight int32
 	results     int32
 }
+
+func (f *fakeClient) Unregister(ctx context.Context, nodeID, reason string) error { return nil }
 
 func (f *fakeClient) Register(context.Context, ReportRequest) error      { return nil }
 func (f *fakeClient) Report(context.Context, ReportRequest) error        { return nil }

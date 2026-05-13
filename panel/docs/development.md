@@ -27,10 +27,10 @@ npm --prefix panel/controller/web run build
 
 ```bash
 bash -n panel/scripts/*.sh
-VERSION=v0.1.9-test bash panel/scripts/build-release.sh
+VERSION=v0.2.0-test bash panel/scripts/build-release.sh
 ```
 
-## v0.1.9-test 重点
+## v0.2.0-test 重点
 
 - HTTP 环境下复制命令使用 clipboard fallback。
 - EasyTier 安装前检查磁盘空间。

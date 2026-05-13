@@ -253,8 +253,15 @@ func verifyEasyTier(ctx context.Context, cfg Config, runner CommandRunner) TaskR
 		status["cli_exists"] = true
 		status["cli_path"] = cli
 		status["node_info"] = strings.TrimSpace(runner.Run(ctx, cli, "node").Stdout)
-		status["peer_info"] = strings.TrimSpace(runner.Run(ctx, cli, "peer").Stdout)
+		peerInfo := strings.TrimSpace(runner.Run(ctx, cli, "peer").Stdout)
+		status["peer_info"] = peerInfo
+		peerCount := countRemotePeers(peerInfo)
+		status["peer_count"] = peerCount
+		status["has_remote_peer"] = peerCount > 0
 		status["route_info"] = strings.TrimSpace(runner.Run(ctx, cli, "route").Stdout)
+	} else {
+		status["peer_count"] = 0
+		status["has_remote_peer"] = false
 	}
 	if active.Err != nil || active.ExitCode != 0 {
 		status["easytier_status"] = "inactive"
@@ -262,6 +269,19 @@ func verifyEasyTier(ctx context.Context, cfg Config, runner CommandRunner) TaskR
 		return TaskResult{Status: "failed", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(status), Error: errorText(active)}
 	}
 	return TaskResult{Status: "succeeded", Stdout: active.Stdout, Stderr: active.Stderr, Result: jsonResult(status)}
+}
+
+func countRemotePeers(peerInfo string) int {
+	count := 0
+	for _, line := range strings.Split(peerInfo, "\n") {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+		if trimmed == "" || strings.Contains(lower, "local") || strings.Contains(lower, "peerid") || strings.Contains(lower, "peer id") || strings.Contains(lower, "cost") {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func restartEasyTier(ctx context.Context, runner CommandRunner) TaskResult {

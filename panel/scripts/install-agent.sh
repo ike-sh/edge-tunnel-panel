@@ -14,6 +14,8 @@ NODE_NAME="${EDGE_NODE_NAME:-$(hostname 2>/dev/null || printf 'edge-node')}"
 NODE_ROLE="${EDGE_NODE_ROLE:-backend}"
 ENABLE_TASKS="${EDGE_ENABLE_TASKS:-false}"
 ENABLE_WRITE_ACTIONS="${EDGE_ENABLE_WRITE_ACTIONS:-false}"
+REPORT_INTERVAL="${EDGE_REPORT_INTERVAL:-30s}"
+TASK_POLL_INTERVAL="${EDGE_TASK_POLL_INTERVAL:-10s}"
 SOURCE_BUILD=false
 NO_START=false
 UNINSTALL=false
@@ -106,7 +108,44 @@ require_root() {
   fi
 }
 
+load_existing_env() {
+  if [ -f "$CONFIG_DIR/agent.env" ]; then
+    # shellcheck disable=SC1090
+    . "$CONFIG_DIR/agent.env" || true
+    CONTROLLER_URL="${CONTROLLER_URL:-${EDGE_CONTROLLER_URL:-}}"
+    CONTROLLER_TOKEN="${CONTROLLER_TOKEN:-${EDGE_CONTROLLER_TOKEN:-}}"
+    NODE_ID="${NODE_ID:-${EDGE_NODE_ID:-}}"
+  fi
+}
+
+notify_controller_offline() {
+  load_existing_env
+  if [ -z "${CONTROLLER_URL:-}" ] || [ -z "${CONTROLLER_TOKEN:-}" ] || [ -z "${NODE_ID:-}" ]; then
+    log "未找到完整 Controller/节点信息，跳过下线通知"
+    return 0
+  fi
+  local url payload
+  url="${CONTROLLER_URL%/}/api/v1/agent/unregister"
+  payload="{\"node_id\":\"${NODE_ID}\",\"reason\":\"agent purge\"}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -m 8 -H "Authorization: Bearer ${CONTROLLER_TOKEN}" -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null 2>&1 || {
+      log "无法通知 Controller 节点下线，请稍后由心跳超时自动变为离线。"
+      return 0
+    }
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- --timeout=8 --header="Authorization: Bearer ${CONTROLLER_TOKEN}" --header="Content-Type: application/json" --post-data="$payload" "$url" >/dev/null 2>&1 || {
+      log "无法通知 Controller 节点下线，请稍后由心跳超时自动变为离线。"
+      return 0
+    }
+  else
+    log "curl/wget 不可用，无法通知 Controller 节点下线。"
+    return 0
+  fi
+  log "已通知 Controller 节点下线：${NODE_ID}"
+}
+
 uninstall_agent() {
+  notify_controller_offline
   systemctl stop edge-tunnel-agent.service >/dev/null 2>&1 || true
   log "已停止 Agent 服务"
   systemctl disable edge-tunnel-agent.service >/dev/null 2>&1 || true
@@ -220,6 +259,8 @@ EDGE_ENABLE_TASKS=${ENABLE_TASKS}
 EDGE_ENABLE_WRITE_ACTIONS=${ENABLE_WRITE_ACTIONS}
 EDGE_AGENT_CONFIG_DIR=${CONFIG_DIR}
 EDGE_AGENT_STATE_DIR=${STATE_DIR}
+EDGE_REPORT_INTERVAL=${REPORT_INTERVAL}
+EDGE_TASK_POLL_INTERVAL=${TASK_POLL_INTERVAL}
 EOF
   chmod 0600 "$CONFIG_DIR/agent.env"
 }

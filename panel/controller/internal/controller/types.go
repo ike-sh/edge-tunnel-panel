@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.1.9-test"
+	Version = "v0.2.0-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -32,24 +32,28 @@ type LoginRequest struct {
 }
 
 type Node struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Role           string            `json:"role"`
-	PublicIP       string            `json:"public_ip"`
-	PrivateIP      string            `json:"private_ip"`
-	ObservedIP     string            `json:"observed_ip"`
-	AgentVersion   string            `json:"agent_version"`
-	Hostname       string            `json:"hostname"`
-	OS             string            `json:"os"`
-	Arch           string            `json:"arch"`
-	EasyTierIP     string            `json:"easytier_ip"`
-	EasyTierStatus string            `json:"easytier_status"`
-	LastSeenAt     time.Time         `json:"last_seen_at"`
-	Status         string            `json:"status"`
-	Capabilities   map[string]bool   `json:"capabilities"`
-	Labels         map[string]string `json:"labels"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
+	ID                    string            `json:"id"`
+	Name                  string            `json:"name"`
+	Role                  string            `json:"role"`
+	PublicIP              string            `json:"public_ip"`
+	PrivateIP             string            `json:"private_ip"`
+	ObservedIP            string            `json:"observed_ip"`
+	AgentVersion          string            `json:"agent_version"`
+	Hostname              string            `json:"hostname"`
+	OS                    string            `json:"os"`
+	Arch                  string            `json:"arch"`
+	EasyTierIP            string            `json:"easytier_ip"`
+	EasyTierStatus        string            `json:"easytier_status"`
+	EasyTierPeerCount     int               `json:"easytier_peer_count"`
+	EasyTierHasRemotePeer bool              `json:"easytier_has_remote_peer"`
+	LastSeenAt            time.Time         `json:"last_seen_at"`
+	Status                string            `json:"status"`
+	StatusReason          string            `json:"status_reason"`
+	OfflineAt             *time.Time        `json:"offline_at,omitempty"`
+	Capabilities          map[string]bool   `json:"capabilities"`
+	Labels                map[string]string `json:"labels"`
+	CreatedAt             time.Time         `json:"created_at"`
+	UpdatedAt             time.Time         `json:"updated_at"`
 }
 
 type NetworkProfile struct {

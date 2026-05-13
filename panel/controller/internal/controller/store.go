@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,8 +57,9 @@ func (s *Store) listNodes() []Node {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := append([]Node(nil), s.data.Nodes...)
+	n := now()
 	for i := range out {
-		out[i].Status = nodeStatus(out[i].LastSeenAt)
+		out[i] = applyNodeLiveness(out[i], n)
 	}
 	return out
 }
@@ -68,18 +70,29 @@ func (s *Store) listNetworkProfiles() []NetworkProfile {
 	return append([]NetworkProfile(nil), s.data.NetworkProfiles...)
 }
 
-func nodeStatus(lastSeen time.Time) string {
-	if lastSeen.IsZero() {
-		return "offline"
+func applyNodeLiveness(node Node, at time.Time) Node {
+	node.Status, node.StatusReason = nodeStatusReason(node, at)
+	return node
+}
+
+func nodeStatusReason(node Node, at time.Time) (string, string) {
+	if node.OfflineAt != nil && (node.LastSeenAt.IsZero() || !node.LastSeenAt.After(*node.OfflineAt)) {
+		if node.StatusReason != "" {
+			return "offline", node.StatusReason
+		}
+		return "offline", "agent reported offline"
 	}
-	d := time.Since(lastSeen)
-	if d < 90*time.Second {
-		return "online"
+	if node.LastSeenAt.IsZero() {
+		return "offline", "no heartbeat received"
 	}
-	if d < 5*time.Minute {
-		return "stale"
+	d := at.Sub(node.LastSeenAt)
+	if d <= 90*time.Second {
+		return "online", "recent heartbeat normal"
 	}
-	return "offline"
+	if d <= 5*time.Minute {
+		return "stale", "heartbeat missing for over 90 seconds"
+	}
+	return "offline", "heartbeat missing for over 5 minutes"
 }
 
 func (s *Store) createNode(node Node) (Node, error) {
@@ -103,10 +116,13 @@ func (s *Store) createNode(node Node) (Node, error) {
 			existing.Status = "online"
 			existing.LastSeenAt = now()
 			existing.UpdatedAt = existing.LastSeenAt
+			existing.OfflineAt = nil
+			existing.StatusReason = ""
 			s.data.Nodes[i] = existing
 			return existing, s.saveLocked()
 		}
 	}
+	node.Status = "online"
 	node.CreatedAt = now()
 	node.UpdatedAt = node.CreatedAt
 	s.data.Nodes = append(s.data.Nodes, node)
@@ -121,6 +137,8 @@ func (s *Store) upsertReport(node Node) (Node, error) {
 			node.ID = s.data.Nodes[i].ID
 			node.CreatedAt = s.data.Nodes[i].CreatedAt
 			node.UpdatedAt = now()
+			node.OfflineAt = nil
+			node.StatusReason = ""
 			s.data.Nodes[i] = node
 			return node, s.saveLocked()
 		}
@@ -144,6 +162,25 @@ func (s *Store) deleteNode(id string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func (s *Store) markNodeOffline(id, reason string) (Node, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Nodes {
+		if s.data.Nodes[i].ID == id {
+			n := now()
+			if strings.TrimSpace(reason) == "" {
+				reason = "agent reported offline"
+			}
+			s.data.Nodes[i].Status = "offline"
+			s.data.Nodes[i].StatusReason = reason
+			s.data.Nodes[i].OfflineAt = &n
+			s.data.Nodes[i].UpdatedAt = n
+			return s.data.Nodes[i], true, s.saveLocked()
+		}
+	}
+	return Node{}, false, nil
 }
 
 func (s *Store) createTask(t Task) (Task, error) {
@@ -224,7 +261,7 @@ func (s *Store) createNetworkProfile(req map[string]any) (NetworkProfile, error)
 		return NetworkProfile{}, errValidation("name is required")
 	}
 	n := now()
-	item := NetworkProfile{ID: newID(), Name: name, NetworkName: stringValue(req["network_name"], "edge-net"), NetworkSecret: stringValue(req["network_secret"], randomSecret()), CIDR: stringValue(req["cidr"], "10.144.0.0/16"), ProtocolPreference: stringValue(req["protocol_preference"], "auto"), Listeners: stringListValue(req["listeners"]), Peers: stringListValue(req["peers"]), CreatedAt: n, UpdatedAt: n}
+	item := NetworkProfile{ID: newID(), Name: name, NetworkName: stringValue(req["network_name"], "edge-net"), NetworkSecret: stringValue(req["network_secret"], randomSecret()), CIDR: stringValue(req["cidr"], "10.144.0.0/16"), ProtocolPreference: stringValue(req["protocol_preference"], "auto"), Listeners: defaultListeners(stringListValue(req["listeners"])), Peers: stringListValue(req["peers"]), CreatedAt: n, UpdatedAt: n}
 	s.data.NetworkProfiles = append(s.data.NetworkProfiles, item)
 	return item, s.saveLocked()
 }
@@ -245,7 +282,7 @@ func (s *Store) updateNetworkProfile(id string, req map[string]any) (NetworkProf
 		item.CIDR = stringValue(req["cidr"], item.CIDR)
 		item.ProtocolPreference = stringValue(req["protocol_preference"], item.ProtocolPreference)
 		if listeners, ok := req["listeners"]; ok {
-			item.Listeners = stringListValue(listeners)
+			item.Listeners = defaultListeners(stringListValue(listeners))
 		}
 		if peers, ok := req["peers"]; ok {
 			item.Peers = stringListValue(peers)
@@ -255,6 +292,13 @@ func (s *Store) updateNetworkProfile(id string, req map[string]any) (NetworkProf
 		return item, true, s.saveLocked()
 	}
 	return NetworkProfile{}, false, nil
+}
+
+func defaultListeners(listeners []string) []string {
+	if len(listeners) == 0 {
+		return []string{"tcp://0.0.0.0:11010", "udp://0.0.0.0:11010"}
+	}
+	return listeners
 }
 
 func (s *Store) deleteNetworkProfile(id string) (bool, error) {
@@ -274,8 +318,7 @@ func (s *Store) getNode(id string) (Node, bool) {
 	defer s.mu.Unlock()
 	for _, node := range s.data.Nodes {
 		if node.ID == id {
-			node.Status = nodeStatus(node.LastSeenAt)
-			return node, true
+			return applyNodeLiveness(node, now()), true
 		}
 	}
 	return Node{}, false

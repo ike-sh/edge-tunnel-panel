@@ -30,6 +30,7 @@ func NewServer(store *Store, agentToken, operatorToken string, strictAuth bool, 
 	mux.HandleFunc("/api/v1/nodes/", s.handleNodes)
 	mux.HandleFunc("/api/v1/agent/register", s.handleAgentRegister)
 	mux.HandleFunc("/api/v1/agent/report", s.handleAgentReport)
+	mux.HandleFunc("/api/v1/agent/unregister", s.handleAgentUnregister)
 	mux.HandleFunc("/api/v1/agent/tasks", s.handleAgentTasks)
 	mux.HandleFunc("/api/v1/agent/tasks/", s.handleAgentTaskResult)
 	mux.HandleFunc("/api/v1/network-profiles", s.handleNetworkProfiles)
@@ -146,6 +147,20 @@ func intValue(v any) int {
 		return int(n)
 	case int:
 		return n
+	default:
+		return 0
+	}
+}
+
+func numberValue(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case json.Number:
+		value, _ := n.Int64()
+		return int(value)
 	default:
 		return 0
 	}
@@ -309,12 +324,38 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 	if publicIP == "" && observedIP != "" {
 		publicIP = observedIP
 	}
-	node, err := s.store.upsertReport(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), PublicIP: publicIP, PrivateIP: stringValue(req["private_ip"], ""), ObservedIP: observedIP, AgentVersion: stringValue(req["agent_version"], ""), Hostname: stringValue(req["hostname"], ""), OS: stringValue(req["os"], ""), Arch: stringValue(req["arch"], ""), EasyTierIP: stringValue(req["easytier_ip"], ""), EasyTierStatus: stringValue(req["easytier_status"], "unknown"), LastSeenAt: time.Now().UTC(), Status: "online", Capabilities: caps, Labels: map[string]string{}})
+	node, err := s.store.upsertReport(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), PublicIP: publicIP, PrivateIP: stringValue(req["private_ip"], ""), ObservedIP: observedIP, AgentVersion: stringValue(req["agent_version"], ""), Hostname: stringValue(req["hostname"], ""), OS: stringValue(req["os"], ""), Arch: stringValue(req["arch"], ""), EasyTierIP: stringValue(req["easytier_ip"], ""), EasyTierStatus: stringValue(req["easytier_status"], "unknown"), EasyTierPeerCount: numberValue(req["easytier_peer_count"]), EasyTierHasRemotePeer: boolValue(req["easytier_has_remote_peer"]), LastSeenAt: time.Now().UTC(), Status: "online", StatusReason: "recent heartbeat normal", Capabilities: caps, Labels: map[string]string{}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
 	writeOK(w, 200, node)
+}
+
+func (s *Server) handleAgentUnregister(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAgent(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	req, ok := decodeBody(w, r)
+	if !ok {
+		return
+	}
+	nodeID := stringValue(req["node_id"], stringValue(req["id"], ""))
+	if nodeID == "" {
+		writeErr(w, 400, "BAD_REQUEST", "node_id is required")
+		return
+	}
+	reason := stringValue(req["reason"], "agent reported offline")
+	node, found, err := s.store.markNodeOffline(nodeID, reason)
+	if err != nil {
+		writeErr(w, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	writeOK(w, 200, map[string]any{"unregistered": found, "node": node})
 }
 func (s *Server) handleAgentTasks(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAgent(w, r) {
@@ -475,7 +516,12 @@ func (s *Server) handleNetworkProfileApply(w http.ResponseWriter, r *http.Reques
 			writeErr(w, 404, "NOT_FOUND", "node not found")
 			return
 		}
-		task, err := s.store.createTask(Task{NodeID: nodeID, Action: "apply_network_profile", Payload: map[string]any{"network_profile": profile, "node": node}})
+		profilePayload := profile
+		if strings.EqualFold(node.Role, "backend") && len(profilePayload.Peers) == 0 {
+			writeErr(w, 400, "BAD_REQUEST", "backend node requires at least one entry peer")
+			return
+		}
+		task, err := s.store.createTask(Task{NodeID: nodeID, Action: "apply_network_profile", Payload: map[string]any{"network_profile": profilePayload, "node": node}})
 		if err != nil {
 			writeErr(w, 500, "STORE_ERROR", err.Error())
 			return

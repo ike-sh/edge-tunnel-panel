@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.9-test';
+const DEFAULT_VERSION = 'v0.2.0-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -81,6 +81,7 @@ const statusText = {
 };
 
 const taskStatuses = ['all', 'pending', 'running', 'succeeded', 'failed', 'expired', 'cancelled'];
+const easyTierActions = ['install_or_update_easytier', 'apply_network_profile', 'verify_easytier_status', 'restart_easytier'];
 
 function browserControllerURL() {
   if (typeof window === 'undefined') return 'http://CONTROLLER_HOST:18080';
@@ -95,6 +96,27 @@ function formatTime(value) {
   if (!value) return '-';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+}
+
+function timeAgo(value) {
+  if (!value) return '-';
+  const ts = new Date(value).getTime();
+  if (Number.isNaN(ts)) return '-';
+  const seconds = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (seconds < 60) return seconds + ' ??';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + ' ???';
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + ' ???';
+  return Math.floor(hours / 24) + ' ??';
+}
+
+function nodeStatusReason(node) {
+  if (node.status_reason) return node.status_reason;
+  if (node.status === 'online') return '??????';
+  if (node.status === 'stale') return '?? 90 ????';
+  if (node.status === 'offline') return '?? 5 ?????';
+  return '-';
 }
 
 function safeList(value) {
@@ -136,6 +158,19 @@ function taskNodeLabel(task, nodes) {
   const node = nodes.find((item) => item.id === task.node_id);
   if (!node) return task.node_id || '-';
   return `${node.name || node.id} / ${shortID(node.id)}`;
+}
+
+function taskNodeOptionLabel(node) {
+  return `${node.name || node.id} / ${shortID(node.id)} / ${trStatus(node.status)}`;
+}
+
+function parseJSONValue(value) {
+  if (!value || typeof value !== 'string') return {};
+  try { return JSON.parse(value); } catch { return {}; }
+}
+
+function easyTierPeerWarning(node) {
+  return node.easytier_status === 'active' && Number(node.easytier_peer_count || 0) === 0;
 }
 
 async function copyText(text) {
@@ -184,8 +219,10 @@ function App() {
   const [ddnsProfiles, setDdnsProfiles] = useState([]);
   const [taskFilter, setTaskFilter] = useState('all');
   const [taskNodeFilter, setTaskNodeFilter] = useState('all');
+  const [taskActionFilter, setTaskActionFilter] = useState('all');
   const [showAddAgent, setShowAddAgent] = useState(false);
-  const [openNodeActions, setOpenNodeActions] = useState('');
+  const [actionNode, setActionNode] = useState(null);
+  const [peerSourceNode, setPeerSourceNode] = useState('');
 
   const [agentForm, setAgentForm] = useState({
     controller_url: browserControllerURL(),
@@ -354,8 +391,8 @@ function App() {
   }
 
   async function refreshAll() {
-    await refreshHealth();
-    if (token) {
+    const info = await refreshHealth();
+    if (token || info?.strict_auth === false) {
       await Promise.all([
         refreshNodes(),
         refreshTasks(),
@@ -394,18 +431,20 @@ function App() {
   }
 
   async function createTask(nodeId, action) {
-    await run('创建任务', async () => {
+    const result = await run('????', async () => {
       await api('/tasks', { body: { node_id: nodeId, action, payload: {} } });
       await refreshTasks();
     });
+    if (result !== null) setAlert({ type: 'success', message: '?????????????????????????' });
   }
 
   async function deleteNode(node) {
-    const ok = window.confirm('仅删除主控面板中的节点记录，不会连接远端服务器，也不会卸载 Agent。\n如需卸载 Agent，请到对应服务器执行 install-agent.sh --purge。\n确认删除？');
+    const ok = window.confirm('????????????????????????????? Agent?\n???? Agent ????????????????????\n???? Agent?????????? install-agent.sh --purge?\n?????');
     if (!ok) return;
-    await run('删除节点记录', async () => {
+    await run('??????', async () => {
       await api(`/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' });
       await refreshNodes();
+      setActionNode(null);
     });
   }
 
@@ -482,14 +521,30 @@ function App() {
   async function applyNetworkProfile(profile) {
     const nodeId = networkApplyNode[profile.id] || '';
     if (!nodeId) {
-      setAlert({ type: 'error', message: '请先选择目标节点' });
+      setAlert({ type: 'error', message: '????????' });
       return;
     }
-    await run('应用组网配置', async () => {
+    const node = nodes.find((item) => item.id === nodeId);
+    if (node?.role === 'backend' && !safeList(profile.peers).length) {
+      setAlert({ type: 'error', message: '?????????????????? peer?' });
+      return;
+    }
+    await run('??????', async () => {
       await api('/network-profiles/' + profile.id + '/apply', { body: { node_id: nodeId } });
       await refreshTasks();
-      setAlert({ type: 'success', message: '已创建组网下发任务，请到任务页面查看结果。' });
+      setAlert({ type: 'success', message: '??????????????????????????' });
     });
+  }
+
+  function fillPeersFromEntry(nodeId) {
+    const node = nodes.find((item) => item.id === nodeId);
+    if (!node?.public_ip) {
+      setAlert({ type: 'error', message: '?????? IP ??????' });
+      return;
+    }
+    const peers = [`tcp://${node.public_ip}:11010`, `udp://${node.public_ip}:11010`];
+    setNetworkForm((current) => ({ ...current, peers: peers.join('\n') }));
+    setAlert({ type: 'success', message: '???????? IP ?? peers?????????????' });
   }
 
   async function createEntry(event) {
@@ -598,50 +653,48 @@ function App() {
 
   function renderNodes() {
     return (
-      <Card title="节点" action={<div className="inline"><button onClick={() => run('刷新节点', refreshNodes)}>刷新</button><button onClick={() => setShowAddAgent(true)}>添加节点</button></div>}>
-        <p className="muted">管理已接入的被控服务器。点击“添加节点”生成一键命令，在被控服务器执行后会自动上线。</p>
-        {showAddAgent && renderAddAgentPanel()}
-        {!nodes.length ? (
-          <div className="empty-state">
-            <h3>暂无节点</h3>
-            <p>点击“添加节点”生成一键 Agent 接入命令。</p>
-            <button onClick={() => setShowAddAgent(true)}>添加节点</button>
-          </div>
-        ) : (
-          <div className="node-grid">
-            {nodes.map((node) => (
-              <div className="node-card" key={node.id}>
-                <div className="node-card-head">
-                  <div>
-                    <h3>{node.name || node.id}</h3>
-                    <code title={node.id}>{String(node.id || '-').slice(0, 16)}</code>
+      <>
+        <Card title="??" action={<div className="inline"><button onClick={() => run('????', refreshNodes)}>??</button><button onClick={() => setShowAddAgent(true)}>????</button></div>}>
+          <p className="muted">???????????????? 15 ????????????????????????????????????</p>
+          {showAddAgent && renderAddAgentPanel()}
+          {!nodes.length ? (
+            <div className="empty-state">
+              <h3>????</h3>
+              <p>???????????? Agent ?????</p>
+              <button onClick={() => setShowAddAgent(true)}>????</button>
+            </div>
+          ) : (
+            <div className="node-grid">
+              {nodes.map((node) => (
+                <div className="node-card" key={node.id}>
+                  <div className="node-card-head">
+                    <div>
+                      <h3>{node.name || node.id}</h3>
+                      <code title={node.id}>{shortID(node.id)}</code>
+                    </div>
+                    <div className="inline"><span className="badge">{roleText[node.role] || node.role || '-'}</span><span className={statusClass(node.status)}>{trStatus(node.status)}</span></div>
                   </div>
-                  <div className="inline"><span className="badge">{roleText[node.role] || node.role || '-'}</span><span className={statusClass(node.status)}>{trStatus(node.status)}</span></div>
+                  <KeyValues rows={[
+                    ['???', node.hostname],
+                    ['?? IP', node.public_ip || node.observed_ip],
+                    ['?? IP', node.private_ip],
+                    ['EasyTier IP', node.easytier_ip || (node.easytier_status === 'active' ? '???' : '-')],
+                    ['EasyTier ??', trStatus(node.easytier_status)],
+                    ['Peer', `${Number(node.easytier_peer_count || 0)} ?`],
+                    ['????', formatTime(node.last_seen_at)],
+                    ['??????', timeAgo(node.last_seen_at)],
+                    ['????', nodeStatusReason(node)]
+                  ]} />
+                  {easyTierPeerWarning(node) && <div className="alert warning">EasyTier ?????????? Peer???????? peers ???????????</div>}
+                  <div className="cap-list">{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).map((key) => <span className="cap" key={key}>{key}</span>)}</div>
+                  <div className="actions"><button className="secondary" onClick={() => setActionNode(node)}>????</button></div>
                 </div>
-                <KeyValues rows={[
-                  ['主机名', node.hostname],
-                  ['公网 IP', node.public_ip],
-                  ['内网 IP', node.private_ip],
-                  ['EasyTier IP', node.easytier_ip || (node.easytier_status === 'active' ? '待发现' : '-')],
-                  ['EasyTier 状态', trStatus(node.easytier_status)],
-                  ['最后上报', formatTime(node.last_seen_at)]
-                ]} />
-                <div className="cap-list">{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).map((key) => <span className="cap" key={key}>{key}</span>)}</div>
-                <div className="actions"><button className="secondary" onClick={() => setOpenNodeActions(openNodeActions === node.id ? '' : node.id)}>节点操作</button></div>
-                {openNodeActions === node.id && <div className="action-panel">
-                  <h4>只读检查</h4>
-                  <div className="inline">{checkActions.map((action) => <button key={action} className="secondary" title={action} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}</div>
-                  <h4>写入/维护</h4>
-                  <div className="inline">{maintenanceActions.map((action) => <button key={action} className="warning" title={action} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}</div>
-                  <p className="muted warning-text">这些操作会修改节点服务状态，请只在可信节点执行。</p>
-                  <h4>危险操作</h4>
-                  <div className="inline"><button className="danger" onClick={() => deleteNode(node)}>删除节点记录</button></div>
-                </div>}
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
+              ))}
+            </div>
+          )}
+        </Card>
+        {actionNode && <NodeActionModal node={actionNode} onClose={() => setActionNode(null)} onTask={createTask} onDelete={deleteNode} />}
+      </>
     );
   }
 
@@ -812,16 +865,19 @@ function App() {
     const visibleTasks = tasks.filter((task) => {
       const statusOK = taskFilter === 'all' || task.status === taskFilter;
       const nodeOK = taskNodeFilter === 'all' || task.node_id === taskNodeFilter;
-      return statusOK && nodeOK;
+      const actionOK = taskActionFilter === 'all' || (taskActionFilter === 'easytier' && easyTierActions.includes(task.action));
+      return statusOK && nodeOK && actionOK;
     });
     return (
-      <Card title="任务" action={<div className="inline">
+      <Card title="??" action={<div className="inline">
         <select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>{taskStatuses.map((status) => <option key={status} value={status}>{trStatus(status)}</option>)}</select>
         <select value={taskNodeFilter} onChange={(event) => setTaskNodeFilter(event.target.value)}>
-          <option value="all">全部节点</option>
-          {nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id}{nodes.filter((item) => item.name === node.name).length > 1 ? ` / ${shortID(node.id)}` : ''}</option>)}
+          <option value="all">????</option>
+          {nodes.map((node) => <option key={node.id} value={node.id}>{taskNodeOptionLabel(node)}</option>)}
         </select>
-        <button onClick={() => run('刷新任务', refreshTasks)}>刷新</button>
+        <button className="secondary" onClick={() => setTaskFilter('failed')}>????</button>
+        <button className="secondary" onClick={() => setTaskActionFilter(taskActionFilter === 'easytier' ? 'all' : 'easytier')}>{taskActionFilter === 'easytier' ? '??????' : '?? EasyTier'}</button>
+        <button onClick={() => run('????', refreshTasks)}>??</button>
       </div>}>
         <TaskTable tasks={visibleTasks} nodes={nodes} onCopy={copyOutput} />
       </Card>
@@ -880,6 +936,38 @@ function App() {
   );
 }
 
+
+function NodeActionModal({ node, onClose, onTask, onDelete }) {
+  const taskButton = (action, className = 'secondary') => <button key={action} className={className} title={action} onClick={() => onTask(node.id, action)}>{actionText[action] || action}</button>;
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal drawer" onClick={(event) => event.stopPropagation()}>
+        <div className="card-head">
+          <div>
+            <h2>?????{node.name || node.id}</h2>
+            <p className="muted">{shortID(node.id)} ? {roleText[node.role] || node.role || '-'} ? {trStatus(node.status)}</p>
+          </div>
+          <button className="secondary" onClick={onClose}>??</button>
+        </div>
+        <section className="action-section">
+          <h3>????</h3>
+          <div className="action-grid">{checkActions.map((action) => taskButton(action))}</div>
+        </section>
+        <section className="action-section warning-section">
+          <h3>????</h3>
+          <p className="muted warning-text">????????????????????????</p>
+          <div className="action-grid">{maintenanceActions.map((action) => taskButton(action, 'warning'))}</div>
+        </section>
+        <section className="action-section danger-section">
+          <h3>????</h3>
+          <p className="muted">?????????????????? Agent ????????????????????</p>
+          <div className="action-grid"><button className="danger" onClick={() => onDelete(node)}>??????</button></div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function Card({ title, action, children }) {
   return <article className="card"><div className="card-head"><h2>{title}</h2>{action}</div>{children}</article>;
 }
@@ -900,7 +988,7 @@ function TaskOutput({ task, onCopy }) {
   const error = formatOutput(task.error);
   const content = [error, result, stdout, stderr].filter((item) => item && item !== '-').join('\n\n') || '-';
   const noSpace = /no space left on device|磁盘空间不足/i.test(content);
-  const parsedResult = (() => { try { return JSON.parse(task.result || '{}'); } catch { return {}; } })();
+  const parsedResult = parseJSONValue(task.result);
   const body = <>
     {noSpace && <div className="alert error">磁盘空间不足，请清理磁盘或调整临时目录。</div>}
     {onCopy && <button className="secondary mini" onClick={() => onCopy(content)}>复制输出</button>}

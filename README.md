@@ -2,7 +2,7 @@
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
 
-当前版本：`v0.1.9-test`
+当前版本：`v0.2.0-test`
 
 ## 典型场景
 
@@ -25,7 +25,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.9-test
+  --version v0.2.0-test
 ```
 
 安装完成后打开：
@@ -47,7 +47,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.1.9-test \
+  --version v0.2.0-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -68,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ### EasyTier 安装预检
 
-`v0.1.9-test` 会在安装 EasyTier 前检查临时目录和 `/usr/local/bin` 所在分区空间，并优先使用 `/var/lib/edge-tunnel/agent/tmp` 作为工作目录。Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
+`v0.2.0-test` 会在安装 EasyTier 前检查临时目录和 `/usr/local/bin` 所在分区空间，并优先使用 `/var/lib/edge-tunnel/agent/tmp` 作为工作目录。Agent 使用 Go 内置 zip 解压，不依赖系统 `unzip`。
 
 如果任务页出现 `no space left on device` 或“磁盘空间不足”，可先执行：
 
@@ -124,7 +124,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 当前限制
 
-- `v0.1.9-test` 是测试版。
+- `v0.2.0-test` 是测试版。
 - EasyTier 自动下载/安装后续增强。
 - DDNS provider 后续增强。
 - PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
@@ -155,5 +155,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.1.9-test bash panel/scripts/build-release.sh
+VERSION=v0.2.0-test bash panel/scripts/build-release.sh
 ```

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const Version = "v0.1.9-test"
+const Version = "v0.2.0-test"
 
 type APIResponse struct {
 	OK    bool            `json:"ok"`
@@ -42,19 +42,21 @@ type RegisterRequest struct {
 }
 
 type ReportRequest struct {
-	ID             string          `json:"id,omitempty"`
-	Name           string          `json:"name"`
-	Role           string          `json:"role"`
-	PublicIP       string          `json:"public_ip,omitempty"`
-	PrivateIP      string          `json:"private_ip,omitempty"`
-	AgentVersion   string          `json:"agent_version"`
-	Hostname       string          `json:"hostname"`
-	OS             string          `json:"os"`
-	Arch           string          `json:"arch"`
-	EasyTierIP     string          `json:"easytier_ip,omitempty"`
-	EasyTierStatus string          `json:"easytier_status"`
-	Capabilities   map[string]bool `json:"capabilities"`
-	Warnings       []string        `json:"warnings,omitempty"`
+	ID                    string          `json:"id,omitempty"`
+	Name                  string          `json:"name"`
+	Role                  string          `json:"role"`
+	PublicIP              string          `json:"public_ip,omitempty"`
+	PrivateIP             string          `json:"private_ip,omitempty"`
+	AgentVersion          string          `json:"agent_version"`
+	Hostname              string          `json:"hostname"`
+	OS                    string          `json:"os"`
+	Arch                  string          `json:"arch"`
+	EasyTierIP            string          `json:"easytier_ip,omitempty"`
+	EasyTierStatus        string          `json:"easytier_status"`
+	EasyTierPeerCount     int             `json:"easytier_peer_count"`
+	EasyTierHasRemotePeer bool            `json:"easytier_has_remote_peer"`
+	Capabilities          map[string]bool `json:"capabilities"`
+	Warnings              []string        `json:"warnings,omitempty"`
 }
 
 type AgentStatus struct {
@@ -73,6 +75,8 @@ type AgentStatus struct {
 	Warnings              []string        `json:"warnings,omitempty"`
 	PrivateIP             string          `json:"private_ip,omitempty"`
 	EasyTierIP            string          `json:"easytier_ip,omitempty"`
+	EasyTierPeerCount     int             `json:"easytier_peer_count"`
+	EasyTierHasRemotePeer bool            `json:"easytier_has_remote_peer"`
 	LastAppliedConfigHash string          `json:"last_applied_config_hash,omitempty"`
 }
 

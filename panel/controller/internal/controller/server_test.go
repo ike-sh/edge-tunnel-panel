@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testServer(t *testing.T) http.Handler {
@@ -164,6 +165,58 @@ func TestReportDoesNotOverwritePrivateIPWithPublicIP(t *testing.T) {
 	}
 }
 
+func TestNodeStatusOnlineByLastSeen(t *testing.T) {
+	store := &Store{data: StoreFile{Nodes: []Node{{ID: "node-online", LastSeenAt: time.Now().UTC().Add(-30 * time.Second)}}}}
+	nodes := store.listNodes()
+	if len(nodes) != 1 || nodes[0].Status != "online" || !strings.Contains(nodes[0].StatusReason, "recent") {
+		t.Fatalf("expected online node, got %+v", nodes)
+	}
+}
+
+func TestNodeStatusStaleByLastSeen(t *testing.T) {
+	store := &Store{data: StoreFile{Nodes: []Node{{ID: "node-stale", LastSeenAt: time.Now().UTC().Add(-2 * time.Minute)}}}}
+	nodes := store.listNodes()
+	if len(nodes) != 1 || nodes[0].Status != "stale" || !strings.Contains(nodes[0].StatusReason, "90") {
+		t.Fatalf("expected stale node, got %+v", nodes)
+	}
+}
+
+func TestNodeStatusOfflineByLastSeen(t *testing.T) {
+	store := &Store{data: StoreFile{Nodes: []Node{{ID: "node-offline", LastSeenAt: time.Now().UTC().Add(-6 * time.Minute)}}}}
+	nodes := store.listNodes()
+	if len(nodes) != 1 || nodes[0].Status != "offline" || !strings.Contains(nodes[0].StatusReason, "5") {
+		t.Fatalf("expected offline node, got %+v", nodes)
+	}
+}
+
+func TestNodeStatusMissingLastSeenOffline(t *testing.T) {
+	store := &Store{data: StoreFile{Nodes: []Node{{ID: "node-missing"}}}}
+	nodes := store.listNodes()
+	if len(nodes) != 1 || nodes[0].Status != "offline" {
+		t.Fatalf("expected missing last_seen to be offline, got %+v", nodes)
+	}
+}
+
+func TestAgentUnregisterMarksOffline(t *testing.T) {
+	h := testServer(t)
+	_ = post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-off", "node_name": "edge-node"})
+	rr := post(t, h, "/api/v1/agent/unregister", "agent-token", map[string]any{"node_id": "node-off", "reason": "agent purge"})
+	if rr.Code != 200 {
+		t.Fatalf("unregister failed: %d %s", rr.Code, rr.Body.String())
+	}
+	list := get(t, h, "/api/v1/nodes", "operator-token")
+	if !strings.Contains(list.Body.String(), `"status":"offline"`) || !strings.Contains(list.Body.String(), "agent purge") {
+		t.Fatalf("node should be offline after unregister: %s", list.Body.String())
+	}
+}
+
+func TestUnregisterMissingNodeDoesNotPanic(t *testing.T) {
+	rr := post(t, testServer(t), "/api/v1/agent/unregister", "agent-token", map[string]any{"node_id": "missing", "reason": "agent purge"})
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"unregistered":false`) {
+		t.Fatalf("missing unregister should be ok: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestDeleteNode(t *testing.T) {
 	h := testServer(t)
 	if rr := post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-delete", "node_name": "edge-node"}); rr.Code != 200 {
@@ -197,14 +250,28 @@ func TestDeleteNodeDoesNotDeleteTasks(t *testing.T) {
 	}
 }
 
+func TestDeleteNodeReappearsOnReport(t *testing.T) {
+	h := testServer(t)
+	_ = post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-reappear", "node_name": "edge-node"})
+	_ = deleteReq(t, h, "/api/v1/nodes/node-reappear", "operator-token")
+	rr := post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "node-reappear", "node_name": "edge-node", "role": "backend"})
+	if rr.Code != 200 {
+		t.Fatalf("report after delete failed: %d %s", rr.Code, rr.Body.String())
+	}
+	list := get(t, h, "/api/v1/nodes", "operator-token")
+	if !strings.Contains(list.Body.String(), "node-reappear") {
+		t.Fatalf("live agent should reappear after report: %s", list.Body.String())
+	}
+}
+
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.9-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.2.0-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.1.9-test") ||
+		!strings.Contains(body, "--version v0.2.0-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||
@@ -378,6 +445,37 @@ func TestNetworkProfileApplyCreatesTask(t *testing.T) {
 	apply := post(t, h, "/api/v1/network-profiles/"+profile.ID+"/apply", "operator-token", map[string]any{"node_id": "node-a"})
 	if apply.Code != 202 || !strings.Contains(apply.Body.String(), "apply_network_profile") || !strings.Contains(apply.Body.String(), "network_profile") || !strings.Contains(apply.Body.String(), "node-a") || !strings.Contains(apply.Body.String(), "tcp://1.2.3.4:11010") {
 		t.Fatalf("apply did not create task: %d %s", apply.Code, apply.Body.String())
+	}
+}
+
+func TestApplyBackendWithoutPeersRejected(t *testing.T) {
+	h := testServer(t)
+	_ = post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-backend", "node_name": "backend", "role": "backend"})
+	create := post(t, h, "/api/v1/network-profiles", "operator-token", map[string]any{"name": "prod", "network_name": "edge-prod", "peers": []any{}})
+	var resp APIResponse
+	_ = json.Unmarshal(create.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var profile NetworkProfile
+	_ = json.Unmarshal(raw, &profile)
+	apply := post(t, h, "/api/v1/network-profiles/"+profile.ID+"/apply", "operator-token", map[string]any{"node_id": "node-backend"})
+	if apply.Code != 400 || !strings.Contains(apply.Body.String(), "backend node requires") {
+		t.Fatalf("backend without peers should be rejected: %d %s", apply.Code, apply.Body.String())
+	}
+}
+
+func TestApplyPayloadPreservesPeers(t *testing.T) {
+	h := testServer(t)
+	_ = post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-entry", "node_name": "entry", "role": "entry"})
+	create := post(t, h, "/api/v1/network-profiles", "operator-token", map[string]any{"name": "prod", "network_name": "edge-prod", "listeners": []any{"tcp://0.0.0.0:11010"}, "peers": []any{"tcp://1.2.3.4:11010", "udp://1.2.3.4:11010"}})
+	var resp APIResponse
+	_ = json.Unmarshal(create.Body.Bytes(), &resp)
+	raw, _ := json.Marshal(resp.Data)
+	var profile NetworkProfile
+	_ = json.Unmarshal(raw, &profile)
+	apply := post(t, h, "/api/v1/network-profiles/"+profile.ID+"/apply", "operator-token", map[string]any{"node_id": "node-entry"})
+	body := apply.Body.String()
+	if apply.Code != 202 || !strings.Contains(body, "tcp://1.2.3.4:11010") || !strings.Contains(body, "udp://1.2.3.4:11010") {
+		t.Fatalf("apply payload should preserve peers: %d %s", apply.Code, body)
 	}
 }
 

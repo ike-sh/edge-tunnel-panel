@@ -14,6 +14,7 @@ import (
 type Client interface {
 	Register(ctx context.Context, report ReportRequest) error
 	Report(ctx context.Context, report ReportRequest) error
+	Unregister(ctx context.Context, nodeID, reason string) error
 	FetchTasks(ctx context.Context, nodeID string) ([]Task, error)
 	SubmitTaskResult(ctx context.Context, taskID string, result TaskResult) error
 }
@@ -39,6 +40,10 @@ func (c *HTTPClient) Register(ctx context.Context, report ReportRequest) error {
 
 func (c *HTTPClient) Report(ctx context.Context, report ReportRequest) error {
 	return c.do(ctx, http.MethodPost, "/api/v1/agent/report", report, nil)
+}
+
+func (c *HTTPClient) Unregister(ctx context.Context, nodeID, reason string) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/agent/unregister", map[string]any{"node_id": nodeID, "reason": reason}, nil)
 }
 
 func (c *HTTPClient) FetchTasks(ctx context.Context, nodeID string) ([]Task, error) {

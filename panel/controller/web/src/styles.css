@@ -206,6 +206,52 @@ button.danger {
   background: #0c1326;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.modal {
+  width: min(720px, 100vw);
+  height: 100vh;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  background: rgba(18, 26, 47, 0.98);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.action-section {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(12, 19, 38, 0.72);
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.action-grid button {
+  width: 100%;
+}
+
+.danger-section {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.warning-section {
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
 .cap-list {
   display: flex;
   flex-wrap: wrap;
@@ -496,5 +542,15 @@ details summary {
 
   main {
     width: min(100vw - 20px, 1500px);
+  }
+}
+
+@media (max-width: 640px) {
+  .action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .modal {
+    width: 100vw;
   }
 }
