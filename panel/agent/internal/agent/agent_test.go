@@ -313,11 +313,11 @@ func TestApplyForwardWritesStructuredConfig(t *testing.T) {
 	}
 	text := string(raw)
 	if strings.Contains(text, "raw_nft") ||
-		!strings.Contains(text, "udp dport 8443 dnat ip to 10.144.1.9:443") ||
-		!strings.Contains(text, "tcp dport 8443 dnat ip to 10.144.1.9:443") ||
+		!strings.Contains(text, "udp dport 8443 dnat to 10.144.1.9:443") ||
+		!strings.Contains(text, "tcp dport 8443 dnat to 10.144.1.9:443") ||
 		!strings.Contains(text, "ip daddr 10.144.1.9 masquerade") ||
-		!strings.Contains(text, "chain output") ||
-		!strings.Contains(text, "table inet edge_tunnel_forward") {
+		strings.Contains(text, "chain output") ||
+		!strings.Contains(text, "table ip edge_tunnel_forward") {
 		t.Fatalf("unexpected nft output: %s", text)
 	}
 	if _, err := os.Stat(forwardPath(cfg)); err != nil {
@@ -343,7 +343,7 @@ func TestAgentApplyForwardNormalizesCIDRTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if strings.Contains(text, "10.144.0.2/16") || !strings.Contains(text, "dnat ip to 10.144.0.2:8080") {
+	if strings.Contains(text, "10.144.0.2/16") || !strings.Contains(text, "dnat to 10.144.0.2:8080") {
 		t.Fatalf("nft target was not normalized: %s", text)
 	}
 }
@@ -383,7 +383,7 @@ func TestAgentApplyForwardPreflightPortConflict(t *testing.T) {
 	cfg.EnableWriteActions = true
 	payload := map[string]any{"protocol": "tcp", "listen_port": 18084.0, "target_host": "10.144.0.4", "target_port": 8080.0}
 	result := ExecuteTask(context.Background(), cfg, &portConflictRunner{port: "18084"}, Task{Action: "apply_forward_config", Payload: payload})
-	if result.Status != "failed" || !strings.Contains(result.Error, "端口已被占用") {
+	if result.Status != "failed" || !strings.Contains(result.Error, "port is already in use") {
 		t.Fatalf("expected port conflict failure: %+v", result)
 	}
 }
@@ -399,6 +399,10 @@ func TestAgentApplyForwardNftCheckFailureIncludesDetails(t *testing.T) {
 	}
 }
 
+func oldHookOutput() string     { return "hook " + "output" }
+func oldPriorityDstnat() string { return "priority " + "dstnat" }
+func oldPrioritySrcnat() string { return "priority " + "srcnat" }
+func oldDnatIPTo() string       { return "dnat " + "ip to" }
 func TestApplyEntryForwardWritesSeparateNFT(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
@@ -420,14 +424,24 @@ func TestApplyEntryForwardWritesSeparateNFT(t *testing.T) {
 	}
 	text := string(raw)
 	for _, want := range []string{
-		"table inet edge_tunnel_entry_forward",
-		"tcp dport 18081 dnat ip to 10.144.0.2:18081",
-		"udp dport 18081 dnat ip to 10.144.0.2:18081",
+		"table ip edge_tunnel_entry_forward",
+		"type nat hook prerouting priority -100",
+		"type nat hook postrouting priority 100",
+		"tcp dport 18081 dnat to 10.144.0.2:18081",
+		"udp dport 18081 dnat to 10.144.0.2:18081",
 		"ip daddr 10.144.0.2 masquerade",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("entry nft missing %q: %s", want, text)
 		}
+	}
+	for _, forbidden := range []string{oldHookOutput(), oldPriorityDstnat(), oldPrioritySrcnat(), oldDnatIPTo()} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("entry nft contains forbidden %q: %s", forbidden, text)
+		}
+	}
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "nft delete table ip edge_tunnel_entry_forward") {
+		t.Fatalf("expected old entry table delete before apply: %s", strings.Join(runner.calls, "\n"))
 	}
 	if _, err := os.Stat(forwardRuleStagePath(cfg, "forward-1", "entry")); err != nil {
 		t.Fatal(err)
@@ -454,12 +468,19 @@ func TestApplyLandingForwardWritesSeparateNFTAndResolvesDomain(t *testing.T) {
 	}
 	text := string(raw)
 	for _, want := range []string{
-		"table inet edge_tunnel_landing_forward",
-		"tcp dport 18081 dnat ip to 127.0.0.1:8080",
+		"table ip edge_tunnel_landing_forward",
+		"type nat hook prerouting priority -100",
+		"type nat hook postrouting priority 100",
+		"tcp dport 18081 dnat to 127.0.0.1:8080",
 		"ip daddr 127.0.0.1 masquerade",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("landing nft missing %q: %s", want, text)
+		}
+	}
+	for _, forbidden := range []string{oldHookOutput(), oldPriorityDstnat(), oldPrioritySrcnat(), oldDnatIPTo()} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("landing nft contains forbidden %q: %s", forbidden, text)
 		}
 	}
 	if _, err := os.Stat(forwardRuleStagePath(cfg, "forward-1", "landing")); err != nil {
@@ -678,7 +699,7 @@ func TestInstallEasyTierArchiveMissingCoreFails(t *testing.T) {
 	}
 	t.Cleanup(func() { downloadEasyTierArchiveFunc = oldDownload })
 	result := ExecuteTask(context.Background(), cfg, &installRunner{}, Task{Action: "install_or_update_easytier", Payload: map[string]any{}})
-	if result.Status != "failed" || !strings.Contains(result.Error, "easytier-core") {
+	if result.Status != "failed" || !strings.Contains(result.Error, "missing easytier-core") {
 		t.Fatalf("expected missing core failure: %+v", result)
 	}
 }
@@ -1070,14 +1091,32 @@ func TestAgentReportIncludesEasyTierPeerFields(t *testing.T) {
 func TestVerifyForwardRules(t *testing.T) {
 	cfg := testConfig(t)
 	_ = writeJSONFile(forwardPath(cfg), map[string]any{"name": "ssh"}, 0o600)
-	_ = writeFile(forwardNFTPath(cfg), []byte("table inet edge_tunnel_forward {}"), 0o600)
+	_ = writeFile(forwardNFTPath(cfg), []byte("table ip edge_tunnel_forward {}"), 0o600)
 	runner := &fakeRunner{paths: map[string]bool{"nft": true}}
 	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_forward_rules", Payload: map[string]any{}})
 	if result.Status != "succeeded" || !strings.Contains(result.Result, "table_exists") {
 		t.Fatalf("verify forward failed: %+v", result)
 	}
-	if !strings.Contains(strings.Join(runner.calls, "\n"), "nft list table inet edge_tunnel_forward") {
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "nft list table ip edge_tunnel_forward") {
 		t.Fatalf("missing nft verify call: %s", strings.Join(runner.calls, "\n"))
+	}
+}
+
+func TestVerifyForwardRulesUsesTableIPForStages(t *testing.T) {
+	cfg := testConfig(t)
+	_ = writeJSONFile(forwardRuleStagePath(cfg, "forward-1", "entry"), map[string]any{"stage": "entry"}, 0o600)
+	_ = writeFile(entryForwardNFTPath(cfg), []byte("table ip edge_tunnel_entry_forward {}"), 0o600)
+	_ = writeJSONFile(forwardRuleStagePath(cfg, "forward-1", "landing"), map[string]any{"stage": "landing"}, 0o600)
+	_ = writeFile(landingForwardNFTPath(cfg), []byte("table ip edge_tunnel_landing_forward {}"), 0o600)
+	runner := &fakeRunner{paths: map[string]bool{"nft": true}}
+	entry := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_forward_rules", Payload: map[string]any{"stage": "entry", "rule_id": "forward-1"}})
+	landing := ExecuteTask(context.Background(), cfg, runner, Task{Action: "verify_forward_rules", Payload: map[string]any{"stage": "landing", "rule_id": "forward-1"}})
+	if entry.Status != "succeeded" || landing.Status != "succeeded" {
+		t.Fatalf("stage verify failed: entry=%+v landing=%+v", entry, landing)
+	}
+	calls := strings.Join(runner.calls, "\n")
+	if !strings.Contains(calls, "nft list table ip edge_tunnel_entry_forward") || !strings.Contains(calls, "nft list table ip edge_tunnel_landing_forward") {
+		t.Fatalf("missing stage table ip verify calls: %s", calls)
 	}
 }
 

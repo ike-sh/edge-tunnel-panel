@@ -2,7 +2,7 @@
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并通过固定 Agent action 管理组网、转发、任务和状态。
 
-当前版本：`v0.2.7-test`
+当前版本：`v0.2.8-test`
 
 ## 适用场景
 
@@ -24,7 +24,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.7-test
+  --version v0.2.8-test
 ```
 
 安装完成后打开：
@@ -48,7 +48,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- \
-  --version v0.2.7-test \
+  --version v0.2.8-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -71,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 转发规则 MVP
 
-`v0.2.7-test` 的转发模型是双阶段：
+`v0.2.8-test` 的转发模型是双阶段：
 
 ```text
 外部客户端
@@ -115,8 +115,8 @@ B 侧支持把落地域名解析为 IPv4 后写入 nftables。IPv6 落地目标�
 python3 -m http.server 8080 --bind 0.0.0.0
 
 # A/B 节点检查
-nft list table inet edge_tunnel_entry_forward
-nft list table inet edge_tunnel_landing_forward
+nft list table ip edge_tunnel_entry_forward
+nft list table ip edge_tunnel_landing_forward
 cat /proc/sys/net/ipv4/ip_forward
 
 # 外部客户端
@@ -176,5 +176,31 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.2.7-test bash panel/scripts/build-release.sh
+VERSION=v0.2.8-test bash panel/scripts/build-release.sh
+```
+
+## v0.2.8-test nftables 兼容性修复
+
+v0.2.8-test 简化了转发 nftables 模板：
+
+- 使用 `table ip`，当前 MVP 仅支持 IPv4 转发。
+- 使用数字优先级：`priority -100` 和 `priority 100`。
+- 去除 output chain，外部访问请使用入口公网 IP 测试。
+- DNAT 语法改为 `dnat to IP:PORT`。
+- 应用前会先尝试删除旧的 `edge_tunnel_entry_forward` / `edge_tunnel_landing_forward` 表，再执行 `nft -c -f` 和 `nft -f`。
+
+A 节点检查：
+
+```bash
+cat /etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
+nft list table ip edge_tunnel_entry_forward
+cat /proc/sys/net/ipv4/ip_forward
+```
+
+B 节点检查：
+
+```bash
+cat /etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
+nft list table ip edge_tunnel_landing_forward
+cat /proc/sys/net/ipv4/ip_forward
 ```

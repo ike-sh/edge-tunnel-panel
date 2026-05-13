@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.2.7-test';
+const DEFAULT_VERSION = 'v0.2.8-test';
 
 const tabs = [
   ['dashboard', '总览'],

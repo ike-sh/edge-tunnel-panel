@@ -1,6 +1,6 @@
 # 开发说明
 
-当前版本：`v0.2.7-test`
+当前版本：`v0.2.8-test`
 
 ## 本地验证
 
@@ -15,7 +15,7 @@ cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
 
-VERSION=v0.2.7-test bash panel/scripts/build-release.sh
+VERSION=v0.2.8-test bash panel/scripts/build-release.sh
 ```
 
 ## 当前重点

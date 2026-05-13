@@ -1,18 +1,18 @@
 # Release
 
-当前版本：`v0.2.7-test`
+当前版本：`v0.2.8-test`
 
 ## 构建
 
 ```bash
-VERSION=v0.2.7-test bash panel/scripts/build-release.sh
+VERSION=v0.2.8-test bash panel/scripts/build-release.sh
 ```
 
 产物：
 
 ```text
-panel/dist/edge-tunnel-panel-v0.2.7-test-linux-amd64.tar.gz
-panel/dist/edge-tunnel-panel-v0.2.7-test-linux-arm64.tar.gz
+panel/dist/edge-tunnel-panel-v0.2.8-test-linux-amd64.tar.gz
+panel/dist/edge-tunnel-panel-v0.2.8-test-linux-arm64.tar.gz
 panel/dist/SHA256SUMS
 ```
 

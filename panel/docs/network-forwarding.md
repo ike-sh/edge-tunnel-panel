@@ -1,6 +1,6 @@
 # 网络与转发
 
-`v0.2.7-test` 把组网和转发拆成两个清晰阶段。
+`v0.2.8-test` 把组网和转发拆成两个清晰阶段。
 
 ## 组网阶段
 
@@ -100,4 +100,30 @@ python3 -m http.server 8080 --bind 0.0.0.0
 
 ```bash
 curl -v http://入口公网IP:18081/
+```
+
+## v0.2.8-test nftables 兼容性修复
+
+v0.2.8-test 简化了转发 nftables 模板：
+
+- 使用 `table ip`，当前 MVP 仅支持 IPv4 转发。
+- 使用数字优先级：`priority -100` 和 `priority 100`。
+- 去除 output chain，外部访问请使用入口公网 IP 测试。
+- DNAT 语法改为 `dnat to IP:PORT`。
+- 应用前会先尝试删除旧的 `edge_tunnel_entry_forward` / `edge_tunnel_landing_forward` 表，再执行 `nft -c -f` 和 `nft -f`。
+
+A 节点检查：
+
+```bash
+cat /etc/edge-tunnel/agent/nftables/edge-tunnel-entry-forward.nft
+nft list table ip edge_tunnel_entry_forward
+cat /proc/sys/net/ipv4/ip_forward
+```
+
+B 节点检查：
+
+```bash
+cat /etc/edge-tunnel/agent/nftables/edge-tunnel-landing-forward.nft
+nft list table ip edge_tunnel_landing_forward
+cat /proc/sys/net/ipv4/ip_forward
 ```

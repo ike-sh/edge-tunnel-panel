@@ -1,12 +1,12 @@
 # 快速开始
 
-当前版本：`v0.2.7-test`
+当前版本：`v0.2.8-test`
 
 ## 安装 Controller
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.2.7-test
+  --version v0.2.8-test
 ```
 
 打开：

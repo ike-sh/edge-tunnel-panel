@@ -23,7 +23,7 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 	case "verify_network_connectivity":
 		return verifyNetworkConnectivity(ctx, cfg, runner)
 	case "verify_forward_rules":
-		return verifyForwardRules(ctx, cfg, runner)
+		return verifyForwardRules(ctx, cfg, runner, task.Payload)
 	case "verify_pbr_rules":
 		return verifyPBR(ctx, cfg, runner)
 	case "verify_ddns_status":
