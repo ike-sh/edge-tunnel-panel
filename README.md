@@ -2,7 +2,7 @@
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
 
-当前版本：`v0.1.3-test`
+当前版本：`v0.1.4-test`
 
 ## 典型场景
 
@@ -25,7 +25,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.3-test
+  --version v0.1.4-test
 ```
 
 安装完成后打开：
@@ -47,7 +47,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.1.3-test \
+  --version v0.1.4-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -92,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 当前限制
 
-- `v0.1.3-test` 是测试版。
+- `v0.1.4-test` 是测试版。
 - EasyTier 自动下载/安装后续增强。
 - DDNS provider 后续增强。
 - PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
@@ -101,12 +101,16 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 参考成熟转发面板的设计思路，后续计划增强：
 
+- 节点管理体验增强。
+- 隧道/转发规则管理。
+- 端口转发 / 隧道转发两种模式。
 - 转发规则批量启停。
 - 节点批量下发。
 - TCP/UDP 转发状态检查。
 - 隧道/转发流量统计。
 - 转发规则分组。
 - 节点分组。
+- 分组权限。
 - 限速/配额。
 - 节点分享或多面板对接。
 - 动态最优路径。
@@ -119,5 +123,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.1.3-test bash panel/scripts/build-release.sh
+VERSION=v0.1.4-test bash panel/scripts/build-release.sh
 ```

@@ -5,13 +5,13 @@ import (
 	"strings"
 )
 
-const defaultAgentInstallVersion = "v0.1.3-test"
+const defaultAgentInstallVersion = "v0.1.4-test"
 
 func installScriptURL() string {
 	return "https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh"
 }
 
-func buildAgentInstallCommand(version, controllerURL, token, nodeName, role string, enableTasks, enableWrites bool) string {
+func buildAgentInstallCommand(prefix, version, controllerURL, token, nodeName, role string, enableTasks, enableWrites bool) string {
 	args := fmt.Sprintf("--version %s --controller-url %s --token %s --node-name %s --role %s", version, controllerURL, token, nodeName, role)
 	if enableTasks {
 		args += " --enable-tasks"
@@ -19,7 +19,11 @@ func buildAgentInstallCommand(version, controllerURL, token, nodeName, role stri
 	if enableWrites {
 		args += " --enable-write-actions"
 	}
-	return fmt.Sprintf("curl -fsSL %s | sudo bash -s -- %s", installScriptURL(), args)
+	executor := "bash"
+	if strings.TrimSpace(prefix) != "" {
+		executor = strings.TrimSpace(prefix) + " bash"
+	}
+	return fmt.Sprintf("curl -fsSL %s | %s -s -- %s", installScriptURL(), executor, args)
 }
 
 func boolRequestValue(req map[string]any, key string, fallback bool) bool {

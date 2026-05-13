@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.3-test';
+const DEFAULT_VERSION = 'v0.1.4-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -120,11 +120,10 @@ function App() {
     version: DEFAULT_VERSION,
     enable_tasks: true,
     enable_write_actions: true,
-    show_full_token: false
   });
-  const [maskedCommand, setMaskedCommand] = useState('');
-  const [fullCommand, setFullCommand] = useState('');
-  const [canCopyAgentCommand, setCanCopyAgentCommand] = useState(false);
+  const [rootCommand, setRootCommand] = useState('');
+  const [sudoCommand, setSudoCommand] = useState('');
+  const [recommendedCommand, setRecommendedCommand] = useState('');
 
   const [networkForm, setNetworkForm] = useState({
     name: '',
@@ -323,26 +322,25 @@ function App() {
     });
   }
 
-  async function generateAgentCommand(showFull = agentForm.show_full_token) {
+  async function generateAgentCommand() {
     const data = await run('生成一键命令', async () =>
       api('/bootstrap/agent-install-command', {
-        body: { ...agentForm, show_full_token: showFull }
+        body: { ...agentForm }
       })
     );
-    if (!data?.masked_command && !data?.command) return;
-    setMaskedCommand(data.masked_command || data.command);
-    setFullCommand(data.full_command || '');
-    setCanCopyAgentCommand(Boolean(data.can_copy && data.full_command));
-    setAgentForm((current) => ({ ...current, show_full_token: showFull }));
+    if (!data?.root_command && !data?.sudo_command) return;
+    setRootCommand(data.root_command || '');
+    setSudoCommand(data.sudo_command || '');
+    setRecommendedCommand(data.recommended_command || data.root_command || '');
   }
 
-  async function copyAgentCommand() {
-    if (!agentForm.show_full_token || !canCopyAgentCommand || !fullCommand) {
-      setAlert({ type: 'error', message: '请先勾选“显示完整 Token”，再复制可执行命令。' });
+  async function copyCommand(text, label) {
+    if (!text) {
+      setAlert({ type: 'error', message: '请先生成一键命令。' });
       return;
     }
-    await navigator.clipboard.writeText(fullCommand);
-    setAlert({ type: 'success', message: '已复制完整一键命令，请到被控服务器执行。' });
+    await navigator.clipboard.writeText(text);
+    setAlert({ type: 'success', message: '已复制' + label + '，请到被控服务器执行。' });
   }
 
   async function createNetworkProfile(event) {
@@ -436,10 +434,12 @@ function App() {
 
   function renderDashboard() {
     const recent = [...tasks].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 5);
+    const strictAuth = health?.strict_auth === true;
     return (
       <>
+        {!strictAuth && <div className="alert warning">当前为测试模式，Web API 未启用 Operator Token 鉴权。</div>}
         <div className="grid two">
-          <Card title="登录 / Token">
+          {strictAuth && <Card title="登录 / Token">
             <label>Operator Token</label>
             <div className="inline">
               <input type={showToken ? 'text' : 'password'} value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="输入主控 Operator Token" />
@@ -450,9 +450,9 @@ function App() {
               <button className="secondary" onClick={clearToken}>清除 Token</button>
               <button className="secondary" onClick={() => run('测试连接', refreshHealth)}>测试连接</button>
             </div>
-          </Card>
+          </Card>}
           <Card title="主控状态">
-            <KeyValues rows={[['名称', health?.name], ['版本', health?.version], ['提交', health?.build_commit], ['构建时间', health?.build_time]]} />
+            <KeyValues rows={[['名称', health?.name], ['版本', health?.version], ['提交', health?.build_commit], ['构建时间', health?.build_time], ['鉴权状态', strictAuth ? '已启用 Operator Token' : '测试模式免登录']]} />
           </Card>
         </div>
         <div className="grid four">
@@ -484,8 +484,9 @@ function App() {
             <table>
               <thead>
                 <tr>
-                  <th>名称</th>
-                  <th>角色</th>
+                  <th>节点 ID</th>
+                <th>名称</th>
+                <th>角色</th>
                   <th>状态</th>
                   <th>主机名</th>
                   <th>公网 IP</th>
@@ -499,6 +500,7 @@ function App() {
               <tbody>
                 {nodes.map((node) => (
                   <tr key={node.id}>
+                  <td title={node.id}><code>{String(node.id || '-').slice(0, 16)}</code></td>
                   <td>{node.name || node.id}</td>
                   <td>{roleText[node.role] || node.role || '-'}</td>
                     <td><span className={statusClass(node.status)}>{trStatus(node.status)}</span></td>
@@ -531,7 +533,7 @@ function App() {
           <h3>添加节点</h3>
           <button className="secondary" onClick={() => setShowAddAgent(false)}>关闭</button>
         </div>
-        <p className="muted">复制下面命令到被控服务器执行。执行完成后回到“节点”页面点击刷新查看在线状态。</p>
+        <p className="muted">测试阶段直接生成完整可执行命令。命令包含 Agent 接入 Token，请勿泄露。</p>
         <div className="grid two form-grid">
           <Field label="Controller 地址" value={agentForm.controller_url} onChange={(value) => setAgentForm({ ...agentForm, controller_url: value })} />
           <Field label="节点名称" value={agentForm.node_name} onChange={(value) => setAgentForm({ ...agentForm, node_name: value })} />
@@ -541,29 +543,28 @@ function App() {
           <label className="check"><input type="checkbox" checked={agentForm.enable_write_actions} onChange={(event) => setAgentForm({ ...agentForm, enable_write_actions: event.target.checked })} /> 允许写入动作</label>
         </div>
         {agentForm.enable_write_actions && <div className="alert warning">允许写入动作后，Agent 可以写入 EasyTier、转发、PBR、DDNS 配置，请只在可信服务器执行。</div>}
-        <label className="check"><input type="checkbox" checked={agentForm.show_full_token} onChange={(event) => {
-          const checked = event.target.checked;
-          setAgentForm({ ...agentForm, show_full_token: checked });
-          if (checked && maskedCommand) generateAgentCommand(true);
-        }} /> 显示完整 Token</label>
         <div className="actions">
-          <button onClick={() => generateAgentCommand(agentForm.show_full_token)}>生成一键命令</button>
-          <button className="secondary" onClick={copyAgentCommand}>复制命令</button>
+          <button onClick={generateAgentCommand}>生成一键命令</button>
+          <button className="secondary" onClick={() => copyCommand(rootCommand, 'root 命令')}>复制 root 命令</button>
+          <button className="secondary" onClick={() => copyCommand(sudoCommand, 'sudo 命令')}>复制 sudo 命令</button>
           <button className="secondary" onClick={() => setShowAddAgent(false)}>关闭</button>
         </div>
-        <div className="command-block">
-          <div className="command-title"><strong>预览命令</strong><span>打码命令不可直接执行。</span></div>
-          <pre>{maskedCommand || '点击“生成一键命令”后，这里会显示打码预览。'}</pre>
+        <div className="alert warning">如果当前是 root 登录服务器，复制 root 命令；普通用户才使用 sudo 命令。</div>
+        <div className="command-block danger">
+          <div className="command-title"><strong>推荐：root 用户直接执行</strong><span>完整命令包含 Agent 接入 Token，请勿泄露。</span></div>
+          <pre>{recommendedCommand || '点击“生成一键命令”后，这里会显示推荐命令。'}</pre>
         </div>
-        {agentForm.show_full_token && (
-          <div className="command-block danger">
-            <div className="command-title"><strong>完整命令</strong><span>完整命令包含 Agent 接入 Token，请勿泄露。</span></div>
-            <pre>{fullCommand || '请点击“生成一键命令”获取完整可执行命令。'}</pre>
-          </div>
-        )}
-        {maskedCommand && <ol className="steps">
-          <li>勾选“显示完整 Token”</li>
-          <li>点击“复制命令”</li>
+        <div className="command-block">
+          <div className="command-title"><strong>root 命令</strong><span>适合已用 root 登录的服务器。</span></div>
+          <pre>{rootCommand || '尚未生成。'}</pre>
+        </div>
+        <div className="command-block">
+          <div className="command-title"><strong>普通用户 sudo 命令</strong><span>仅在服务器已安装 sudo 时使用。</span></div>
+          <pre>{sudoCommand || '尚未生成。'}</pre>
+        </div>
+        {recommendedCommand && <ol className="steps">
+          <li>根据登录用户选择 root 命令或 sudo 命令</li>
+          <li>点击对应复制按钮</li>
           <li>到被控服务器执行</li>
           <li>回到“节点”页面点击刷新查看在线状态</li>
         </ol>}
@@ -694,7 +695,7 @@ function App() {
             <button onClick={saveApiBase}>保存</button>
           </div>
           <p className="muted">当前：{apiBase || '同源'}</p>
-          <p className="muted">Token：{token ? '已设置' : '未设置'}</p>
+          <p className="muted">鉴权状态：{health?.strict_auth ? '已启用 Operator Token' : '测试模式免登录'}</p>
         </Card>
         <Card title="默认路径">
           <KeyValues rows={[

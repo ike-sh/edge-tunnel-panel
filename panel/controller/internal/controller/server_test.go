@@ -23,6 +23,14 @@ func testServerWithWebDir(t *testing.T, webDir string) http.Handler {
 	return NewServer(store, "agent-token", "operator-token", true, webDir)
 }
 
+func testOpenServer(t *testing.T) http.Handler {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "store.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewServer(store, "agent-token", "operator-token", false, t.TempDir())
+}
+
 func testWebServer(t *testing.T) http.Handler {
 	webDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<!doctype html><title>Edge Tunnel Panel</title>"), 0644); err != nil {
@@ -82,42 +90,73 @@ func TestLogin(t *testing.T) {
 
 func TestAgentRegisterAndReport(t *testing.T) {
 	h := testServer(t)
-	if rr := post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"node_name": "edge-node", "role": "relay"}); rr.Code != 200 {
+	if rr := post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-stable", "node_name": "edge-node", "role": "relay"}); rr.Code != 200 {
 		t.Fatalf("register failed: %d %s", rr.Code, rr.Body.String())
 	}
-	if rr := post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"node_name": "edge-node", "role": "relay", "capabilities": map[string]any{"supports_agent_status": true}}); rr.Code != 200 {
+	if rr := post(t, h, "/api/v1/agent/report", "agent-token", map[string]any{"id": "node-stable", "node_name": "edge-node", "role": "relay", "capabilities": map[string]any{"supports_agent_status": true}}); rr.Code != 200 {
 		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{"id": "node-stable", "node_name": "edge-node", "role": "relay"}); rr.Code != 200 {
+		t.Fatalf("second register failed: %d %s", rr.Code, rr.Body.String())
 	}
 	rr := get(t, h, "/api/v1/nodes", "operator-token")
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "edge-node") {
 		t.Fatalf("list nodes failed: %d %s", rr.Code, rr.Body.String())
 	}
+	var resp APIResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(resp.Data)
+	var nodes []Node
+	if err := json.Unmarshal(raw, &nodes); err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || nodes[0].ID != "node-stable" {
+		t.Fatalf("expected one stable node, got %+v", nodes)
+	}
 }
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.3-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.4-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.1.3-test") ||
+		!strings.Contains(body, "--version v0.1.4-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||
-		!strings.Contains(body, `"can_copy":false`) ||
-		!strings.Contains(body, `"copy_requires_full_token":true`) ||
-		strings.Contains(body, "agent-token") {
+		!strings.Contains(body, `"root_command"`) ||
+		!strings.Contains(body, `"sudo_command"`) ||
+		!strings.Contains(body, `| bash -s --`) ||
+		!strings.Contains(body, `| sudo bash -s --`) ||
+		!strings.Contains(body, `"can_copy":true`) {
 		t.Fatalf("bad command: %d %s", rr.Code, body)
 	}
 }
 
-func TestBootstrapAgentInstallFullCommand(t *testing.T) {
+func TestBootstrapAgentInstallCommandsContainToken(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "show_full_token": true})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080"})
 	body := rr.Body.String()
-	if rr.Code != 200 || !strings.Contains(body, "masked_command") || !strings.Contains(body, "full_command") || !strings.Contains(body, "agent-token") || !strings.Contains(body, `"can_copy":true`) {
+	if rr.Code != 200 || !strings.Contains(body, "root_command") || !strings.Contains(body, "sudo_command") || !strings.Contains(body, "agent-token") || !strings.Contains(body, `"can_copy":true`) {
 		t.Fatalf("full command missing token: %d %s", rr.Code, body)
+	}
+}
+
+func TestOpenModeAllowsOperatorAPIWithoutToken(t *testing.T) {
+	rr := get(t, testOpenServer(t), "/api/v1/nodes", "")
+	if rr.Code != 200 {
+		t.Fatalf("open mode should allow operator API without token: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStrictModeRequiresOperatorToken(t *testing.T) {
+	rr := get(t, testServer(t), "/api/v1/nodes", "")
+	if rr.Code != 401 {
+		t.Fatalf("strict mode should require token: %d %s", rr.Code, rr.Body.String())
 	}
 }
 

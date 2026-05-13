@@ -137,6 +137,9 @@ func intValue(v any) int {
 }
 
 func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
+	if !s.strictAuth {
+		return true
+	}
 	if tokenMatches(bearerToken(r), s.operatorToken) {
 		return true
 	}
@@ -160,7 +163,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeOK(w, 200, HealthResponse{Name: "edge-tunnel-controller", Version: Version, BuildCommit: Commit, BuildTime: Date})
+	writeOK(w, 200, HealthResponse{Name: "edge-tunnel-controller", Version: Version, BuildCommit: Commit, BuildTime: Date, StrictAuth: s.strictAuth})
 }
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -198,23 +201,23 @@ func (s *Server) handleBootstrapAgentInstall(w http.ResponseWriter, r *http.Requ
 	role := stringValue(req["role"], "backend")
 	enableTasks := boolRequestValue(req, "enable_tasks", true)
 	enableWrites := boolRequestValue(req, "enable_write_actions", true)
-	showFullToken := boolRequestValue(req, "show_full_token", false)
-	maskedCommand := buildAgentInstallCommand(version, controllerURL, redactToken(s.agentToken), nodeName, role, enableTasks, enableWrites)
+	rootCommand := buildAgentInstallCommand("", version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites)
+	sudoCommand := buildAgentInstallCommand("sudo", version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites)
 	data := map[string]any{
-		"masked_command":           maskedCommand,
-		"command":                  maskedCommand,
-		"full_command":             "",
-		"can_copy":                 false,
-		"copy_requires_full_token": true,
+		"root_command":             rootCommand,
+		"sudo_command":             sudoCommand,
+		"recommended_command":      rootCommand,
+		"masked_command":           buildAgentInstallCommand("", version, controllerURL, redactToken(s.agentToken), nodeName, role, enableTasks, enableWrites),
+		"command":                  rootCommand,
+		"full_command":             rootCommand,
+		"can_copy":                 true,
+		"copy_requires_full_token": false,
 		"version":                  version,
+		"node_id":                  "",
 		"role":                     role,
 		"node_name":                nodeName,
 		"enable_tasks":             enableTasks,
 		"enable_write_actions":     enableWrites,
-	}
-	if showFullToken {
-		data["full_command"] = buildAgentInstallCommand(version, controllerURL, s.agentToken, nodeName, role, enableTasks, enableWrites)
-		data["can_copy"] = true
 	}
 	writeOK(w, 200, data)
 }
@@ -232,7 +235,7 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	node, err := s.store.createNode(Node{Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), Hostname: stringValue(req["hostname"], ""), Status: "online", LastSeenAt: time.Now().UTC(), Capabilities: map[string]bool{}})
+	node, err := s.store.createNode(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), Hostname: stringValue(req["hostname"], ""), Status: "online", LastSeenAt: time.Now().UTC(), Capabilities: map[string]bool{}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return

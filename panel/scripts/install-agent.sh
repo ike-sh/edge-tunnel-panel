@@ -63,6 +63,41 @@ mask() {
   if [ "${#value}" -le 8 ]; then printf '[REDACTED]'; else printf '%s...[REDACTED]' "${value:0:4}"; fi
 }
 
+safe_id() {
+  printf '%s' "$1" | tr -cd 'A-Za-z0-9._-'
+}
+
+generate_node_id() {
+  local host mid random_part raw
+  host="$(hostname 2>/dev/null || printf 'edge-node')"
+  host="$(safe_id "$host")"
+  if [ -r /etc/machine-id ]; then
+    mid="$(cut -c1-12 /etc/machine-id | tr -cd 'A-Za-z0-9')"
+  else
+    mid=""
+  fi
+  if [ -z "$mid" ]; then
+    random_part="$(date +%s%N 2>/dev/null || date +%s)"
+    mid="$(safe_id "$random_part")"
+  fi
+  raw="node-${host:-edge-node}-${mid}"
+  safe_id "$raw"
+}
+
+ensure_node_id() {
+  if [ -n "$NODE_ID" ]; then
+    NODE_ID="$(safe_id "$NODE_ID")"
+    return
+  fi
+  if [ -f "$CONFIG_DIR/agent.env" ]; then
+    NODE_ID="$(sed -n 's/^EDGE_NODE_ID=//p' "$CONFIG_DIR/agent.env" | head -n 1 | tr -d '\"' || true)"
+    NODE_ID="$(safe_id "$NODE_ID")"
+  fi
+  if [ -z "$NODE_ID" ]; then
+    NODE_ID="$(generate_node_id)"
+  fi
+}
+
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
     fail "please run as root"
@@ -155,6 +190,7 @@ install_from_source() {
 }
 
 write_env() {
+  ensure_node_id
   install -d -m 0755 "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
   cat >"$CONFIG_DIR/agent.env" <<EOF
 EDGE_CONTROLLER_URL=${CONTROLLER_URL}
@@ -201,9 +237,7 @@ run_once_registration_check() {
     --state-dir "$STATE_DIR"
     --once
   )
-  if [ -n "$NODE_ID" ]; then
-    args+=(--node-id "$NODE_ID")
-  fi
+  args+=(--node-id "$NODE_ID")
   if [ "$ENABLE_TASKS" = true ]; then
     args+=(--enable-tasks)
   fi
@@ -214,13 +248,14 @@ run_once_registration_check() {
   if ! "$INSTALL_DIR/edge-tunnel-agent" "${args[@]}"; then
     log "一次性注册失败"
     log "Controller 地址：${CONTROLLER_URL}"
+    log "节点 ID：${NODE_ID}"
     log "节点名称：${NODE_NAME}"
     log "节点角色：${NODE_ROLE}"
     log "请检查 Controller 地址、Token、防火墙和服务日志："
     log "journalctl -u edge-tunnel-agent -n 100 --no-pager"
     return 1
   fi
-  log "一次性注册完成"
+  log "一次性注册完成，节点 ID：${NODE_ID}"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -270,8 +305,12 @@ fi
 log "Agent 安装完成。"
 log "Controller 地址：${CONTROLLER_URL}"
 log "Controller Token：$(mask "$CONTROLLER_TOKEN")"
+log "节点 ID：${NODE_ID}"
 log "节点名称：${NODE_NAME}"
 log "节点角色：${NODE_ROLE}"
+if [ "$(id -u)" -eq 0 ]; then
+  log "当前是 root 用户，后续手动安装命令可以不使用 sudo。"
+fi
 log "下一步："
 log "1. 回到主控面板“节点”页面"
 log "2. 点击“刷新”"

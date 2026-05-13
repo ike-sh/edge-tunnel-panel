@@ -73,7 +73,28 @@ func nodeStatus(lastSeen time.Time) string {
 func (s *Store) createNode(node Node) (Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	node.ID = newID()
+	if node.ID == "" {
+		node.ID = newID()
+	}
+	for i := range s.data.Nodes {
+		if s.data.Nodes[i].ID == node.ID {
+			existing := s.data.Nodes[i]
+			if node.Name != "" {
+				existing.Name = node.Name
+			}
+			if node.Role != "" {
+				existing.Role = node.Role
+			}
+			if node.Hostname != "" {
+				existing.Hostname = node.Hostname
+			}
+			existing.Status = "online"
+			existing.LastSeenAt = now()
+			existing.UpdatedAt = existing.LastSeenAt
+			s.data.Nodes[i] = existing
+			return existing, s.saveLocked()
+		}
+	}
 	node.CreatedAt = now()
 	node.UpdatedAt = node.CreatedAt
 	s.data.Nodes = append(s.data.Nodes, node)
@@ -84,7 +105,7 @@ func (s *Store) upsertReport(node Node) (Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.data.Nodes {
-		if s.data.Nodes[i].ID == node.ID || s.data.Nodes[i].Name == node.Name {
+		if (node.ID != "" && s.data.Nodes[i].ID == node.ID) || (node.ID == "" && node.Name != "" && s.data.Nodes[i].Name == node.Name && s.data.Nodes[i].Hostname == node.Hostname) {
 			node.ID = s.data.Nodes[i].ID
 			node.CreatedAt = s.data.Nodes[i].CreatedAt
 			node.UpdatedAt = now()
@@ -92,7 +113,9 @@ func (s *Store) upsertReport(node Node) (Node, error) {
 			return node, s.saveLocked()
 		}
 	}
-	node.ID = newID()
+	if node.ID == "" {
+		node.ID = newID()
+	}
 	node.CreatedAt = now()
 	node.UpdatedAt = node.CreatedAt
 	s.data.Nodes = append(s.data.Nodes, node)

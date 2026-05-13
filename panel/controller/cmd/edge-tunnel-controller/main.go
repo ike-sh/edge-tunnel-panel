@@ -11,7 +11,7 @@ import (
 	"github.com/ike-sh/edge-tunnel-panel/panel/controller/internal/controller"
 )
 
-var version = "v0.1.3-test"
+var version = "v0.1.4-test"
 
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -32,7 +32,7 @@ func main() {
 	webDir := getenv("EDGE_WEB_DIR", filepath.Join(dataDir, "web"))
 	operatorToken := getenv("EDGE_OPERATOR_TOKEN", "edge-operator-token")
 	agentToken := getenv("EDGE_CONTROLLER_TOKEN", "edge-agent-token")
-	strict := getenv("EDGE_STRICT_AUTH", "true") != "false"
+	strict := getenv("EDGE_STRICT_AUTH", "false") == "true"
 	store, err := controller.OpenStore(filepath.Join(dataDir, "store.json"))
 	if err != nil {
 		log.Fatal(err)

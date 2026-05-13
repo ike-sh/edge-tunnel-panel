@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.1.3-test"
+	Version = "v0.1.4-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -24,6 +24,7 @@ type HealthResponse struct {
 	Version     string `json:"version"`
 	BuildCommit string `json:"build_commit"`
 	BuildTime   string `json:"build_time"`
+	StrictAuth  bool   `json:"strict_auth"`
 }
 
 type LoginRequest struct {

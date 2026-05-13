@@ -13,6 +13,7 @@ SOURCE_BUILD=false
 NO_START=false
 UNINSTALL=false
 PURGE=false
+STRICT_AUTH=false
 OPERATOR_TOKEN="${EDGE_OPERATOR_TOKEN:-}"
 AGENT_TOKEN="${EDGE_CONTROLLER_TOKEN:-}"
 
@@ -31,6 +32,8 @@ Options:
   --config-dir DIR          Controller config directory
   --source-build            Build from current source checkout
   --no-start                Do not start service after install
+  --strict-auth             Enable Operator Token auth for Web/API
+  --no-strict-auth          Disable Operator Token auth for testing, default
   --uninstall               卸载主控服务和二进制，保留配置、数据和日志
   --purge                   彻底删除主控服务、二进制、配置、数据和日志
   -h, --help                Show help
@@ -174,7 +177,7 @@ EDGE_LISTEN=${LISTEN}
 EDGE_DATA_DIR=${DATA_DIR}
 EDGE_OPERATOR_TOKEN=${OPERATOR_TOKEN}
 EDGE_CONTROLLER_TOKEN=${AGENT_TOKEN}
-EDGE_STRICT_AUTH=true
+EDGE_STRICT_AUTH=${STRICT_AUTH}
 EDGE_WEB_DIR=${WEB_DIR}
 EOF
   chmod 0600 "$CONFIG_DIR/controller.env"
@@ -213,6 +216,8 @@ while [ "$#" -gt 0 ]; do
     --config-dir) CONFIG_DIR="$2"; shift 2 ;;
     --source-build) SOURCE_BUILD=true; shift ;;
     --no-start) NO_START=true; shift ;;
+    --strict-auth) STRICT_AUTH=true; shift ;;
+    --no-strict-auth) STRICT_AUTH=false; shift ;;
     --uninstall) UNINSTALL=true; shift ;;
     --purge) PURGE=true; UNINSTALL=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -240,10 +245,15 @@ if [ "$NO_START" = false ]; then
 fi
 
 log "Controller 安装完成。"
-log "访问地址：http://${LISTEN}"
+log "监听地址：http://${LISTEN}"
+log "浏览器访问：请使用服务器公网 IP 或域名，例如 http://SERVER_IP:18080"
 log "Operator Token：${OPERATOR_TOKEN}"
 log "Agent 接入 Token：${AGENT_TOKEN}"
 log "Token 只在安装输出中显示一次，请妥善保存。"
+if [ "$STRICT_AUTH" = false ]; then
+  log "当前为测试模式：Web API 未启用 Operator Token 鉴权。"
+  log "如需开启，请使用 --strict-auth 重新安装或修改 controller.env。"
+fi
 log "下一步："
 log "1. 打开主控 Web"
 log "2. 保存 Operator Token"
