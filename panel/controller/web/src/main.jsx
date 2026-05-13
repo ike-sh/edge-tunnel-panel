@@ -4,12 +4,11 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.1-test';
+const DEFAULT_VERSION = 'v0.1.2-test';
 
 const tabs = [
   ['dashboard', '总览'],
   ['nodes', '节点'],
-  ['add-agent', '添加节点'],
   ['networks', '组网配置'],
   ['entries', '公网入口'],
   ['forwards', '转发规则'],
@@ -28,10 +27,10 @@ const readonlyActions = [
 ];
 
 const roleOptions = [
+  ['backend', '后端节点'],
   ['entry', '公网入口'],
   ['relay', '中继'],
-  ['exit', '出口节点'],
-  ['backend', '后端节点']
+  ['exit', '出口节点']
 ];
 
 const statusText = {
@@ -101,6 +100,7 @@ function App() {
   const [pbrPolicies, setPbrPolicies] = useState([]);
   const [ddnsProfiles, setDdnsProfiles] = useState([]);
   const [taskFilter, setTaskFilter] = useState('all');
+  const [showAddAgent, setShowAddAgent] = useState(false);
 
   const [agentForm, setAgentForm] = useState({
     controller_url: browserControllerURL(),
@@ -454,55 +454,68 @@ function App() {
 
   function renderNodes() {
     return (
-      <Card title="节点" action={<button onClick={() => run('刷新节点', refreshNodes)}>刷新</button>}>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>角色</th>
-                <th>状态</th>
-                <th>主机名</th>
-                <th>公网 IP</th>
-                <th>内网 IP</th>
-                <th>EasyTier</th>
-                <th>最后上报</th>
-                <th>能力</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {nodes.map((node) => (
-                <tr key={node.id}>
-                  <td>{node.name || node.id}</td>
-                  <td>{node.role || '-'}</td>
-                  <td><span className={statusClass(node.status)}>{trStatus(node.status)}</span></td>
-                  <td>{node.hostname || '-'}</td>
-                  <td>{node.public_ip || '-'}</td>
-                  <td>{node.private_ip || '-'}</td>
-                  <td>{node.easytier_ip || '-'}<br /><small>{node.easytier_status || '-'}</small></td>
-                  <td>{formatTime(node.last_seen_at)}</td>
-                  <td><small>{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).join(', ') || '-'}</small></td>
-                  <td>
-                    <select onChange={(event) => event.target.value && createTask(node.id, event.target.value)} defaultValue="">
-                      <option value="">创建任务</option>
-                      {readonlyActions.map((action) => <option key={action} value={action}>{action}</option>)}
-                    </select>
-                  </td>
+      <Card title="节点" action={<div className="inline"><button onClick={() => run('刷新节点', refreshNodes)}>刷新</button><button onClick={() => setShowAddAgent(true)}>添加节点</button></div>}>
+        {showAddAgent && renderAddAgentPanel()}
+        {!nodes.length ? (
+          <div className="empty-state">
+            <h3>暂无节点。</h3>
+            <p>点击“添加节点”生成一键接入命令，把 Agent 安装到被控服务器。</p>
+            <button onClick={() => setShowAddAgent(true)}>添加节点</button>
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>角色</th>
+                  <th>状态</th>
+                  <th>主机名</th>
+                  <th>公网 IP</th>
+                  <th>内网 IP</th>
+                  <th>EasyTier</th>
+                  <th>最后上报</th>
+                  <th>能力</th>
+                  <th>操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {nodes.map((node) => (
+                  <tr key={node.id}>
+                    <td>{node.name || node.id}</td>
+                    <td>{node.role || '-'}</td>
+                    <td><span className={statusClass(node.status)}>{trStatus(node.status)}</span></td>
+                    <td>{node.hostname || '-'}</td>
+                    <td>{node.public_ip || '-'}</td>
+                    <td>{node.private_ip || '-'}</td>
+                    <td>{node.easytier_ip || '-'}<br /><small>{node.easytier_status || '-'}</small></td>
+                    <td>{formatTime(node.last_seen_at)}</td>
+                    <td><small>{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).join(', ') || '-'}</small></td>
+                    <td>
+                      <select onChange={(event) => event.target.value && createTask(node.id, event.target.value)} defaultValue="">
+                        <option value="">创建任务</option>
+                        {readonlyActions.map((action) => <option key={action} value={action}>{action}</option>)}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
     );
   }
 
-  function renderAddAgent() {
+  function renderAddAgentPanel() {
     const visibleCommand = agentForm.show_full_token && fullCommand ? fullCommand : maskedCommand;
     return (
-      <Card title="添加节点">
-        <p className="muted">生成一键命令后，复制到被控服务器执行；执行完成后回到“节点”页面查看在线状态。</p>
+      <div className="sub-panel">
+        <div className="card-head">
+          <h3>添加节点</h3>
+          <button className="secondary" onClick={() => setShowAddAgent(false)}>关闭</button>
+        </div>
+        <p className="muted">复制下面命令到被控服务器执行。执行完成后回到“节点”页面点击刷新查看在线状态。</p>
         <div className="grid two form-grid">
           <Field label="Controller 地址" value={agentForm.controller_url} onChange={(value) => setAgentForm({ ...agentForm, controller_url: value })} />
           <Field label="节点名称" value={agentForm.node_name} onChange={(value) => setAgentForm({ ...agentForm, node_name: value })} />
@@ -512,15 +525,19 @@ function App() {
           <label className="check"><input type="checkbox" checked={agentForm.enable_write_actions} onChange={(event) => setAgentForm({ ...agentForm, enable_write_actions: event.target.checked })} /> 允许写入动作</label>
         </div>
         {agentForm.enable_write_actions && <div className="alert warning">允许写入动作后，Agent 可以写入 EasyTier、转发、PBR、DDNS 配置，请只在可信服务器执行。</div>}
-        <label className="check"><input type="checkbox" checked={agentForm.show_full_token} onChange={(event) => setAgentForm({ ...agentForm, show_full_token: event.target.checked })} /> 显示完整 Token</label>
+        <label className="check"><input type="checkbox" checked={agentForm.show_full_token} onChange={(event) => {
+          const checked = event.target.checked;
+          setAgentForm({ ...agentForm, show_full_token: checked });
+          if (checked && maskedCommand) generateAgentCommand(true);
+        }} /> 显示完整 Token</label>
         <div className="actions">
-          <button onClick={() => generateAgentCommand(false)}>生成一键命令</button>
-          <button className="warning" onClick={() => generateAgentCommand(true)}>显示完整 Token 并生成</button>
-          <button className="secondary" onClick={() => copyText(visibleCommand)}>复制</button>
+          <button onClick={() => generateAgentCommand(agentForm.show_full_token)}>生成一键命令</button>
+          <button className="secondary" onClick={() => copyText(visibleCommand)}>复制命令</button>
+          <button className="secondary" onClick={() => setShowAddAgent(false)}>关闭</button>
         </div>
         <pre>{visibleCommand || '点击“生成一键命令”后，这里会显示可复制的 Agent 接入命令。'}</pre>
         {visibleCommand && <p className="muted">下一步：复制后到被控服务器执行，然后回到“节点”页面刷新查看在线状态。</p>}
-      </Card>
+      </div>
     );
   }
 
@@ -665,7 +682,6 @@ function App() {
   const page = {
     dashboard: renderDashboard,
     nodes: renderNodes,
-    'add-agent': renderAddAgent,
     networks: renderNetworkProfiles,
     entries: renderEntries,
     forwards: renderForwards,

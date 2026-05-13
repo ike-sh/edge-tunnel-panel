@@ -4,18 +4,18 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.1-test
+  --version v0.1.2-test
 ```
 
 打开 `http://服务器IP:18080`，保存安装输出中的 Operator Token。
 
 ## 添加节点
 
-进入 Web 的“添加节点”，生成一键 Agent 命令，复制到被控服务器执行。
+进入 Web 的“节点”页面，点击“添加节点”，生成一键 Agent 命令，复制到被控服务器执行。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.1.1-test \
+  --version v0.1.2-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \

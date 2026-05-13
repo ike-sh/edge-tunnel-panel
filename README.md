@@ -2,7 +2,7 @@
 
 Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板，用于把没有公网 IPv4 的 NAT 后服务器接入公网入口节点，并在主控面板里管理节点、组网、转发、出口策略、DDNS 和任务。
 
-当前版本：`v0.1.1-test`
+当前版本：`v0.1.2-test`
 
 ## 典型场景
 
@@ -25,7 +25,7 @@ Edge Tunnel Panel 是一个基于 EasyTier 的 TCP/UDP 隧道组网 Web 面板�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
-  --version v0.1.1-test
+  --version v0.1.2-test
 ```
 
 安装完成后打开：
@@ -37,7 +37,7 @@ http://服务器IP:18080
 ## 添加节点
 
 1. 打开 Web，保存安装输出中的 Operator Token。
-2. 进入“添加节点”。
+2. 进入“节点”页面，点击“添加节点”。
 3. 填写 Controller 地址、节点名称、角色和版本。
 4. 点击“生成一键命令”。
 5. 复制命令到被控服务器执行。
@@ -47,7 +47,7 @@ http://服务器IP:18080
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --version v0.1.1-test \
+  --version v0.1.2-test \
   --controller-url http://YOUR_CONTROLLER:18080 \
   --token YOUR_AGENT_TOKEN \
   --node-name edge-node-1 \
@@ -92,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 当前限制
 
-- `v0.1.1-test` 是测试版。
+- `v0.1.2-test` 是测试版。
 - EasyTier 自动下载/安装后续增强。
 - DDNS provider 后续增强。
 - PBR 需要 root 权限和 Linux `nftables` / `iproute2`。
@@ -105,5 +105,5 @@ cd ../agent && go test ./... -v -count=1 -timeout=30s
 cd ../..
 npm --prefix panel/controller/web ci
 npm --prefix panel/controller/web run build
-VERSION=v0.1.1-test bash panel/scripts/build-release.sh
+VERSION=v0.1.2-test bash panel/scripts/build-release.sh
 ```
