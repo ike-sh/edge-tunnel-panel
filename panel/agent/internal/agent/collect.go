@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 )
 
 type CommandRunner interface {
@@ -13,6 +14,10 @@ type CommandRunner interface {
 }
 
 type OSRunner struct{}
+
+var interfaceAddrsFunc = func(iface net.Interface) ([]net.Addr, error) {
+	return iface.Addrs()
+}
 
 func (OSRunner) Run(ctx context.Context, name string, args ...string) CommandResult {
 	return runCommand(ctx, name, args...)
@@ -45,7 +50,7 @@ func CollectStatus(ctx context.Context, cfg Config, runner CommandRunner) AgentS
 			"supports_easytier_manage": cfg.EnableWriteActions,
 			"supports_firewall_reload": cfg.EnableWriteActions,
 		},
-		PrivateIP: primaryIP(),
+		PrivateIP: privateIP(),
 	}
 	if _, err := runner.LookPath("easytier-core"); err == nil {
 		status.EasyTierBinaryExists = true
@@ -112,19 +117,57 @@ func easyTierStatus(cfg Config, status AgentStatus) string {
 	return "inactive"
 }
 
-func primaryIP() string {
-	addrs, err := net.InterfaceAddrs()
+func privateIP() string {
+	return privateIPFromInterfaces(net.Interfaces)
+}
+
+func privateIPFromInterfaces(listInterfaces func() ([]net.Interface, error)) string {
+	ifaces, err := listInterfaces()
 	if err != nil {
-		return ""
+		return "-"
 	}
-	for _, addr := range addrs {
-		ipNet, ok := addr.(*net.IPNet)
-		if !ok || ipNet.IP == nil || ipNet.IP.IsLoopback() {
+	out := []string{}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		if ip := ipNet.IP.To4(); ip != nil {
-			return ip.String()
+		addrs, err := interfaceAddrsFunc(iface)
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip := ipFromAddr(addr)
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			if isPrivateNodeIP(ip) {
+				out = append(out, ip.String())
+			}
 		}
 	}
-	return ""
+	if len(out) == 0 {
+		return "-"
+	}
+	return strings.Join(out, ",")
+}
+
+func ipFromAddr(addr net.Addr) net.IP {
+	switch value := addr.(type) {
+	case *net.IPNet:
+		return value.IP
+	case *net.IPAddr:
+		return value.IP
+	default:
+		return nil
+	}
+}
+
+func isPrivateNodeIP(ip net.IP) bool {
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4[0] == 10 ||
+			(ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) ||
+			(ip4[0] == 192 && ip4[1] == 168) ||
+			(ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127)
+	}
+	return ip.IsPrivate()
 }

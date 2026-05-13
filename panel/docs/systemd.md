@@ -41,6 +41,6 @@ systemctl restart edge-tunnel-easytier.service
 systemctl is-active edge-tunnel-easytier.service
 ```
 
-## EasyTier ????
+## EasyTier 启动参数
 
-`edge-tunnel-easytier.service` ? `ExecStart` ?? `easytier-core` CLI ?????`--network-name`?`--network-secret`??? `-l` listeners????? `-p` peers?`/etc/edge-tunnel/agent/easytier.toml` ?????????????????
+`edge-tunnel-easytier.service` 的 `ExecStart` 使用 `easytier-core` CLI 参数生成：`--network-name`、`--network-secret`、多个 `-l` listeners，以及多个 `-p` peers。`/etc/edge-tunnel/agent/easytier.toml` 仍会写入，方便审计和后续模板调整。

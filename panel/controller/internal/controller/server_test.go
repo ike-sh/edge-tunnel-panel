@@ -71,6 +71,19 @@ func get(t *testing.T, h http.Handler, path, token string) *httptest.ResponseRec
 	return rr
 }
 
+func postFromRemote(t *testing.T, h http.Handler, path, token, remoteAddr string, body any) *httptest.ResponseRecorder {
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
 func TestHealthName(t *testing.T) {
 	rr := get(t, testServer(t), "/api/v1/health", "")
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "edge-tunnel-controller") {
@@ -117,14 +130,38 @@ func TestAgentRegisterAndReport(t *testing.T) {
 	}
 }
 
+func TestReportObservedPublicIPFromRemoteAddr(t *testing.T) {
+	h := testServer(t)
+	rr := postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "216.23.88.67:12345", map[string]any{"id": "node-ip", "node_name": "edge-node", "role": "backend"})
+	if rr.Code != 200 {
+		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+	list := get(t, h, "/api/v1/nodes", "operator-token")
+	if !strings.Contains(list.Body.String(), `"public_ip":"216.23.88.67"`) || strings.Contains(list.Body.String(), `"private_ip":"216.23.88.67"`) {
+		t.Fatalf("bad public/private IP fields: %s", list.Body.String())
+	}
+}
+
+func TestReportDoesNotOverwritePrivateIPWithPublicIP(t *testing.T) {
+	h := testServer(t)
+	rr := postFromRemote(t, h, "/api/v1/agent/report", "agent-token", "216.23.101.103:23456", map[string]any{"id": "node-private", "node_name": "edge-node", "role": "backend", "private_ip": "10.0.0.5"})
+	if rr.Code != 200 {
+		t.Fatalf("report failed: %d %s", rr.Code, rr.Body.String())
+	}
+	list := get(t, h, "/api/v1/nodes", "operator-token")
+	if !strings.Contains(list.Body.String(), `"public_ip":"216.23.101.103"`) || !strings.Contains(list.Body.String(), `"private_ip":"10.0.0.5"`) {
+		t.Fatalf("bad public/private IP fields: %s", list.Body.String())
+	}
+}
+
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.6-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "role": "entry", "version": "v0.1.7-test"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
 		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.1.6-test") ||
+		!strings.Contains(body, "--version v0.1.7-test") ||
 		!strings.Contains(body, "--controller-url http://example:18080") ||
 		!strings.Contains(body, "--node-name edge-node") ||
 		!strings.Contains(body, "--role entry") ||

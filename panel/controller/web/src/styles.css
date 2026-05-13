@@ -373,6 +373,17 @@ pre.small {
   font-size: 12px;
 }
 
+.task-output {
+  white-space: pre;
+  overflow-x: auto;
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;

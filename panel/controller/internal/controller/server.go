@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -123,6 +124,20 @@ func stringValue(v any, fallback string) string {
 		return s
 	}
 	return fallback
+}
+func observedPublicIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsPrivate() {
+		return ""
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+		return ""
+	}
+	return ip.String()
 }
 func boolValue(v any) bool { b, _ := v.(bool); return b }
 func intValue(v any) int {
@@ -258,7 +273,12 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	node, err := s.store.upsertReport(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), PublicIP: stringValue(req["public_ip"], ""), PrivateIP: stringValue(req["private_ip"], ""), AgentVersion: stringValue(req["agent_version"], ""), Hostname: stringValue(req["hostname"], ""), OS: stringValue(req["os"], ""), Arch: stringValue(req["arch"], ""), EasyTierIP: stringValue(req["easytier_ip"], ""), EasyTierStatus: stringValue(req["easytier_status"], "unknown"), LastSeenAt: time.Now().UTC(), Status: "online", Capabilities: caps, Labels: map[string]string{}})
+	observedIP := observedPublicIP(r.RemoteAddr)
+	publicIP := stringValue(req["public_ip"], "")
+	if publicIP == "" && observedIP != "" {
+		publicIP = observedIP
+	}
+	node, err := s.store.upsertReport(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), PublicIP: publicIP, PrivateIP: stringValue(req["private_ip"], ""), ObservedIP: observedIP, AgentVersion: stringValue(req["agent_version"], ""), Hostname: stringValue(req["hostname"], ""), OS: stringValue(req["os"], ""), Arch: stringValue(req["arch"], ""), EasyTierIP: stringValue(req["easytier_ip"], ""), EasyTierStatus: stringValue(req["easytier_status"], "unknown"), LastSeenAt: time.Now().UTC(), Status: "online", Capabilities: caps, Labels: map[string]string{}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return

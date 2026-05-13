@@ -1,22 +1,27 @@
 package agent
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var systemdSystemDir = "/etc/systemd/system"
 var easyTierInstallDir = "/usr/local/bin"
+var downloadEasyTierArchiveFunc = downloadEasyTierArchive
 
 const defaultEasyTierVersion = "v2.4.5"
+const maxEasyTierDownloadBytes = 200 << 20
 
 func nodePath(cfg Config) string     { return filepath.Join(cfg.ConfigDir, "node.json") }
 func easyTierPath(cfg Config) string { return filepath.Join(cfg.ConfigDir, "easytier.toml") }
@@ -47,12 +52,6 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 		version := runner.Run(ctx, binary, "--version")
 		return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"message": "already installed", "binary_path": binary, "version": strings.TrimSpace(version.Stdout + version.Stderr)})}
 	}
-	if _, err := findDownloader(runner); err != nil {
-		return TaskResult{Status: "failed", Error: err.Error()}
-	}
-	if _, err := runner.LookPath("unzip"); err != nil {
-		return TaskResult{Status: "failed", Error: "missing dependency: unzip"}
-	}
 	version := stringField(payload, "easytier_version", defaultEasyTierVersion)
 	assetArch, err := easyTierAssetArch(runtime.GOARCH)
 	if err != nil {
@@ -66,11 +65,11 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 	}
 	defer os.RemoveAll(tmp)
 	archivePath := filepath.Join(tmp, asset)
-	if result := downloadFile(ctx, runner, url, archivePath); result.Err != nil || result.ExitCode != 0 {
-		return TaskResult{Status: "failed", Stdout: result.Stdout, Stderr: result.Stderr, Error: "download EasyTier failed: " + errorText(result)}
+	if err := downloadEasyTierArchiveFunc(ctx, url, archivePath); err != nil {
+		return TaskResult{Status: "failed", Error: fmt.Sprintf("download EasyTier failed: %s: %v", url, err), Result: jsonResult(map[string]any{"url": url})}
 	}
-	if result := runner.Run(ctx, "unzip", "-o", archivePath, "-d", tmp); result.Err != nil || result.ExitCode != 0 {
-		return TaskResult{Status: "failed", Stdout: result.Stdout, Stderr: result.Stderr, Error: "unzip EasyTier failed: " + errorText(result)}
+	if err := extractZip(archivePath, tmp); err != nil {
+		return TaskResult{Status: "failed", Error: err.Error(), Result: jsonResult(map[string]any{"archive": archivePath})}
 	}
 	coreSrc, cliSrc, err := locateEasyTierBinaries(tmp)
 	if err != nil {
@@ -91,7 +90,8 @@ func installOrUpdateEasyTier(ctx context.Context, cfg Config, runner CommandRunn
 	if versionResult.Err != nil || versionResult.ExitCode != 0 {
 		return TaskResult{Status: "failed", Stdout: versionResult.Stdout, Stderr: versionResult.Stderr, Error: "easytier-core --version failed: " + errorText(versionResult)}
 	}
-	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"message": "installed", "version": version, "binary_path": coreDst, "cli_path": cliDst})}
+	cliVersion := runner.Run(ctx, cliDst, "--version")
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"message": "installed", "version": version, "binary_path": coreDst, "cli_path": cliDst, "core_version": strings.TrimSpace(versionResult.Stdout + versionResult.Stderr), "cli_version": strings.TrimSpace(cliVersion.Stdout + cliVersion.Stderr), "url": url})}
 }
 
 func applyNetworkProfile(ctx context.Context, cfg Config, runner CommandRunner, payload map[string]any) TaskResult {
@@ -130,7 +130,7 @@ func applyNetworkProfile(ctx context.Context, cfg Config, runner CommandRunner, 
 		for _, args := range [][]string{{"daemon-reload"}, {"enable", "edge-tunnel-easytier.service"}, {"restart", "edge-tunnel-easytier.service"}} {
 			result := runner.Run(ctx, "systemctl", args...)
 			if result.Err != nil || result.ExitCode != 0 {
-				return TaskResult{Status: "failed", Stdout: result.Stdout, Stderr: result.Stderr, Result: "journalctl -u edge-tunnel-easytier -n 100 --no-pager", Error: errorText(result)}
+				return TaskResult{Status: "failed", Stdout: result.Stdout, Stderr: result.Stderr, Result: "systemctl status edge-tunnel-easytier --no-pager\njournalctl -u edge-tunnel-easytier -n 100 --no-pager", Error: errorText(result)}
 			}
 		}
 	}
@@ -138,7 +138,11 @@ func applyNetworkProfile(ctx context.Context, cfg Config, runner CommandRunner, 
 	if verify.Status != "succeeded" {
 		return verify
 	}
-	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"easytier_status": "active", "config_path": easyTierPath(cfg), "service_path": easyTierServiceSystemPath(), "binary_path": easyTierBinary, "listeners": listeners, "peers": peers})}
+	cliPath := ""
+	if found, err := findEasyTierCLI(runner); err == nil {
+		cliPath = found
+	}
+	return TaskResult{Status: "succeeded", Result: jsonResult(map[string]any{"easytier_status": "active", "config_path": easyTierPath(cfg), "service_path": easyTierServiceSystemPath(), "binary_path": easyTierBinary, "cli_path": cliPath, "listeners": listeners, "peers": peers})}
 }
 
 func applyForwardConfig(cfg Config, payload map[string]any) TaskResult {
@@ -378,23 +382,6 @@ func jsonResult(value map[string]any) string {
 	return string(raw)
 }
 
-func findDownloader(runner CommandRunner) (string, error) {
-	if _, err := runner.LookPath("curl"); err == nil {
-		return "curl", nil
-	}
-	if _, err := runner.LookPath("wget"); err == nil {
-		return "wget", nil
-	}
-	return "", fmt.Errorf("missing dependency: curl or wget")
-}
-
-func downloadFile(ctx context.Context, runner CommandRunner, url, dest string) CommandResult {
-	if _, err := runner.LookPath("curl"); err == nil {
-		return runner.Run(ctx, "curl", "-fL", url, "-o", dest)
-	}
-	return runner.Run(ctx, "wget", "-O", dest, url)
-}
-
 func easyTierAssetArch(goarch string) (string, error) {
 	switch goarch {
 	case "amd64":
@@ -404,6 +391,90 @@ func easyTierAssetArch(goarch string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported EasyTier architecture: %s", goarch)
 	}
+}
+
+func downloadEasyTierArchive(ctx context.Context, url, dest string) error {
+	requestCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP status %s", resp.Status)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	limited := io.LimitReader(resp.Body, maxEasyTierDownloadBytes+1)
+	n, err := io.Copy(out, limited)
+	if err != nil {
+		return err
+	}
+	if n > maxEasyTierDownloadBytes {
+		return fmt.Errorf("download exceeds %d bytes", maxEasyTierDownloadBytes)
+	}
+	return nil
+}
+
+func extractZip(archivePath, destDir string) error {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return fmt.Errorf("open EasyTier zip failed: %w", err)
+	}
+	defer reader.Close()
+	cleanDest, err := filepath.Abs(destDir)
+	if err != nil {
+		return err
+	}
+	for _, file := range reader.File {
+		target := filepath.Join(destDir, file.Name)
+		absTarget, err := filepath.Abs(target)
+		if err != nil {
+			return err
+		}
+		if absTarget != cleanDest && !strings.HasPrefix(absTarget, cleanDest+string(os.PathSeparator)) {
+			return fmt.Errorf("unsafe path in EasyTier archive: %s", file.Name)
+		}
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(absTarget, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(absTarget), 0o755); err != nil {
+			return err
+		}
+		src, err := file.Open()
+		if err != nil {
+			return err
+		}
+		dst, err := os.OpenFile(absTarget, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.FileInfo().Mode())
+		if err != nil {
+			src.Close()
+			return err
+		}
+		_, copyErr := io.Copy(dst, src)
+		closeErr := dst.Close()
+		src.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
 }
 
 func easyTierDownloadURL(payload map[string]any, version, asset string) string {
@@ -455,7 +526,7 @@ func copyExecutable(src, dst string) error {
 }
 
 func findEasyTierCore(runner CommandRunner) (string, error) {
-	for _, candidate := range []string{"/usr/local/bin/easytier-core", "/usr/bin/easytier-core"} {
+	for _, candidate := range []string{filepath.Join(easyTierInstallDir, "easytier-core"), "/usr/bin/easytier-core"} {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		}
@@ -467,7 +538,7 @@ func findEasyTierCore(runner CommandRunner) (string, error) {
 }
 
 func findEasyTierCLI(runner CommandRunner) (string, error) {
-	for _, candidate := range []string{"/usr/local/bin/easytier-cli", "/usr/bin/easytier-cli"} {
+	for _, candidate := range []string{filepath.Join(easyTierInstallDir, "easytier-cli"), "/usr/bin/easytier-cli"} {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		}

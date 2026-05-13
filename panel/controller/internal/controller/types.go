@@ -3,7 +3,7 @@ package controller
 import "time"
 
 var (
-	Version = "v0.1.6-test"
+	Version = "v0.1.7-test"
 	Commit  = "dev"
 	Date    = "unknown"
 )
@@ -37,6 +37,7 @@ type Node struct {
 	Role           string            `json:"role"`
 	PublicIP       string            `json:"public_ip"`
 	PrivateIP      string            `json:"private_ip"`
+	ObservedIP     string            `json:"observed_ip"`
 	AgentVersion   string            `json:"agent_version"`
 	Hostname       string            `json:"hostname"`
 	OS             string            `json:"os"`

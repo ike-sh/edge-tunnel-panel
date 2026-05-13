@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,36 +40,6 @@ type installRunner struct {
 
 func (r *installRunner) Run(ctx context.Context, name string, args ...string) CommandResult {
 	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
-	if name == "curl" || name == "wget" {
-		dest := args[len(args)-1]
-		if name == "curl" {
-			dest = args[len(args)-1]
-		}
-		if name == "wget" {
-			dest = args[1]
-		}
-		raw, err := os.ReadFile(r.archive)
-		if err != nil {
-			return CommandResult{Err: err, ExitCode: 1}
-		}
-		if err := os.WriteFile(dest, raw, 0o644); err != nil {
-			return CommandResult{Err: err, ExitCode: 1}
-		}
-		return CommandResult{Stdout: "downloaded", ExitCode: 0}
-	}
-	if name == "unzip" {
-		dest := args[len(args)-1]
-		if err := os.MkdirAll(filepath.Join(dest, "pkg"), 0o755); err != nil {
-			return CommandResult{Err: err, ExitCode: 1}
-		}
-		if err := os.WriteFile(filepath.Join(dest, "pkg", "easytier-core"), []byte("core"), 0o755); err != nil {
-			return CommandResult{Err: err, ExitCode: 1}
-		}
-		if err := os.WriteFile(filepath.Join(dest, "pkg", "easytier-cli"), []byte("cli"), 0o755); err != nil {
-			return CommandResult{Err: err, ExitCode: 1}
-		}
-		return CommandResult{Stdout: "unzipped", ExitCode: 0}
-	}
 	if strings.HasSuffix(name, "easytier-core") && len(args) == 1 && args[0] == "--version" {
 		return CommandResult{Stdout: "easytier v2.4.5", ExitCode: 0}
 	}
@@ -89,8 +60,13 @@ func testConfig(t *testing.T) Config {
 	t.Helper()
 	t.Setenv("EDGE_TEST", "1")
 	oldSystemdDir := systemdSystemDir
+	oldInstallDir := easyTierInstallDir
 	systemdSystemDir = filepath.Join(t.TempDir(), "systemd-system")
-	t.Cleanup(func() { systemdSystemDir = oldSystemdDir })
+	easyTierInstallDir = filepath.Join(t.TempDir(), "bin")
+	t.Cleanup(func() {
+		systemdSystemDir = oldSystemdDir
+		easyTierInstallDir = oldInstallDir
+	})
 	cfg := DefaultConfig()
 	cfg.ControllerURL = "http://127.0.0.1:18080"
 	cfg.ControllerToken = "secret-token"
@@ -202,6 +178,39 @@ func TestCollectStatusReturnsEdgeCapabilities(t *testing.T) {
 		if _, ok := status.Capabilities[key]; !ok {
 			t.Fatalf("missing capability %s in %+v", key, status.Capabilities)
 		}
+	}
+}
+
+func TestPrivateIPCollectRFC1918Only(t *testing.T) {
+	ifaces := []net.Interface{
+		{Index: 1, Flags: net.FlagUp},
+	}
+	ipv4 := net.IPv4(10, 0, 0, 5)
+	public := net.IPv4(216, 23, 88, 67)
+	oldAddrs := interfaceAddrsFunc
+	interfaceAddrsFunc = func(iface net.Interface) ([]net.Addr, error) {
+		return []net.Addr{
+			&net.IPNet{IP: public, Mask: net.CIDRMask(24, 32)},
+			&net.IPNet{IP: ipv4, Mask: net.CIDRMask(24, 32)},
+		}, nil
+	}
+	t.Cleanup(func() { interfaceAddrsFunc = oldAddrs })
+	got := privateIPFromInterfaces(func() ([]net.Interface, error) { return ifaces, nil })
+	if got != "10.0.0.5" {
+		t.Fatalf("expected RFC1918 private IP only, got %q", got)
+	}
+}
+
+func TestPublicIPNotUsedAsPrivateIP(t *testing.T) {
+	ifaces := []net.Interface{{Index: 1, Flags: net.FlagUp}}
+	oldAddrs := interfaceAddrsFunc
+	interfaceAddrsFunc = func(iface net.Interface) ([]net.Addr, error) {
+		return []net.Addr{&net.IPNet{IP: net.IPv4(216, 23, 88, 67), Mask: net.CIDRMask(24, 32)}}, nil
+	}
+	t.Cleanup(func() { interfaceAddrsFunc = oldAddrs })
+	got := privateIPFromInterfaces(func() ([]net.Interface, error) { return ifaces, nil })
+	if got != "-" {
+		t.Fatalf("expected no private IP, got %q", got)
 	}
 }
 
@@ -333,9 +342,14 @@ func TestApplyNetworkProfileWritesSystemdService(t *testing.T) {
 func TestApplyNetworkProfileMissingBinaryReturnsError(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
+	oldDownload := downloadEasyTierArchiveFunc
+	downloadEasyTierArchiveFunc = func(ctx context.Context, url, dest string) error {
+		return errors.New("network unavailable")
+	}
+	t.Cleanup(func() { downloadEasyTierArchiveFunc = oldDownload })
 	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "apply_network_profile", Payload: map[string]any{"network_name": "edge-prod"}})
-	if result.Status != "failed" || !strings.Contains(result.Error, "missing dependency") {
-		t.Fatalf("expected missing binary failure: %+v", result)
+	if result.Status != "failed" || !strings.Contains(result.Error, "download EasyTier failed") {
+		t.Fatalf("expected download failure: %+v", result)
 	}
 	if _, err := os.Stat(easyTierPath(cfg)); err != nil {
 		t.Fatalf("config should still be written: %v", err)
@@ -389,12 +403,31 @@ func TestInstallEasyTierAlreadyInstalled(t *testing.T) {
 	}
 }
 
-func TestInstallEasyTierMissingDependencies(t *testing.T) {
+func TestInstallEasyTierDoesNotRequireUnzip(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
-	result := ExecuteTask(context.Background(), cfg, &fakeRunner{}, Task{Action: "install_or_update_easytier", Payload: map[string]any{}})
-	if result.Status != "failed" || !strings.Contains(result.Error, "missing dependency") {
-		t.Fatalf("expected dependency failure: %+v", result)
+	oldInstallDir := easyTierInstallDir
+	oldDownload := downloadEasyTierArchiveFunc
+	easyTierInstallDir = filepath.Join(t.TempDir(), "bin")
+	archive := createEasyTierArchive(t)
+	downloadEasyTierArchiveFunc = func(ctx context.Context, url, dest string) error {
+		raw, err := os.ReadFile(archive)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, raw, 0o644)
+	}
+	t.Cleanup(func() {
+		easyTierInstallDir = oldInstallDir
+		downloadEasyTierArchiveFunc = oldDownload
+	})
+	runner := &installRunner{installDir: easyTierInstallDir}
+	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "install_or_update_easytier", Payload: map[string]any{}})
+	if result.Status != "succeeded" {
+		t.Fatalf("expected install without unzip: %+v", result)
+	}
+	if strings.Contains(strings.Join(runner.calls, "\n"), "unzip") {
+		t.Fatalf("install should not call system unzip: %s", strings.Join(runner.calls, "\n"))
 	}
 }
 
@@ -402,18 +435,47 @@ func TestApplyNetworkProfileAutoInstallCalledWhenMissingBinary(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.EnableWriteActions = true
 	oldInstallDir := easyTierInstallDir
+	oldDownload := downloadEasyTierArchiveFunc
 	easyTierInstallDir = filepath.Join(t.TempDir(), "bin")
-	t.Cleanup(func() { easyTierInstallDir = oldInstallDir })
 	archive := createEasyTierArchive(t)
-	runner := &installRunner{archive: archive, installDir: easyTierInstallDir}
-	runner.paths = map[string]bool{"curl": true, "unzip": true}
+	downloadEasyTierArchiveFunc = func(ctx context.Context, url, dest string) error {
+		raw, err := os.ReadFile(archive)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, raw, 0o644)
+	}
+	t.Cleanup(func() {
+		easyTierInstallDir = oldInstallDir
+		downloadEasyTierArchiveFunc = oldDownload
+	})
+	runner := &installRunner{installDir: easyTierInstallDir}
 	result := ExecuteTask(context.Background(), cfg, runner, Task{Action: "apply_network_profile", Payload: map[string]any{"network_name": "edge-prod", "network_secret": "secret"}})
 	if result.Status != "succeeded" {
 		t.Fatalf("expected auto install apply success: %+v", result)
 	}
 	joined := strings.Join(runner.calls, "\n")
-	if !strings.Contains(joined, "curl -fL") || !strings.Contains(joined, "unzip -o") {
-		t.Fatalf("expected download and unzip calls: %s", joined)
+	if strings.Contains(joined, "unzip") {
+		t.Fatalf("unexpected unzip call: %s", joined)
+	}
+}
+
+func TestInstallEasyTierArchiveMissingCoreFails(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.EnableWriteActions = true
+	oldDownload := downloadEasyTierArchiveFunc
+	archive := createEasyTierArchiveWithFiles(t, []string{"pkg/easytier-cli"})
+	downloadEasyTierArchiveFunc = func(ctx context.Context, url, dest string) error {
+		raw, err := os.ReadFile(archive)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, raw, 0o644)
+	}
+	t.Cleanup(func() { downloadEasyTierArchiveFunc = oldDownload })
+	result := ExecuteTask(context.Background(), cfg, &installRunner{}, Task{Action: "install_or_update_easytier", Payload: map[string]any{}})
+	if result.Status != "failed" || !strings.Contains(result.Error, "easytier-core") {
+		t.Fatalf("expected missing core failure: %+v", result)
 	}
 }
 
@@ -452,6 +514,10 @@ func TestVerifyEasyTierStatusUsesEasyTierCLIWhenAvailable(t *testing.T) {
 }
 
 func createEasyTierArchive(t *testing.T) string {
+	return createEasyTierArchiveWithFiles(t, []string{"pkg/easytier-core", "pkg/easytier-cli"})
+}
+
+func createEasyTierArchiveWithFiles(t *testing.T, files []string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "easytier.zip")
 	file, err := os.Create(path)
@@ -459,7 +525,7 @@ func createEasyTierArchive(t *testing.T) string {
 		t.Fatal(err)
 	}
 	zw := zip.NewWriter(file)
-	for _, name := range []string{"pkg/easytier-core", "pkg/easytier-cli"} {
+	for _, name := range files {
 		w, err := zw.Create(name)
 		if err != nil {
 			t.Fatal(err)

@@ -4,7 +4,7 @@ import './styles.css';
 
 const TOKEN_KEY = 'edgeTunnelOperatorToken';
 const API_BASE_KEY = 'edgeTunnelApiBase';
-const DEFAULT_VERSION = 'v0.1.6-test';
+const DEFAULT_VERSION = 'v0.1.7-test';
 
 const tabs = [
   ['dashboard', '总览'],
@@ -24,6 +24,7 @@ const readonlyActions = [
   'verify_forward_rules',
   'verify_pbr_rules',
   'verify_ddns_status',
+  'install_or_update_easytier',
   'restart_easytier',
   'restart_agent'
 ];
@@ -92,10 +93,19 @@ function lines(value) {
   return String(value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
 }
 
-function summarize(value) {
+function formatOutput(value) {
   if (value === null || value === undefined || value === '') return '-';
-  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  return text.length > 420 ? `${text.slice(0, 420)}...` : text;
+  if (typeof value !== 'string') return JSON.stringify(value, null, 2);
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch { return value; }
+  }
+  return value;
+}
+
+function summarize(value) {
+  const text = formatOutput(value);
+  return text.length > 420 ? text.slice(0, 420) + '...' : text;
 }
 
 function statusClass(status) {
@@ -556,7 +566,7 @@ function App() {
                 <div className="cap-list">{Object.keys(node.capabilities || {}).filter((key) => node.capabilities[key]).map((key) => <span className="cap" key={key}>{key}</span>)}</div>
                 <div className="actions"><button className="secondary" onClick={() => setOpenNodeActions(openNodeActions === node.id ? '' : node.id)}>节点操作</button></div>
                 {openNodeActions === node.id && <div className="action-panel">
-                  {readonlyActions.map((action) => <button key={action} className={action.startsWith('restart_') ? 'warning' : 'secondary'} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}
+                  {readonlyActions.map((action) => <button key={action} className={(action.startsWith('restart_') || action === 'install_or_update_easytier') ? 'warning' : 'secondary'} onClick={() => createTask(node.id, action)}>{actionText[action] || action}</button>)}
                   <p className="muted">重启动作会修改节点服务状态，请只在可信节点执行。</p>
                 </div>}
               </div>
@@ -799,6 +809,14 @@ function Field({ label, value, onChange, type = 'text', required = false }) {
   return <label>{label}<input type={type} value={value} required={required} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
+function TaskOutput({ task }) {
+  const content = formatOutput(task.error || task.result || task.stderr || task.stdout);
+  if (task.status === 'failed') {
+    return <details open><summary>查看错误</summary><pre className="small task-output">{content}</pre></details>;
+  }
+  return <details><summary>查看输出</summary><pre className="small task-output">{content}</pre></details>;
+}
+
 function Select({ label, value, options, onChange }) {
   return (
     <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}>
@@ -831,7 +849,7 @@ function TaskTable({ tasks, compact = false }) {
     <div className="table-wrap">
       <table>
         <thead><tr><th>ID</th><th>节点</th><th>action</th><th>状态</th><th>创建时间</th>{!compact && <th>开始</th>}{!compact && <th>完成</th>}{!compact && <th>输出</th>}</tr></thead>
-        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{task.node_id || '-'}</td><td>{actionText[task.action] || task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><pre className="small">{summarize(task.error || task.stdout || task.stderr || task.result)}</pre></td>}</tr>)}</tbody>
+        <tbody>{tasks.map((task) => <tr key={task.id}><td><code>{task.id}</code></td><td>{task.node_id || '-'}</td><td>{actionText[task.action] || task.action}</td><td><span className={statusClass(task.status)}>{trStatus(task.status)}</span></td><td>{formatTime(task.created_at)}</td>{!compact && <td>{formatTime(task.started_at)}</td>}{!compact && <td>{formatTime(task.finished_at)}</td>}{!compact && <td><TaskOutput task={task} /></td>}</tr>)}</tbody>
       </table>
     </div>
   );
