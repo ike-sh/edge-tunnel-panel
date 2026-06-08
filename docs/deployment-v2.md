@@ -198,11 +198,22 @@ sudo bash panel/scripts/setup-production-edge.sh --caddy --open-ssh
 适合已有 Docker 的环境，Traefik 自动 HTTPS + WebSocket 反代。
 
 ```bash
-cp panel/examples/env.traefik.example panel/examples/.env
-# 编辑 DOMAIN、ACME_EMAIL
+cp panel/examples/.env.example panel/examples/.env
+# 编辑 DOMAIN、ACME_EMAIL（域名需解析到本机公网 IP）
 docker compose -f panel/examples/docker-compose.traefik.yml --env-file panel/examples/.env up -d --build
 docker compose -f panel/examples/docker-compose.traefik.yml logs -f controller
 ```
+
+**本地 smoke test（HTTP，无需域名）**：
+
+```bash
+# 需先构建镜像 edge-tunnel-panel:v0.3.1（见 README 维护者章节）
+cd panel/examples
+docker compose -f docker-compose.traefik.local.yml up -d
+curl -fsS http://127.0.0.1:18088/api/v1/health
+```
+
+国内拉取基础镜像可在 build 时指定 `BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim`；Traefik 可使用 `docker.m.daocloud.io/library/traefik:v3.3`。
 
 文件：
 - `panel/examples/docker-compose.traefik.yml`

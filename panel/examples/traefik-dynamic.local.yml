@@ -1,0 +1,12 @@
+http:
+  routers:
+    etp:
+      rule: PathPrefix(`/`)
+      entryPoints:
+        - web
+      service: etp
+  services:
+    etp:
+      loadBalancer:
+        servers:
+          - url: http://controller:18080
