@@ -11,6 +11,11 @@ import (
 	"github.com/ike-sh/edge-tunnel-panel/panel/controller/internal/controller"
 )
 
+const (
+	defaultOperatorToken = "edge-operator-token"
+	defaultAgentToken    = "edge-agent-token"
+)
+
 var version = "v0.3.1"
 
 func getenv(key, fallback string) string {
@@ -30,9 +35,12 @@ func main() {
 	listen := getenv("EDGE_LISTEN", "0.0.0.0:18080")
 	dataDir := getenv("EDGE_DATA_DIR", "/var/lib/edge-tunnel/controller")
 	webDir := getenv("EDGE_WEB_DIR", filepath.Join(dataDir, "web"))
-	operatorToken := getenv("EDGE_OPERATOR_TOKEN", "edge-operator-token")
-	agentToken := getenv("EDGE_CONTROLLER_TOKEN", "edge-agent-token")
+	operatorToken := getenv("EDGE_OPERATOR_TOKEN", defaultOperatorToken)
+	agentToken := getenv("EDGE_CONTROLLER_TOKEN", defaultAgentToken)
 	strict := getenv("EDGE_STRICT_AUTH", "true") == "true"
+	if strict && (operatorToken == defaultOperatorToken || agentToken == defaultAgentToken) {
+		log.Fatal("EDGE_STRICT_AUTH=true 时必须设置自定义 EDGE_OPERATOR_TOKEN 与 EDGE_CONTROLLER_TOKEN；生产请使用 quick-install.sh 安装")
+	}
 	store, err := controller.OpenStore(filepath.Join(dataDir, "store.json"))
 	if err != nil {
 		log.Fatal(err)

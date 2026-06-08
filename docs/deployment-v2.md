@@ -224,8 +224,15 @@ curl -fsS http://127.0.0.1:18088/api/v1/health
 ## 4.4 Kubernetes Helm
 
 ```bash
-# 1. 构建/推送镜像（见 docker/Dockerfile）
+# 1. 构建并推送镜像（见 panel/examples/docker/Dockerfile.local）
+docker build -f panel/examples/docker/Dockerfile.local \
+  --build-arg VERSION=v0.3.1 \
+  -t your-registry/edge-tunnel-panel:v0.3.1 panel/dist
+docker push your-registry/edge-tunnel-panel:v0.3.1
+
 helm upgrade --install etp panel/examples/helm/edge-tunnel-panel \
+  --set image.repository=your-registry/edge-tunnel-panel \
+  --set image.tag=v0.3.1 \
   --set ingress.hosts[0].host=panel.example.com \
   --set env.EDGE_OPERATOR_TOKEN=YOUR_TOKEN
 ```
@@ -253,11 +260,11 @@ Chart：`panel/examples/helm/edge-tunnel-panel`（Deployment + PVC + Ingress + c
 ### WebSocket 机器流
 
 ```
-ws://<controller>/api/v2/stream/machines?token=<operator-token>
+wss://<controller>/api/v2/stream/machines
 ```
 
-- 严格鉴权：`Authorization: Bearer` 或 query `token`
-- 每 **2s** 推送：`{ type: "snapshot", machines: [...], nodes: [...] }`
+- 连接建立后首帧发送 `{"type":"auth","token":"<operator-token>"}`（**禁止** query `?token=`）
+- 服务端回复 `auth_ok` 后，每 **2s** 推送：`{ type: "snapshot", machines: [...], nodes: [...] }`
 - 服务端每 30s Ping；客户端 15s 无消息自动重连
 - `machines[].status` 由 Node 心跳推导（online / stale / offline）
 
@@ -282,9 +289,9 @@ MACHINE_ID=<uuid> CONTROLLER_URL=http://127.0.0.1:18080 node panel/scripts/mock-
 BASE=http://127.0.0.1:18080 bash panel/scripts/e2e-v2-smoke.sh
 ```
 
-PowerShell 等价：`EDGE_LISTEN=127.0.0.1:8080` + `Invoke-RestMethod` 调用 v2 API。
+PowerShell 等价：`EDGE_LISTEN=127.0.0.1:18080` + `Invoke-RestMethod` 调用 v2 API。
 
-## 6. 主要 v2 API
+## 7. 主要 v2 API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -299,7 +306,7 @@ PowerShell 等价：`EDGE_LISTEN=127.0.0.1:8080` + `Invoke-RestMethod` 调用 v2
 | GET | `/api/v2/stream/machines` | WebSocket 实时 snapshot |
 | GET | `/api/v2/tasks/:id/stream` | SSE 任务进度 |
 
-## 7. flux-panel 参考对照
+## 8. flux-panel 参考对照
 
 参考项目：[flux-panel](https://github.com/bqlpfy/flux-panel)（GOST 面板，作者已暂停更新，但 UI/交互模式成熟）。
 
@@ -348,7 +355,7 @@ flux:  User → Tunnel(inNode/outNode) → Forward(listen→remote)
 ETP:   Machine → Profile(ix line) → Rules(nat/transit/landing ports)
 ```
 
-## 8. 故障排查
+## 9. 故障排查
 
 | 现象 | 排查 |
 |------|------|
@@ -359,7 +366,7 @@ ETP:   Machine → Profile(ix line) → Rules(nat/transit/landing ports)
 | CPU/流量始终为 0 | 非 Linux Agent；或仅第一次 heartbeat（需第二次才有速率） |
 | 机器 online 但 Node offline | 刷新页面；WS 每 2s 从 Node 推导机器状态 |
 
-## 9. 相关文档
+## 10. 相关文档
 
 - [ix-transit-fabric 迁移设计](./migration-ix-transit-fabric-design.md)
 - flux-panel 参考 clone：`D:\code\_ref\flux-panel\vite-frontend\`

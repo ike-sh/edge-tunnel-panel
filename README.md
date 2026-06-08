@@ -156,108 +156,59 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge --remove-easytier-binaries
 ```
 
-## Web 使用流程
+## Web 使用流程（v2）
 
-1. “节点”页添加 A 节点和 B 节点。
-2. “组网链路”页创建链路：
-   - EasyTier 链路：自动安装/启动 EasyTier，A 与 B 建立 peer。
-   - 直连链路：填写 A 可访问的 B 公网 IP、专线 IP 或内网 IP，不安装 EasyTier。
-3. “转发规则”页选择链路，填写公网监听端口、落地服务器 IP/域名、落地端口，点击“创建并应用转发”。
-4. “出口策略 / PBR”页选择 B 落地节点，先识别出口线路，再选择线路组和转发规则创建策略。
-5. 需要暂停时，对组网链路、转发规则或 PBR 策略执行“停用”；需要恢复时执行“启用/应用”。
-6. 出现问题时进入“诊断”，运行一键诊断并复制报告。
+1. **登录**：打开 `/login`，粘贴安装时输出的 Operator Token。
+2. **机器**：「机器」页添加 NAT IX 机器 →「安装向导」复制命令到目标服务器执行 Agent 安装。
+3. **线路**：「线路」页通过向导创建 NAT IX Profile，填写落地地址与端口规则。
+4. **应用**：在线路详情点击「应用 / 同步」，在「任务」页查看 SSE 进度。
+5. **接入码**：NAT IX 线路在「接入码」Tab 复制完整码；公网入口机器通过「导入接入码」向导加入。
+6. **诊断**：「诊断」页或线路详情一键诊断，报告可复制为 Markdown。
 
-## 直连链路
+> v1 页面（组网链路 / 转发规则 / PBR 独立页）已废弃，能力合并到 **线路 Profile + ix-transit-fabric**。临时恢复 v1 API：`EDGE_LEGACY_V1_API=1`。
 
-直连链路适合前海 IX、IPLC、A/B 公网互通或内网专线互通场景。它不依赖 EasyTier：
+## 线路 Profile 与规则
+
+一条线路对应 ix-transit-fabric 的一个 Profile，规则描述 NAT IX / 公网入口 / 落地端口映射：
 
 ```text
-外部用户 -> A 公网端口 -> A nftables -> B 可达地址:中继端口 -> B nftables -> 落地服务器:端口
+外部用户 -> 公网入口监听端口 -> NAT IX 中继 -> 落地服务器:端口
 ```
-
-创建直连链路时需要填写：
-
-- A 公网入口节点
-- B 落地节点
-- B 可达地址
-- 默认中继端口
-- TCP / UDP 协议
-
-## 转发规则
-
-当前 MVP 使用两段 nftables：
-
-- A 侧：公网监听端口 -> B 的 EasyTier IP 或直连可达地址。
-- B 侧：中继端口 -> 落地服务器 IP/域名:端口。
 
 测试示例：
 
 ```bash
-# B 或落地服务器上
+# 落地服务器上
 python3 -m http.server 8080 --bind 0.0.0.0
 
-# 外部客户端
+# 外部客户端（公网入口 IP + 规则中的监听端口）
 curl -v http://A公网IP:18081/
 ```
 
-排查命令：
+排查命令（Agent 所在机器）：
 
 ```bash
-nft list table ip edge_tunnel_entry_forward
-nft list table ip edge_tunnel_landing_forward
-cat /proc/sys/net/ipv4/ip_forward
 journalctl -u edge-tunnel-agent -n 100 --no-pager
+# ix-transit-fabric / nftables 状态见诊断报告
 ```
 
-## 出口策略 / PBR
+## 删除机器与远程清理
 
-PBR 主要用于具备多出口线路的 B 落地节点。面板不会让用户手填出口接口和网关，而是让 Agent 识别线路组，例如 9929、CN2、JPSDWAN、DESDWAN、KRSDWAN 等。识别成功后选择线路组，网关、table、fwmark、priority 自动带出。
+删除机器时可选择：
 
-推荐流程：
+- **仅删除记录**：保留 Agent 与现场配置。
+- **远程清理**：清理已部署的 Profile / 转发配置，保留 Agent。
+- **卸载 Agent**：清理并卸载 Agent 服务。
 
-1. 确认转发已跑通。
-2. 进入“出口策略 / PBR”。
-3. 选择 B 落地节点。
-4. 点击“识别出口线路”。
-5. 选择识别到的线路组。
-6. 选择转发规则。
-7. 创建并应用策略。
-8. 验证策略。
-
-如果没有识别到线路组，说明该节点可能不是多出口节点，不建议创建 PBR。
-
-## MSS / MTU
-
-默认 MTU 为 1380，默认启用 MSS clamp。它用于缓解 EasyTier、tun、多层 NAT 转发下的大包异常、网页卡顿或 TLS 握手后无响应问题。
-
-可在组网高级参数中调整：
-
-- MTU
-- MSS clamp 开关
-- auto / fixed / disabled 模式
-- 固定 MSS 值
-
-## 删除节点与远程清理
-
-删除节点支持三种模式：
-
-- `record_only`：仅删除 Controller 记录。
-- `clean_deployed`：远程清理 EasyTier、nftables 转发表、PBR、MSS、转发配置和组网配置，保留 Agent。
-- `purge_agent`：清理部署内容并卸载 Agent。
-
-如果节点离线，Controller 无法远程清理，只能删除面板记录或等待节点上线后再清理。
+机器离线时 Controller 无法远程清理，只能删除面板记录或等待上线后再清理。
 
 ## 一键诊断
 
 诊断会创建只读任务，收集：
 
 - Controller 版本和存储摘要
-- 节点在线状态
-- Agent 状态
-- EasyTier 状态和 peer/route
-- nftables 转发表
-- PBR 线路组和策略
-- MSS/MTU 状态
+- 机器 / Agent 在线状态
+- ix-transit-fabric Profile 健康与端口映射
 - 最近失败任务
 
 诊断报告可复制为 Markdown，方便粘贴排查。

@@ -30,7 +30,7 @@ export default function Topbar({ health, version, strictAuth, loading, onRefresh
         </button>
         <div>
           <h1>{title}</h1>
-          <p>组网、转发、出口策略与任务排障控制台</p>
+          <p>机器、线路 Profile 与任务排障控制台</p>
         </div>
       </div>
       <div className="topbar-actions">

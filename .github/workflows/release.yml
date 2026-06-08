@@ -30,6 +30,15 @@ jobs:
           cache: npm
           cache-dependency-path: panel/controller/web/package-lock.json
 
+      - name: Go test
+        working-directory: panel/controller
+        run: go test ./...
+
+      - name: Web build check
+        run: |
+          npm ci --prefix panel/controller/web
+          npm run build --prefix panel/controller/web
+
       - name: Build release packages
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}

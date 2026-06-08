@@ -2,7 +2,7 @@
 # E2E smoke test for v2 API (no Agent required).
 set -euo pipefail
 
-BASE="${BASE:-http://127.0.0.1:8080}"
+BASE="${BASE:-http://127.0.0.1:18080}"
 TOKEN="${TOKEN:-}"
 
 auth=()

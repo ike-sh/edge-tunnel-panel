@@ -6,6 +6,7 @@
 
 services:
   traefik:
+    # 国内可将 image 改为 docker.m.daocloud.io/library/traefik:v3.3
     image: traefik:v3.3
     restart: unless-stopped
     ports:
