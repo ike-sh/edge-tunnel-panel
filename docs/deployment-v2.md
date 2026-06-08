@@ -88,6 +88,7 @@ curl -fsSL .../install-agent.sh | bash -s -- \
 | `/tasks` | 任务 | 过滤 + SSE 联动 |
 | `/diagnostics` | 诊断 | 一键 ix_read_health |
 | `/settings` | 设置 | Token / API Base |
+| `/login` | 登录 | 严格鉴权时输入 Operator Token（参考 flux 独立登录页） |
 
 **H5 移动布局**（参考 flux-panel `layouts/h5.tsx`）：
 - 视口 ≤768px 自动启用，或通过 `?h5=true` / `?h5=false` 强制开关
