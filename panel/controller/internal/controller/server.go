@@ -198,6 +198,34 @@ func numberValue(v any) int {
 	}
 }
 
+func uint64Value(v any) uint64 {
+	switch n := v.(type) {
+	case float64:
+		if n < 0 {
+			return 0
+		}
+		return uint64(n)
+	case int:
+		if n < 0 {
+			return 0
+		}
+		return uint64(n)
+	case int64:
+		if n < 0 {
+			return 0
+		}
+		return uint64(n)
+	case json.Number:
+		value, _ := n.Int64()
+		if value < 0 {
+			return 0
+		}
+		return uint64(value)
+	default:
+		return 0
+	}
+}
+
 func floatValue(v any) float64 {
 	switch n := v.(type) {
 	case float64:
@@ -434,7 +462,7 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 	if publicIP == "" && observedIP != "" {
 		publicIP = observedIP
 	}
-	node, err := s.store.upsertReport(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), PublicIP: publicIP, PrivateIP: stringValue(req["private_ip"], ""), ObservedIP: observedIP, AgentVersion: stringValue(req["agent_version"], ""), Hostname: stringValue(req["hostname"], ""), OS: stringValue(req["os"], ""), Arch: stringValue(req["arch"], ""), EasyTierIP: stringValue(req["easytier_ip"], ""), EasyTierStatus: stringValue(req["easytier_status"], "unknown"), EasyTierPeerCount: numberValue(req["easytier_peer_count"]), EasyTierHasRemotePeer: boolValue(req["easytier_has_remote_peer"]), EasyTierBestLatencyMS: floatValue(req["easytier_best_latency_ms"]), EasyTierPacketLoss: stringValue(req["easytier_packet_loss"], ""), EasyTierTunnels: stringListValue(req["easytier_tunnels"]), EasyTierRouteType: stringValue(req["easytier_route_type"], ""), EasyTierNetworkOK: boolValue(req["easytier_network_ok"]), EasyTierNetworkReason: stringValue(req["easytier_network_reason"], ""), EasyTierDHCPEnabled: boolValue(req["easytier_dhcp_enabled"]), EasyTierCIDR: stringValue(req["easytier_cidr"], ""), LastSeenAt: time.Now().UTC(), Status: "online", StatusReason: "recent heartbeat normal", Capabilities: caps, Labels: map[string]string{}})
+	node, err := s.store.upsertReport(Node{ID: stringValue(req["id"], ""), Name: stringValue(req["name"], stringValue(req["node_name"], "edge-node")), Role: stringValue(req["role"], "relay"), PublicIP: publicIP, PrivateIP: stringValue(req["private_ip"], ""), ObservedIP: observedIP, AgentVersion: stringValue(req["agent_version"], ""), Hostname: stringValue(req["hostname"], ""), OS: stringValue(req["os"], ""), Arch: stringValue(req["arch"], ""), EasyTierIP: stringValue(req["easytier_ip"], ""), EasyTierStatus: stringValue(req["easytier_status"], "unknown"), EasyTierPeerCount: numberValue(req["easytier_peer_count"]), EasyTierHasRemotePeer: boolValue(req["easytier_has_remote_peer"]), EasyTierBestLatencyMS: floatValue(req["easytier_best_latency_ms"]), EasyTierPacketLoss: stringValue(req["easytier_packet_loss"], ""), EasyTierTunnels: stringListValue(req["easytier_tunnels"]), EasyTierRouteType: stringValue(req["easytier_route_type"], ""), EasyTierNetworkOK: boolValue(req["easytier_network_ok"]), EasyTierNetworkReason: stringValue(req["easytier_network_reason"], ""), EasyTierDHCPEnabled: boolValue(req["easytier_dhcp_enabled"]), EasyTierCIDR: stringValue(req["easytier_cidr"], ""), CPUPercent: floatValue(req["cpu_percent"]), MemPercent: floatValue(req["mem_percent"]), MemTotalMB: uint64Value(req["mem_total_mb"]), MemUsedMB: uint64Value(req["mem_used_mb"]), UptimeSec: uint64Value(req["uptime_sec"]), BytesSent: uint64Value(req["bytes_sent"]), BytesReceived: uint64Value(req["bytes_received"]), NetTxBPS: uint64Value(req["net_tx_bps"]), NetRxBPS: uint64Value(req["net_rx_bps"]), LastSeenAt: time.Now().UTC(), Status: "online", StatusReason: "recent heartbeat normal", Capabilities: caps, Labels: map[string]string{}})
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return

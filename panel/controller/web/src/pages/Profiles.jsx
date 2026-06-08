@@ -4,20 +4,20 @@ import StatusBadge from '../components/StatusBadge.jsx';
 
 const roleLabel = { 'nat-transit': 'NAT IX 线路', 'nat-ingress': '公网入口线路' };
 
-export default function Profiles({ profiles, machines, onRefresh, onCreate, onApply, onSync, onOpen, loading }) {
+export default function Profiles({ profiles, machines, onRefresh, onCreate, onOpenWizard, onApply, onSync, onOpen, loading }) {
   const machineMap = Object.fromEntries((machines || []).map((m) => [m.id, m]));
+  const handleCreate = onOpenWizard || onCreate;
 
   return (
     <div className="page-stack">
       <Card
         title="线路 Profile"
         description="一条线路对应 ix-transit-fabric 的一个 Profile。NAT IX 创建线路，公网入口导入接入码。"
-        actions={<button className="secondary" onClick={onRefresh} disabled={loading}>{loading ? '刷新中' : '刷新'}</button>}
+        actions={<button type="button" className="secondary" onClick={onRefresh} disabled={loading}>{loading ? '刷新中' : '刷新'}</button>}
       >
         <div className="actions" style={{ marginBottom: '1rem' }}>
-          <button onClick={onCreate}>创建 NAT IX 线路</button>
-        </div>
-        <DataTable
+          <button type="button" onClick={handleCreate}>创建 NAT IX 线路</button>
+        </div>        <DataTable
           rows={profiles}
           empty="暂无线路。"
           columns={[

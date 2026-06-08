@@ -355,3 +355,22 @@ func parseIXRules(raw, profileID string) []IXRule {
 	}
 	return nil
 }
+
+func (s *Store) updateIXProfileRules(profileID string, rules []IXRule) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.IXProfiles {
+		if s.data.IXProfiles[i].ID != profileID {
+			continue
+		}
+		for j := range rules {
+			if rules[j].ProfileID == "" {
+				rules[j].ProfileID = profileID
+			}
+		}
+		s.data.IXProfiles[i].Rules = rules
+		s.data.IXProfiles[i].UpdatedAt = now()
+		return s.saveLocked()
+	}
+	return fmt.Errorf("profile not found")
+}

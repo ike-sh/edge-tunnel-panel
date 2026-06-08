@@ -93,6 +93,16 @@ func CollectStatus(ctx context.Context, cfg Config, runner CommandRunner) AgentS
 	status.EasyTierNetworkOK = diagnostics.NetworkOK
 	status.EasyTierNetworkReason = diagnostics.Reason
 	status.EasyTierDHCPEnabled, status.EasyTierCIDR = easyTierDHCPInfo(cfg)
+	sys := CollectSystemMetrics()
+	status.CPUPercent = sys.CPUPercent
+	status.MemPercent = sys.MemPercent
+	status.MemTotalMB = sys.MemTotalMB
+	status.MemUsedMB = sys.MemUsedMB
+	status.UptimeSec = sys.UptimeSec
+	status.BytesSent = sys.BytesSent
+	status.BytesReceived = sys.BytesReceived
+	status.NetTxBPS = sys.NetTxBPS
+	status.NetRxBPS = sys.NetRxBPS
 	return status
 }
 
@@ -119,6 +129,15 @@ func ReportFromStatus(cfg Config, status AgentStatus) ReportRequest {
 		EasyTierNetworkReason: status.EasyTierNetworkReason,
 		EasyTierDHCPEnabled:   status.EasyTierDHCPEnabled,
 		EasyTierCIDR:          status.EasyTierCIDR,
+		CPUPercent:            status.CPUPercent,
+		MemPercent:            status.MemPercent,
+		MemTotalMB:            status.MemTotalMB,
+		MemUsedMB:             status.MemUsedMB,
+		UptimeSec:             status.UptimeSec,
+		BytesSent:             status.BytesSent,
+		BytesReceived:         status.BytesReceived,
+		NetTxBPS:              status.NetTxBPS,
+		NetRxBPS:              status.NetRxBPS,
 		Capabilities:          status.Capabilities,
 		Warnings:              status.Warnings,
 	}

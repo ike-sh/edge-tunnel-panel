@@ -66,6 +66,15 @@ type ReportRequest struct {
 	EasyTierNetworkReason string          `json:"easytier_network_reason,omitempty"`
 	EasyTierDHCPEnabled   bool            `json:"easytier_dhcp_enabled"`
 	EasyTierCIDR          string          `json:"easytier_cidr,omitempty"`
+	CPUPercent            float64         `json:"cpu_percent,omitempty"`
+	MemPercent            float64         `json:"mem_percent,omitempty"`
+	MemTotalMB            uint64          `json:"mem_total_mb,omitempty"`
+	MemUsedMB             uint64          `json:"mem_used_mb,omitempty"`
+	UptimeSec             uint64          `json:"uptime_sec,omitempty"`
+	BytesSent             uint64          `json:"bytes_sent,omitempty"`
+	BytesReceived         uint64          `json:"bytes_received,omitempty"`
+	NetTxBPS              uint64          `json:"net_tx_bps,omitempty"`
+	NetRxBPS              uint64          `json:"net_rx_bps,omitempty"`
 	Capabilities          map[string]bool `json:"capabilities"`
 	Warnings              []string        `json:"warnings,omitempty"`
 }
@@ -96,6 +105,15 @@ type AgentStatus struct {
 	EasyTierNetworkReason string          `json:"easytier_network_reason,omitempty"`
 	EasyTierDHCPEnabled   bool            `json:"easytier_dhcp_enabled"`
 	EasyTierCIDR          string          `json:"easytier_cidr,omitempty"`
+	CPUPercent            float64         `json:"cpu_percent,omitempty"`
+	MemPercent            float64         `json:"mem_percent,omitempty"`
+	MemTotalMB            uint64          `json:"mem_total_mb,omitempty"`
+	MemUsedMB             uint64          `json:"mem_used_mb,omitempty"`
+	UptimeSec             uint64          `json:"uptime_sec,omitempty"`
+	BytesSent             uint64          `json:"bytes_sent,omitempty"`
+	BytesReceived         uint64          `json:"bytes_received,omitempty"`
+	NetTxBPS              uint64          `json:"net_tx_bps,omitempty"`
+	NetRxBPS              uint64          `json:"net_rx_bps,omitempty"`
 	LastAppliedConfigHash string          `json:"last_applied_config_hash,omitempty"`
 }
 

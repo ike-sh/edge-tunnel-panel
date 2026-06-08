@@ -17,6 +17,7 @@ func (s *Server) registerV2Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/diagnostics/run", s.handleV2DiagnosticsRun)
 	mux.HandleFunc("/api/v2/tasks", s.handleTasks)
 	mux.HandleFunc("/api/v2/tasks/", s.handleV2Tasks)
+	mux.HandleFunc("/api/v2/stream/machines", s.handleV2MachineStream)
 }
 
 func (s *Server) handleV2Machines(w http.ResponseWriter, r *http.Request) {
@@ -146,11 +147,23 @@ func (s *Server) handleV2ProfileSub(w http.ResponseWriter, r *http.Request, path
 			writeErr(w, 404, "not_found", "profile not found")
 			return
 		}
+		var body struct {
+			Rules []IXRule `json:"rules,omitempty"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Rules) > 0 {
+			if err := s.store.updateIXProfileRules(profileID, body.Rules); err != nil {
+				writeErr(w, 400, "bad_request", err.Error())
+				return
+			}
+			p, _ = s.store.getIXProfile(profileID)
+		}
 		action := "ix_write_apply_rules"
-		if p.Role == "nat-transit" {
+		if p.Role == "nat-transit" && len(body.Rules) == 0 {
 			action = "ix_write_create_nat"
 		}
-		task, err := s.store.enqueueIXTask(p.MachineID, action, map[string]any{"profile_id": profileID, "config": p.Config})
+		payload := map[string]any{"profile_id": profileID, "config": p.Config, "rules": p.Rules}
+		task, err := s.store.enqueueIXTask(p.MachineID, action, payload)
 		if err != nil {
 			writeErr(w, 400, "bad_request", err.Error())
 			return
