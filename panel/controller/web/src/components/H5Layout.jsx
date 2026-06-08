@@ -52,7 +52,7 @@ export default function H5Layout({ children }) {
       </header>
 
       {health && !health.strict_auth && location.pathname !== '/settings' && (
-        <div className="alert info h5-banner">测试模式 · 未启用 Token 鉴权</div>
+        <div className="alert info h5-banner">开放鉴权 · 未启用 Token</div>
       )}
 
       <main className="h5-main">{children}</main>

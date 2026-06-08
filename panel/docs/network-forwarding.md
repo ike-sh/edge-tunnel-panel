@@ -1,6 +1,6 @@
 ﻿# 转发规则
 
-v0.3.1-test 的转发链路：
+v0.3.1 的转发链路：
 
 ```text
 外部用户 -> A 公网入口 -> A nftables -> EasyTier 或 B 公网/专线直连 -> B nftables -> 落地服务器 IP/域名:端口

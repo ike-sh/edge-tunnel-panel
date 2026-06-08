@@ -81,6 +81,22 @@ export default function Dashboard({
         </Card>
       )}
       <div className={bootstrapped ? 'page-ready' : 'page-loading'}>
+      
+      {!machines.length && (
+        <Card title="快速开始" description="首次部署：添加机器 → 复制安装命令 → 创建 NAT IX 线路。">
+          <ol className="install-checklist">
+            <li>点击「添加机器」创建 NAT IX 或公网入口记录</li>
+            <li>在机器行打开「安装向导」，复制一键命令到目标 Linux 服务器</li>
+            <li>机器上线后，创建 NAT IX 线路并应用规则</li>
+            <li>公网入口机导入接入码，完成链路</li>
+          </ol>
+          <div className="quick-actions">
+            <button type="button" onClick={onOpenAddNode}>添加第一台机器</button>
+            <button type="button" className="secondary" onClick={() => onNavigate('/settings')}>查看安装命令</button>
+          </div>
+        </Card>
+      )}
+
       {h5 && (
         <Card title="运维工具" description="H5 布局下诊断不在底部 Tab，可从此处进入。">
           <div className="quick-actions">

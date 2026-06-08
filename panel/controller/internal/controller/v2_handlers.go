@@ -311,7 +311,7 @@ func (s *Server) handleV2BootstrapInstall(w http.ResponseWriter, r *http.Request
 	}
 	version := body.Version
 	if version == "" {
-		version = Version
+		version = "latest"
 	}
 	controllerURL := strings.TrimSuffix(r.Header.Get("X-Forwarded-Proto")+"://"+r.Host, "://")
 	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
@@ -319,22 +319,20 @@ func (s *Server) handleV2BootstrapInstall(w http.ResponseWriter, r *http.Request
 	} else {
 		controllerURL = "http://" + r.Host
 	}
-	rootCmd := fmt.Sprintf(`curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- \
-  --version %s \
-  --controller-url %s \
-  --token %s \
-  --node-name %s \
-  --machine-id %s \
-  --enable-tasks \
-  --enable-write-actions \
-  --install-ixtf \
-  --ixtf-version v1.2.0`,
-		version, controllerURL, m.Token, m.Name, m.ID)
+	rootCmd := buildQuickInstallAgentCommand("", false, version, controllerURL, m.Token, m.ID, m.Name)
+	sudoCmd := buildQuickInstallAgentCommand("sudo", false, version, controllerURL, m.Token, m.ID, m.Name)
+	mirrorRoot := buildQuickInstallAgentCommand("", true, version, controllerURL, m.Token, m.ID, m.Name)
+	mirrorSudo := buildQuickInstallAgentCommand("sudo", true, version, controllerURL, m.Token, m.ID, m.Name)
 	writeOK(w, 200, map[string]any{
-		"machine_id":   m.ID,
-		"root_command": rootCmd,
-		"note":         "Agent 注册时在 payload 中携带 machine_id 字段以完成绑定",
-		"env_hint":     fmt.Sprintf("EDGE_MACHINE_ID=%s", m.ID),
+		"machine_id":            m.ID,
+		"root_command":          rootCmd,
+		"sudo_command":          sudoCmd,
+		"mirror_root_command":   mirrorRoot,
+		"mirror_sudo_command":   mirrorSudo,
+		"recommended_command":   sudoCmd,
+		"can_copy":              true,
+		"note":                  "Agent 注册时在 payload 中携带 machine_id 字段以完成绑定",
+		"env_hint":              fmt.Sprintf("EDGE_MACHINE_ID=%s", m.ID),
 	})
 }
 

@@ -1,4 +1,4 @@
-export const DEFAULT_VERSION = 'v0.3.1-test';
+export const DEFAULT_VERSION = 'v0.3.1';
 
 export const tabs = [
   ['dashboard', '总览'],

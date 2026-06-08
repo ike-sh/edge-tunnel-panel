@@ -293,14 +293,14 @@ func TestDeleteNodeReappearsOnReport(t *testing.T) {
 
 func TestBootstrapAgentInstallCommand(t *testing.T) {
 	h := testServer(t)
-	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.3.1-test"})
+	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "node_name": "edge-node", "version": "v0.3.1"})
 	body := rr.Body.String()
 	if rr.Code != 200 ||
 		!strings.Contains(body, "edge-tunnel-panel") ||
-		!strings.Contains(body, "install-agent.sh") ||
-		!strings.Contains(body, "--version v0.3.1-test") ||
-		!strings.Contains(body, "--controller-url http://example:18080") ||
-		!strings.Contains(body, "--node-name edge-node") ||
+		!strings.Contains(body, "quick-install.sh") ||
+		!strings.Contains(body, "--version v0.3.1") ||
+		!strings.Contains(body, "--url http://example:18080") ||
+		!strings.Contains(body, "--name edge-node") ||
 		!strings.Contains(body, `"root_command"`) ||
 		!strings.Contains(body, `"sudo_command"`) ||
 		!strings.Contains(body, `| bash -s --`) ||
@@ -323,7 +323,7 @@ func TestBootstrapAgentCommandWithMirrors(t *testing.T) {
 	h := testServer(t)
 	rr := post(t, h, "/api/v1/bootstrap/agent-install-command", "operator-token", map[string]any{"controller_url": "http://example:18080", "download_source": "mirror", "github_mirrors": "https://gh.llkk.cc/,https://gh.ddlc.top/"})
 	body := rr.Body.String()
-	if rr.Code != 200 || !strings.Contains(body, "EDGE_GITHUB_MIRRORS") || !strings.Contains(body, "https://gh.llkk.cc/https://raw.githubusercontent.com") || !strings.Contains(body, "mirror_root_commands") {
+	if rr.Code != 200 || !strings.Contains(body, "--cn") || !strings.Contains(body, "gh.llkk.cc") || !strings.Contains(body, "mirror_root_commands") {
 		t.Fatalf("mirror command missing: %d %s", rr.Code, body)
 	}
 }

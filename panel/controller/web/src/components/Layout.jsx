@@ -74,7 +74,7 @@ export default function Layout({ children }) {
             onOpenSettings={handleTopbarAction}
           />
           {!strictAuth && location.pathname !== '/settings' && (
-            <div className="alert info banner-alert">当前为测试模式，Web API 未启用 Operator Token 鉴权。</div>
+            <div className="alert info banner-alert">当前为开放鉴权模式，Web API 未启用 Operator Token 鉴权。</div>
           )}
           <main className="content-area">
             <div key={location.pathname} className="animate-fade-in">{children}</div>

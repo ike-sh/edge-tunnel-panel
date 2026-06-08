@@ -30,7 +30,8 @@ export default function InstallWizardModal({
 
   const status = liveMachine?.status || machine.status || 'pending';
   const registered = status === 'online' || status === 'stale';
-  const rootCommand = installData?.root_command || '';
+  const rootCommand = installData?.sudo_command || installData?.recommended_command || installData?.root_command || '';
+  const mirrorCommand = installData?.mirror_root_command || installData?.mirror_sudo_command || '';
   const envBlock = [
     installData?.env_hint,
     `# machine_id=${installData?.machine_id || machine.id}`,
@@ -80,8 +81,14 @@ export default function InstallWizardModal({
 
           {step === 1 && (
             <div className="install-step-panel">
-              <p className="muted">在目标服务器以 <strong>root</strong> 执行以下命令（一键安装 Agent + ixtf）：</p>
-              <CodeBlock title="安装命令" value={rootCommand || '正在生成…'} />
+              <p className="muted">在目标服务器执行以下命令（推荐 <strong>sudo</strong>）（一键安装 Agent + ixtf）：</p>
+              <CodeBlock title="安装命令（官方源）" value={rootCommand || '正在生成…'} />
+              {mirrorCommand && (
+                <>
+                  <p className="muted" style={{ marginTop: '0.75rem' }}>国内服务器可使用镜像命令：</p>
+                  <CodeBlock title="安装命令（国内镜像）" value={mirrorCommand} />
+                </>
+              )}
               {envBlock && (
                 <>
                   <p className="muted" style={{ marginTop: '0.75rem' }}>环境变量提示（写入 <code>/etc/edge-tunnel-agent.env</code>）：</p>
@@ -89,7 +96,10 @@ export default function InstallWizardModal({
                 </>
               )}
               <div className="actions" style={{ marginTop: '0.75rem' }}>
-                <button type="button" onClick={() => onCopy?.(rootCommand, '安装命令')} disabled={!rootCommand}>复制安装命令</button>
+                <button type="button" onClick={() => onCopy?.(rootCommand, '安装命令')} disabled={!rootCommand}>复制官方命令</button>
+                {mirrorCommand && (
+                  <button type="button" className="secondary" onClick={() => onCopy?.(mirrorCommand, '国内镜像命令')}>复制国内命令</button>
+                )}
               </div>
               <p className="muted install-tip">若复制失败，请手动选中上方文本。安装完成后 Agent 会自动携带 <code>machine_id</code> 注册。</p>
             </div>
@@ -146,6 +156,7 @@ export default function InstallWizardModal({
                       </>
                     )}
                     <li>在「诊断」页运行 ix_read_health 验证链路</li>
+                    <li className="install-security-tip">安全：安装命令含 Token，Agent 上线后建议在此机器行「轮换 Token」并更新 Agent 配置</li>
                   </ul>
                 </>
               ) : (

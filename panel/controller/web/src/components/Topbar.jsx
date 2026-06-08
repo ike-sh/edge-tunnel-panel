@@ -36,7 +36,7 @@ export default function Topbar({ health, version, strictAuth, loading, onRefresh
       <div className="topbar-actions">
         <StatusBadge status={health ? 'succeeded' : 'waiting'}>{health ? 'Controller 正常' : '等待连接'}</StatusBadge>
         <span className="version-pill">{health?.version || version}</span>
-        <span className={strictAuth ? 'auth-pill strict' : 'auth-pill'}>{strictAuth ? '严格鉴权' : '测试模式'}</span>
+        <span className={strictAuth ? 'auth-pill strict' : 'auth-pill'}>{strictAuth ? '严格鉴权' : '开放鉴权'}</span>
         <button type="button" className="secondary" onClick={onRefresh} disabled={loading}>{loading ? '处理中' : '刷新'}</button>
         <div className="user-menu" ref={menuRef}>
           <button type="button" className="user-menu-trigger secondary" onClick={() => setMenuOpen((v) => !v)}>

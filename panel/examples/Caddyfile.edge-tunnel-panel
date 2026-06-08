@@ -1,0 +1,28 @@
+# Edge Tunnel Panel — Caddy 反代 + 自动 HTTPS
+# 用法：
+#   1. 替换 panel.example.com
+#   2. 安装 Caddy：https://caddyserver.com/docs/install
+#   3. caddy run --config /etc/caddy/Caddyfile
+#   4. Controller 监听 127.0.0.1:18080，EDGE_FORCE_HTTPS=1
+
+panel.example.com {
+	encode gzip zstd
+
+	reverse_proxy 127.0.0.1:18080 {
+		# WebSocket + 长连接
+		transport http {
+			read_timeout 3600s
+			write_timeout 3600s
+		}
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+
+	# 可选：访问日志
+	# log {
+	# 	output file /var/log/caddy/edge-tunnel-panel.log
+	# }
+}

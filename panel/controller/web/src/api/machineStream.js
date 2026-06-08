@@ -23,8 +23,7 @@ export function watchMachineStream(apiBase, token, { onSnapshot, onOpen, onClose
       return;
     }
     const base = wsBase(apiBase);
-    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
-    const url = `${base}/api/v2/stream/machines${qs}`;
+    const url = `${base}/api/v2/stream/machines`;
 
     try {
       ws = new WebSocket(url);
@@ -34,17 +33,34 @@ export function watchMachineStream(apiBase, token, { onSnapshot, onOpen, onClose
       return;
     }
 
+    let authed = !token;
+
     ws.onopen = () => {
       attempts = 0;
       lastMessageAt = Date.now();
-      onOpen?.();
+      if (token) {
+        ws.send(JSON.stringify({ type: 'auth', token }));
+      } else {
+        authed = true;
+        onOpen?.();
+      }
     };
 
     ws.onmessage = (event) => {
       lastMessageAt = Date.now();
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'snapshot') {
+        if (data.type === 'auth_ok') {
+          authed = true;
+          onOpen?.();
+          return;
+        }
+        if (data.type === 'auth_error') {
+          onError?.(new Error(data.message || 'websocket auth failed'));
+          ws.close();
+          return;
+        }
+        if (data.type === 'snapshot' && authed) {
           onSnapshot?.(data);
         }
       } catch {

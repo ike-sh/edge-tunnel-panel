@@ -72,7 +72,7 @@ func NewServer(store *Store, agentToken, operatorToken string, strictAuth bool, 
 	s.registerV2Routes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/") || strings.HasPrefix(r.URL.Path, "/api/v2/") {
-			mux.ServeHTTP(w, r)
+			s.apiMiddleware(mux).ServeHTTP(w, r)
 			return
 		}
 		s.serveWeb(w, r)
@@ -299,7 +299,7 @@ func (s *Server) handleBootstrapInfo(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
 		return
 	}
-	writeOK(w, 200, map[string]any{"install_script_url": installScriptURL(), "default_node_name": "edge-node-1", "default_version": defaultAgentInstallVersion, "default_github_mirrors": defaultGitHubMirrors, "repo": "ike-sh/edge-tunnel-panel"})
+	writeOK(w, 200, map[string]any{"install_script_url": quickInstallScriptURL(), "agent_script_url": installScriptURL(), "default_node_name": "edge-node-1", "default_version": defaultAgentInstallVersion, "default_github_mirrors": defaultGitHubMirrors, "repo": "ike-sh/edge-tunnel-panel"})
 }
 func (s *Server) handleBootstrapAgentInstall(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
@@ -434,7 +434,11 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	if machineID := stringValue(req["machine_id"], ""); machineID != "" {
+	machineID, ok := s.resolveMachineBinding(w, r, stringValue(req["machine_id"], ""))
+	if !ok {
+		return
+	}
+	if machineID != "" {
 		if activated, err := s.store.linkMachineToNode(machineID, node.ID); err == nil {
 			node.Labels = map[string]string{"machine_id": machineID, "activated_tasks": strconv.Itoa(activated)}
 		}
@@ -467,7 +471,11 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
-	if machineID := stringValue(req["machine_id"], ""); machineID != "" {
+	machineID, ok := s.resolveMachineBinding(w, r, stringValue(req["machine_id"], ""))
+	if !ok {
+		return
+	}
+	if machineID != "" {
 		_, _ = s.store.linkMachineToNode(machineID, node.ID)
 	}
 	writeOK(w, 200, node)
@@ -1244,10 +1252,10 @@ func validateLandingHost(host string) error {
 		return errValidation("landing_host must be an IP address or domain")
 	}
 	if strings.Contains(host, ":") {
-		return errValidation("v0.3.1-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("当前版本不支持 IPv6 落地目标")
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
-		return errValidation("v0.3.1-test \u6682\u4e0d\u652f\u6301 IPv6 \u843d\u5730\u76ee\u6807")
+		return errValidation("当前版本不支持 IPv6 落地目标")
 	}
 	return nil
 }

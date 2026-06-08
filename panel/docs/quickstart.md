@@ -3,7 +3,7 @@
 1. 安装 Controller：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- --version v0.3.1-test
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- --version v0.3.1
 ```
 
 2. 打开 Web：`http://服务器公网IP:18080`。

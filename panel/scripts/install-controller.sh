@@ -14,7 +14,7 @@ SOURCE_BUILD=false
 NO_START=false
 UNINSTALL=false
 PURGE=false
-STRICT_AUTH=false
+STRICT_AUTH=true
 OPERATOR_TOKEN="${EDGE_OPERATOR_TOKEN:-}"
 AGENT_TOKEN="${EDGE_CONTROLLER_TOKEN:-}"
 
@@ -34,7 +34,7 @@ Options:
   --source-build            Build from current source checkout
   --no-start                Do not start service after install
   --strict-auth             Enable Operator Token auth for Web/API
-  --no-strict-auth          Disable Operator Token auth for testing, default
+  --no-strict-auth          Disable Operator Token auth (dev only)
   --uninstall               卸载主控服务和二进制，保留配置、数据和日志
   --purge                   彻底删除主控服务、二进制、配置、数据和日志
   -h, --help                Show help
@@ -152,6 +152,37 @@ resolve_version() {
   fi
 }
 
+
+verify_release_checksum() {
+  local version="$1" asset="$2" file="$3"
+  local sums_url="https://github.com/${REPO}/releases/download/${version}/SHA256SUMS"
+  local tmp_sums expected actual
+  tmp_sums="$(mktemp)"
+  if ! download_file "$sums_url" "$tmp_sums" 2>/dev/null; then
+    log "SHA256SUMS 不可用，跳过校验（建议手动核对 release 哈希）"
+    rm -f "$tmp_sums"
+    return 0
+  fi
+  expected="$(grep -F " ${asset}" "$tmp_sums" | awk '{print $1}' | head -n1)"
+  rm -f "$tmp_sums"
+  if [ -z "$expected" ]; then
+    log "release 包未列入 SHA256SUMS，跳过校验"
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  else
+    log "未找到 sha256sum/shasum，跳过校验"
+    return 0
+  fi
+  if [ "$actual" != "$expected" ]; then
+    fail "release 校验失败：${asset} 哈希不匹配"
+  fi
+  log "release 校验通过：${asset}"
+}
+
 install_from_release() {
   local arch version asset url tmp
   arch="$(detect_arch)"
@@ -163,6 +194,7 @@ install_from_release() {
   if ! download_file "$url" "$tmp/$asset"; then
     fail "release asset not available; use --source-build or run panel/scripts/build-release.sh first"
   fi
+  verify_release_checksum "$version" "$asset" "$tmp/$asset"
   tar -xzf "$tmp/$asset" -C "$tmp"
   if [ ! -f "$tmp/edge-tunnel-controller" ]; then
     find "$tmp" -maxdepth 3 -type f | sort >&2
@@ -273,17 +305,38 @@ if [ "$NO_START" = false ]; then
   systemctl restart edge-tunnel-controller.service
 fi
 
+detect_public_ip() {
+  local ip=""
+  for url in "https://api.ipify.org" "https://ifconfig.me/ip"; do
+    ip="$(curl -fsSL --connect-timeout 3 --max-time 6 "$url" 2>/dev/null | tr -d '[:space:]')" || true
+    [ -n "$ip" ] && { printf '%s' "$ip"; return 0; }
+  done
+  return 1
+}
+
+LISTEN_HOST="${LISTEN%:*}"
+LISTEN_PORT="${LISTEN##*:}"
+PUBLIC_IP="$(detect_public_ip)" || PUBLIC_IP="YOUR_SERVER_IP"
+PANEL_URL="http://${PUBLIC_IP}:${LISTEN_PORT}"
+
 log "Controller 安装完成。"
-log "监听地址：http://${LISTEN}"
-log "浏览器访问：请使用服务器公网 IP 或域名，例如 http://SERVER_IP:18080"
-log "Operator Token：${OPERATOR_TOKEN}"
-log "Agent 接入 Token：${AGENT_TOKEN}"
-log "Token 只在安装输出中显示一次，请妥善保存。"
-if [ "$STRICT_AUTH" = false ]; then
-  log "当前为测试模式：Web API 未启用 Operator Token 鉴权。"
-  log "如需开启，请使用 --strict-auth 重新安装或修改 controller.env。"
+log "监听：${LISTEN}"
+log "面板：${PANEL_URL}/dashboard"
+if [ "$STRICT_AUTH" = true ]; then
+  log "登录：${PANEL_URL}/login"
+else
+  log "登录：${PANEL_URL}/dashboard（开放鉴权，未启用 Token）"
 fi
-log "下一步："
-log "1. 打开主控 Web"
-log "2. 保存 Operator Token"
-log "3. 进入“节点”页面，点击“添加节点”生成一键接入命令"
+log "Operator Token：${OPERATOR_TOKEN}"
+log "Agent 全局 Token：${AGENT_TOKEN}"
+log "配置：${CONFIG_DIR}/controller.env"
+log "Token 仅显示一次，请保存到密码管理器。"
+if [ "$STRICT_AUTH" = false ]; then
+  log "当前为开放鉴权：Web API 未启用 Operator Token 鉴权。"
+  log "生产环境请使用 quick-install.sh 或 --strict-auth 重装。"
+fi
+log "v2 推荐流程："
+log "1. 打开 ${PANEL_URL}/login 粘贴 Operator Token"
+log "2. 「机器」→ 添加 NAT IX → 复制安装命令到目标服务器"
+log "3. 「线路」→ 创建 NAT IX → 应用规则 → 接入码 Tab 复制"
+log "4. 公网入口机导入接入码"

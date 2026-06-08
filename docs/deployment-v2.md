@@ -27,7 +27,20 @@ cd panel/agent && go build -o edge-tunnel-agent ./cmd/edge-tunnel-agent
 cd panel/controller/web && npm ci && npm run build
 ```
 
-## 2. 启动 Controller
+## 2. 安装 Controller（一键）
+
+```bash
+# 生产（默认 strict 鉴权）
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash
+
+# 国内
+curl -fsSL https://gh.llkk.cc/https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash -s -- --cn --open-ufw
+
+```
+
+安装摘要：`/etc/edge-tunnel/controller/install-summary.txt`
+
+### 源码 / 开发启动
 
 ```bash
 export EDGE_LISTEN=0.0.0.0:18080
@@ -35,7 +48,7 @@ export EDGE_DATA_DIR=/var/lib/edge-tunnel/controller
 export EDGE_WEB_DIR=/path/to/panel/controller/web/dist
 export EDGE_OPERATOR_TOKEN=your-operator-token
 export EDGE_CONTROLLER_TOKEN=your-agent-token
-export EDGE_STRICT_AUTH=true   # 默认 true；本地 E2E 可设为 false
+export EDGE_STRICT_AUTH=true   # 本地 E2E 可设为 false
 
 ./edge-tunnel-controller
 ```
@@ -44,15 +57,14 @@ export EDGE_STRICT_AUTH=true   # 默认 true；本地 E2E 可设为 false
 
 ## 3. 安装 Agent（生产）
 
-在 Panel「机器」页生成安装命令，或：
+在 Panel「机器」→「安装向导」复制命令（含国内镜像版），或：
 
 ```bash
-curl -fsSL .../install-agent.sh | bash -s -- \
-  --controller-url https://panel.example.com \
+curl -fsSL .../quick-install.sh | sudo bash -s -- agent \
+  --url https://panel.example.com \
   --token <machine-token> \
-  --node-name nat-ix-1 \
   --machine-id <machine-uuid> \
-  --enable-tasks --enable-write-actions --install-ixtf
+  --name nat-ix-1
 ```
 
 ### 关键环境变量
@@ -77,7 +89,139 @@ curl -fsSL .../install-agent.sh | bash -s -- \
 
 > 部署新版本 Agent 后需 **重启 edge-tunnel-agent** 才会开始上报。
 
-## 4. Web UI 路由与实时流
+## 4. 安全与环境变量（生产）
+
+| 变量 | 说明 |
+|------|------|
+| `EDGE_STRICT_AUTH=true` | 生产默认，启用 Operator Token |
+| `EDGE_FORCE_HTTPS=1` | 反代终止 TLS 时强制 `X-Forwarded-Proto: https` |
+| `EDGE_CORS_ORIGINS` | 逗号分隔允许跨域来源（默认同源，不开放 CORS） |
+
+WebSocket `/api/v2/stream/machines`：**禁止** `?token=`，连接后首帧发送 `{"type":"auth","token":"..."}`。
+
+```bash
+node panel/scripts/e2e-ws-auth.mjs   # BASE=http://127.0.0.1:19081 TOKEN=...
+```
+
+
+## 4.1 Nginx 反代 + HTTPS（推荐生产）
+
+Controller 仅监听本机，由 Nginx 终止 TLS 并转发 WebSocket。
+
+**1. 安装 Controller（本机 18080）**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash
+```
+
+确认 `/etc/edge-tunnel/controller/controller.env`：
+
+```bash
+EDGE_LISTEN=127.0.0.1:18080
+EDGE_STRICT_AUTH=true
+EDGE_FORCE_HTTPS=1
+```
+
+修改后：`systemctl restart edge-tunnel-controller`
+
+**2. 复制 Nginx 配置**
+
+示例文件：`panel/examples/nginx-edge-tunnel-panel.conf`
+
+```bash
+# 替换 panel.example.com 与证书路径
+sudo cp panel/examples/nginx-edge-tunnel-panel.conf /etc/nginx/sites-available/edge-tunnel-panel
+sudo ln -sf /etc/nginx/sites-available/edge-tunnel-panel /etc/nginx/sites-enabled/
+```
+
+在 `/etc/nginx/nginx.conf` 的 `http {}` 内确保有 WebSocket map：
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+```
+
+**3. 申请证书（Let's Encrypt）**
+
+```bash
+sudo certbot certonly --webroot -w /var/www/certbot -d panel.example.com
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**4. 防火墙与 certbot 续期**
+
+```bash
+sudo bash panel/scripts/setup-production-edge.sh --nginx --open-ssh
+```
+
+**5. 验证**
+
+```bash
+curl -fsS https://panel.example.com/api/v1/health
+# 浏览器打开 https://panel.example.com/login
+```
+
+WebSocket 鉴权：前端连接 `wss://panel.example.com/api/v2/stream/machines`，首帧发送 `{"type":"auth","token":"..."}`（**不要**使用 `?token=`）。
+
+**6. Agent 安装命令中的 URL**
+
+面板生成的 Agent 命令会使用 `https://panel.example.com`（需从 HTTPS 访问面板，或手动将 `--url` 改为公网 HTTPS 地址）。
+
+
+## 4.2 Caddy 反代（自动 HTTPS）
+
+比 Nginx 更省事：Caddy 自动申请与续期 Let's Encrypt 证书。
+
+示例：`panel/examples/Caddyfile.edge-tunnel-panel`
+
+```bash
+# 1. Controller 仅本机 + 强制 HTTPS 头
+# EDGE_LISTEN=127.0.0.1:18080
+# EDGE_FORCE_HTTPS=1
+
+# 2. 安装 Caddy 后
+sudo cp panel/examples/Caddyfile.edge-tunnel-panel /etc/caddy/Caddyfile
+# 编辑 panel.example.com 为你的域名
+sudo systemctl enable --now caddy
+
+# 3. 防火墙（放行 80/443，关闭公网 18080）
+sudo bash panel/scripts/setup-production-edge.sh --caddy --open-ssh
+```
+
+验证：`curl -fsS https://panel.example.com/api/v1/health`
+
+
+## 4.3 Traefik + Docker Compose
+
+适合已有 Docker 的环境，Traefik 自动 HTTPS + WebSocket 反代。
+
+```bash
+cp panel/examples/env.traefik.example panel/examples/.env
+# 编辑 DOMAIN、ACME_EMAIL
+docker compose -f panel/examples/docker-compose.traefik.yml --env-file panel/examples/.env up -d --build
+docker compose -f panel/examples/docker-compose.traefik.yml logs -f controller
+```
+
+文件：
+- `panel/examples/docker-compose.traefik.yml`
+- `panel/examples/docker/Dockerfile`
+
+验证：`curl -fsS https://你的域名/api/v1/health`
+
+## 4.4 Kubernetes Helm
+
+```bash
+# 1. 构建/推送镜像（见 docker/Dockerfile）
+helm upgrade --install etp panel/examples/helm/edge-tunnel-panel \
+  --set ingress.hosts[0].host=panel.example.com \
+  --set env.EDGE_OPERATOR_TOKEN=YOUR_TOKEN
+```
+
+Chart：`panel/examples/helm/edge-tunnel-panel`（Deployment + PVC + Ingress + cert-manager 注解）
+
+## 5. Web UI 路由与实时流
 
 | 路径 | 页面 | 说明 |
 |------|------|------|
@@ -114,7 +258,7 @@ cd panel/controller/web && npm run dev
 # 跨域时在设置页填 API Base；保存 Token 后自动跳回原页面
 ```
 
-## 5. 本地 E2E（Mock Agent）
+## 6. 本地 E2E（Mock Agent）
 
 ```bash
 # Terminal 1: Controller

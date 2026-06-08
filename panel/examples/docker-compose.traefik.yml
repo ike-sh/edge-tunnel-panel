@@ -1,0 +1,60 @@
+# Traefik + Edge Tunnel Panel（Docker Compose）
+# 用法：
+#   1. cp .env.example .env 并修改 DOMAIN、ACME_EMAIL
+#   2. docker compose -f panel/examples/docker-compose.traefik.yml up -d --build
+#   3. 打开 https://你的域名/login
+
+services:
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:-admin@example.com}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+
+  controller:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${ETP_VERSION:-latest}
+    image: edge-tunnel-panel:${ETP_VERSION:-local}
+    restart: unless-stopped
+    environment:
+      EDGE_LISTEN: 0.0.0.0:18080
+      EDGE_DATA_DIR: /var/lib/edge-tunnel/controller
+      EDGE_WEB_DIR: /opt/edge-tunnel-panel/web
+      EDGE_OPERATOR_TOKEN: ${EDGE_OPERATOR_TOKEN:-}
+      EDGE_CONTROLLER_TOKEN: ${EDGE_CONTROLLER_TOKEN:-}
+      EDGE_STRICT_AUTH: ${EDGE_STRICT_AUTH:-true}
+      EDGE_FORCE_HTTPS: "1"
+    volumes:
+      - controller_data:/var/lib/edge-tunnel/controller
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.etp.rule=Host(`${DOMAIN:-panel.example.com}`)
+      - traefik.http.routers.etp.entrypoints=websecure
+      - traefik.http.routers.etp.tls.certresolver=le
+      - traefik.http.services.etp.loadbalancer.server.port=18080
+      # WebSocket
+      - traefik.http.middlewares.etp-headers.headers.customrequestheaders.X-Forwarded-Proto=https
+      - traefik.http.routers.etp.middlewares=etp-headers
+
+volumes:
+  traefik_letsencrypt:
+  controller_data:

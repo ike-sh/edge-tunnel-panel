@@ -1,0 +1,7 @@
+1. 构建或导入镜像（见 panel/examples/docker/Dockerfile）
+2. helm upgrade --install etp ./panel/examples/helm/edge-tunnel-panel \
+     --set ingress.hosts[0].host=panel.example.com \
+     --set env.EDGE_OPERATOR_TOKEN=YOUR_TOKEN
+3. 打开 https://panel.example.com/login
+
+WebSocket：Ingress 需支持 Upgrade；nginx 示例 annotations 已含长超时。

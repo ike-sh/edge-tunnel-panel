@@ -56,7 +56,7 @@ func TestAgentRegisterWithMachineID(t *testing.T) {
 	h := testOpenServer(t)
 	m := createTestMachine(t, h)
 
-	rr := post(t, h, "/api/v1/agent/register", "agent-token", map[string]any{
+	rr := post(t, h, "/api/v1/agent/register", m.Token, map[string]any{
 		"id":         "node-linked",
 		"node_name":  "nat-1",
 		"machine_id": m.ID,

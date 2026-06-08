@@ -251,6 +251,37 @@ resolve_version() {
   fi
 }
 
+
+verify_release_checksum() {
+  local version="$1" asset="$2" file="$3"
+  local sums_url="https://github.com/${REPO}/releases/download/${version}/SHA256SUMS"
+  local tmp_sums expected actual
+  tmp_sums="$(mktemp)"
+  if ! download_file "$sums_url" "$tmp_sums" 2>/dev/null; then
+    log "SHA256SUMS 不可用，跳过校验（建议手动核对 release 哈希）"
+    rm -f "$tmp_sums"
+    return 0
+  fi
+  expected="$(grep -F " ${asset}" "$tmp_sums" | awk '{print $1}' | head -n1)"
+  rm -f "$tmp_sums"
+  if [ -z "$expected" ]; then
+    log "release 包未列入 SHA256SUMS，跳过校验"
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  else
+    log "未找到 sha256sum/shasum，跳过校验"
+    return 0
+  fi
+  if [ "$actual" != "$expected" ]; then
+    fail "release 校验失败：${asset} 哈希不匹配"
+  fi
+  log "release 校验通过：${asset}"
+}
+
 install_from_release() {
   local arch version asset url tmp
   arch="$(detect_arch)"
@@ -262,6 +293,7 @@ install_from_release() {
   if ! download_file "$url" "$tmp/$asset"; then
     fail "release asset not available; use --source-build or run panel/scripts/build-release.sh first"
   fi
+  verify_release_checksum "$version" "$asset" "$tmp/$asset"
   tar -xzf "$tmp/$asset" -C "$tmp"
   if [ ! -f "$tmp/edge-tunnel-agent" ]; then
     find "$tmp" -maxdepth 3 -type f | sort >&2

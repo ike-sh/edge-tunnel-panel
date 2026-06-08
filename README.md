@@ -1,4 +1,4 @@
-﻿# Edge Tunnel Panel v0.3.1-test
+﻿# Edge Tunnel Panel v0.3.1
 
 Edge Tunnel Panel 是一个面向节点组网、端口转发和出口策略的轻量 Web 面板。它用于把外部访问流量从 A 公网入口节点转发到 B 落地节点，再转发到最终落地服务器 IP/域名和端口。
 
@@ -23,24 +23,65 @@ Edge Tunnel Panel 是一个面向节点组网、端口转发和出口策略的�
   -> 落地服务器 IP/域名:端口
 ```
 
-## 快速安装 Controller
+## 一键安装（推荐）
+
+**生产环境**（默认开启 Operator 鉴权，安装后打印登录地址与 Token）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- \
-  --version v0.3.1-test
-```
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash
 
-安装完成后打开：
-
-```text
-http://服务器公网IP:18080
-```
-
-测试模式默认关闭 Operator Token 鉴权。如需开启：
+**生产反代一键（本机 18080 + 防火墙，配合 Nginx/Caddy）：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- \
-  --version v0.3.1-test \
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash -s -- --production --production-proxy nginx
+```
+```
+
+**国内服务器**（GitHub 镜像 + 自动放行 ufw 18080）：
+
+```bash
+curl -fsSL https://gh.llkk.cc/https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash -s -- --cn --open-ufw
+```
+
+安装完成后打开 `http://服务器公网IP:18080/login`（生产建议 Nginx + HTTPS，见 [deployment-v2.md](docs/deployment-v2.md) 与 `panel/examples/nginx-edge-tunnel-panel.conf`），Token 见终端输出或 `/etc/edge-tunnel/controller/install-summary.txt`。
+
+### 安装 Agent（面板生成或手动）
+
+在 Web「机器」页点击「安装向导」复制命令；或手动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash -s -- agent \
+  --url http://YOUR_CONTROLLER:18080 \
+  --token YOUR_MACHINE_TOKEN \
+  --machine-id YOUR_MACHINE_ID \
+  --name nat-ix-1
+```
+
+国内机器加 `--cn`（放在 `agent` 前）：
+
+```bash
+curl -fsSL https://gh.llkk.cc/https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash -s -- --cn agent \
+  --url http://YOUR_CONTROLLER:18080 \
+  --token YOUR_MACHINE_TOKEN \
+  --machine-id YOUR_MACHINE_ID
+```
+
+### 生产反代（Nginx / Caddy）
+
+- Nginx：`panel/examples/nginx-edge-tunnel-panel.conf`
+- Caddy（自动 HTTPS）：`panel/examples/Caddyfile.edge-tunnel-panel`
+- Traefik + Docker：`panel/examples/docker-compose.traefik.yml`
+- 防火墙 + certbot 续期：`sudo bash panel/scripts/setup-production-edge.sh --nginx --open-ssh`
+
+详见 [docs/deployment-v2.md](docs/deployment-v2.md)。
+
+## 高级安装（install-controller.sh）
+
+如需自定义 listen / token / 目录，仍可使用底层脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
+  --version latest \
   --strict-auth
 ```
 
@@ -60,22 +101,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel
 
 ## 添加 Agent
 
-进入 Web 的“节点”页面，点击“添加节点”，选择下载源并生成一键命令。root 登录服务器时使用 root 命令，普通用户使用 sudo 命令。
-
-国内机器可使用镜像轮询：
-
-```bash
-EDGE_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/" \
-curl -fsSL https://gh.llkk.cc/https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- \
-  --version v0.3.1-test \
-  --controller-url http://YOUR_CONTROLLER:18080 \
-  --token YOUR_AGENT_TOKEN \
-  --node-name edge-node-1 \
-  --enable-tasks \
-  --enable-write-actions
-```
-
-`EDGE_GITHUB_MIRRORS` 同时用于安装脚本下载 release 包和 Agent 下载 EasyTier release。
+进入 Web「机器」页 → 添加机器 →「安装向导」复制一键命令（含国内镜像版）。
 
 ## 卸载 Agent
 

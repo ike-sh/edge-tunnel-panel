@@ -1,0 +1,42 @@
+replicaCount: 1
+
+image:
+  repository: edge-tunnel-panel
+  tag: "0.3.1"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 18080
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  hosts:
+    - host: panel.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: edge-tunnel-panel-tls
+      hosts:
+        - panel.example.com
+
+env:
+  EDGE_LISTEN: "0.0.0.0:18080"
+  EDGE_STRICT_AUTH: "true"
+  EDGE_FORCE_HTTPS: "1"
+  # 生产请用 Secret 注入：
+  # EDGE_OPERATOR_TOKEN: ""
+  # EDGE_CONTROLLER_TOKEN: ""
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+
+resources: {}
