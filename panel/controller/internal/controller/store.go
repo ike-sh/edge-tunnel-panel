@@ -192,6 +192,11 @@ func (s *Store) markNodeOffline(id, reason string) (Node, bool, error) {
 			s.data.Nodes[i].StatusReason = reason
 			s.data.Nodes[i].OfflineAt = &n
 			s.data.Nodes[i].UpdatedAt = n
+			for j := range s.data.IXMachines {
+				if s.data.IXMachines[j].NodeID == id {
+					s.data.IXMachines[j].Status = "offline"
+				}
+			}
 			return s.data.Nodes[i], true, s.saveLocked()
 		}
 	}

@@ -28,6 +28,7 @@ function ProfileDetailRoute() {
     machines,
     pendingTaskIds,
     loading,
+    bootstrapped,
     applyIxProfile,
     syncIxProfile,
     refreshIxProfileCode,
@@ -36,6 +37,14 @@ function ProfileDetailRoute() {
   } = useApp();
   const profile = getProfileById(ixProfiles, id);
   const machine = machines.find((m) => m.id === profile?.machine_id) || null;
+
+  if (!bootstrapped) {
+    return (
+      <Card title="加载中" description="正在拉取线路数据…">
+        <p className="muted">请稍候</p>
+      </Card>
+    );
+  }
 
   if (!profile) {
     return (

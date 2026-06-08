@@ -3,6 +3,7 @@ import Card from '../components/Card.jsx';
 import DataTable from '../components/DataTable.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { StatCard } from '../components/ui/GlassPanel.jsx';
+import { useApp } from '../context/AppContext.jsx';
 import { actionLabel, formatTime, labelStatus } from '../utils/format.js';
 
 const DashboardCharts = lazy(() => import('../components/DashboardCharts.jsx'));
@@ -58,6 +59,7 @@ export default function Dashboard({
   onOpenProfile,
   onRefresh,
 }) {
+  const { bootstrapped } = useApp();
   const recent = tasks.filter((t) => t.action?.startsWith('ix_')).slice(0, 6);
   const healthy = profiles.filter((p) => p.status === 'healthy').length;
   const natCount = profiles.filter((p) => p.role === 'nat-transit').length;
@@ -71,6 +73,12 @@ export default function Dashboard({
 
   return (
     <div className="page-stack">
+      {!bootstrapped && (
+        <Card title="加载中" description="正在连接 Controller 并同步数据…">
+          <div className="loading-shimmer" aria-hidden="true" />
+        </Card>
+      )}
+      <div className={bootstrapped ? 'page-ready' : 'page-loading'}>
       <div className="metric-grid">
         <StatCard label="机器" value={machines.length} detail={`在线 ${stats.online} / 待注册 ${stats.stale}`} />
         <StatCard label="线路" value={profiles.length} detail={`健康 ${healthy} · NAT ${natCount} / 入口 ${ingressCount}`} />
@@ -131,6 +139,7 @@ export default function Dashboard({
             ]}
           />
         </Card>
+      </div>
       </div>
     </div>
   );

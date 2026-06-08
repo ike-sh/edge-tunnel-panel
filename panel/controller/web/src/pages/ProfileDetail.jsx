@@ -81,6 +81,7 @@ export default function ProfileDetail({
   }
 
   async function submitRule() {
+    if (!ruleForm.landing_host.trim()) return;
     const next = ruleModal.mode === 'edit'
       ? rules.map((r) => ((r.id || r.rule_id) === (ruleModal.rule.id || ruleModal.rule.rule_id) ? ruleFromForm(ruleForm, profile.id, ruleModal.rule) : r))
       : [...rules, ruleFromForm(ruleForm, profile.id)];
@@ -190,7 +191,7 @@ export default function ProfileDetail({
         footer={(
           <div className="actions right">
             <button type="button" className="secondary" onClick={() => setRuleModal(null)}>取消</button>
-            <button type="button" onClick={submitRule} disabled={loading}>保存并应用</button>
+            <button type="button" onClick={submitRule} disabled={loading || !ruleForm.landing_host.trim()}>保存并应用</button>
           </div>
         )}
       >

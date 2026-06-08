@@ -4,17 +4,46 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 func (s *Store) listIXMachines() []IXMachine {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.syncMachineStatusLocked(now())
 	out := make([]IXMachine, len(s.data.IXMachines))
 	copy(out, s.data.IXMachines)
 	for i := range out {
 		out[i].Token = ""
 	}
 	return out
+}
+
+func (s *Store) syncMachineStatusLocked(at time.Time) {
+	nodeByID := make(map[string]Node, len(s.data.Nodes))
+	for _, n := range s.data.Nodes {
+		nodeByID[n.ID] = applyNodeLiveness(n, at)
+	}
+	for i := range s.data.IXMachines {
+		m := &s.data.IXMachines[i]
+		if m.NodeID == "" {
+			continue
+		}
+		node, ok := nodeByID[m.NodeID]
+		if !ok {
+			m.Status = "offline"
+			continue
+		}
+		m.LastSeen = node.LastSeenAt
+		switch node.Status {
+		case "online":
+			m.Status = "online"
+		case "stale":
+			m.Status = "stale"
+		default:
+			m.Status = "offline"
+		}
+	}
 }
 
 func (s *Store) getIXMachine(id string) (IXMachine, bool) {

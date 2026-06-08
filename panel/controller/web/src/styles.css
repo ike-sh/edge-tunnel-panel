@@ -349,6 +349,7 @@ small { display: block; color: var(--text-secondary); overflow-wrap: anywhere; }
 .user-menu-dropdown button:hover { background: var(--glass-bg-subtle); transform: none; }
 .user-menu-dropdown .danger-text { color: var(--mac-red); }
 .banner-alert { margin: 0 1.5rem; border-radius: 12px; }
+.settings-login-hint { margin: 0 0 1rem; }
 .alert.compact-alert { margin-top: 0.85rem; padding: 0.65rem 0.85rem; font-size: 0.8125rem; }
 .topbar p { margin: 0.15rem 0 0; color: var(--text-secondary); font-size: 0.8125rem; }
 .topbar-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; }
@@ -689,6 +690,21 @@ small { display: block; color: var(--text-secondary); overflow-wrap: anywhere; }
 .wizard-actions { margin-top: 1rem; justify-content: flex-end; }
 
 /* Loading shimmer for refresh state */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; }
+.page-loading { opacity: 0.45; pointer-events: none; filter: blur(1px); transition: opacity 0.35s ease, filter 0.35s ease; }
+.page-ready { animation: page-ready-in 0.35s ease-out; }
+@keyframes page-ready-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.loading-shimmer {
+  height: 8px; border-radius: 999px; margin-top: 0.5rem;
+  background: linear-gradient(90deg, var(--glass-bg-subtle) 25%, var(--glass-bg) 50%, var(--glass-bg-subtle) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+button.linkish { background: transparent; border: 0; color: var(--mac-blue); padding: 0; box-shadow: none; font-weight: 600; }
+button.linkish:hover { text-decoration: underline; transform: none; }
 .topbar-actions button.secondary:disabled {
   background: linear-gradient(90deg, var(--glass-bg-subtle) 25%, var(--glass-bg) 50%, var(--glass-bg-subtle) 75%);
   background-size: 200% 100%;

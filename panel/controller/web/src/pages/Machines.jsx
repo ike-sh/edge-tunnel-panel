@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import Card from '../components/Card.jsx';
 import DataTable from '../components/DataTable.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
+import EmptyState from '../components/EmptyState.jsx';
 import Modal from '../components/Modal.jsx';
 import CopyModal from '../components/CopyModal.jsx';
 import ConfirmDialog from '../components/ConfirmDialog.jsx';
@@ -119,6 +120,19 @@ export default function Machines() {
           <button type="button" onClick={() => { setForm({ name: 'nat-ix-1', role: 'nat-transit' }); setCreateOpen(true); }}>添加 NAT IX 机器</button>
           <button type="button" className="secondary" onClick={() => { setForm({ name: 'ingress-1', role: 'nat-ingress' }); setCreateOpen(true); }}>添加入口机器</button>
         </div>
+        {!rows.length ? (
+          <EmptyState
+            title="还没有机器"
+            description="添加 NAT IX 中转或公网入口机器，复制安装命令到服务器完成 Agent 注册。"
+            action={(
+              <>
+                <button type="button" onClick={() => { setForm({ name: 'nat-ix-1', role: 'nat-transit' }); setCreateOpen(true); }}>添加 NAT IX 机器</button>
+                <button type="button" className="secondary" onClick={() => { setForm({ name: 'ingress-1', role: 'nat-ingress' }); setCreateOpen(true); }}>添加入口机器</button>
+              </>
+            )}
+          />
+        ) : (
+        <div className="table-scroll">
         <DataTable
           rows={rows}
           empty="暂无机器，请先添加。"
@@ -130,7 +144,7 @@ export default function Machines() {
               title: '状态',
               render: (m) => (
                 <div className="machine-status-cell">
-                  <StatusBadge status={m.status === 'online' ? 'online' : m.status === 'offline' ? 'offline' : 'waiting'}>
+                  <StatusBadge status={m.status === 'online' ? 'online' : m.status === 'offline' ? 'offline' : m.status === 'stale' ? 'stale' : 'waiting'}>
                     {m.status || 'pending'}
                   </StatusBadge>
                   {m.last_seen_at && <small>心跳 {timeAgo(m.last_seen_at)}</small>}
@@ -181,6 +195,8 @@ export default function Machines() {
             },
           ]}
         />
+        </div>
+        )}
       </Card>
 
       <Modal

@@ -150,7 +150,9 @@ func (s *Server) handleV2ProfileSub(w http.ResponseWriter, r *http.Request, path
 		var body struct {
 			Rules []IXRule `json:"rules,omitempty"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.ContentLength != 0 {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
 		if len(body.Rules) > 0 {
 			if err := s.store.updateIXProfileRules(profileID, body.Rules); err != nil {
 				writeErr(w, 400, "bad_request", err.Error())
@@ -159,7 +161,7 @@ func (s *Server) handleV2ProfileSub(w http.ResponseWriter, r *http.Request, path
 			p, _ = s.store.getIXProfile(profileID)
 		}
 		action := "ix_write_apply_rules"
-		if p.Role == "nat-transit" && len(body.Rules) == 0 {
+		if len(body.Rules) == 0 && p.Role == "nat-transit" {
 			action = "ix_write_create_nat"
 		}
 		payload := map[string]any{"profile_id": profileID, "config": p.Config, "rules": p.Rules}

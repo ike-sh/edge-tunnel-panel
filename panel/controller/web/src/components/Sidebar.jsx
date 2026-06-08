@@ -1,10 +1,11 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { NavIcon } from './ui/icons.jsx';
 import ThemeToggle from './ui/ThemeToggle.jsx';
 import { routes } from '../utils/routes.js';
 import { DEFAULT_VERSION } from '../utils/format.js';
 
 export default function Sidebar({ theme, onThemeToggle, mobileOpen, onCloseMobile }) {
+  const location = useLocation();
   return (
     <>
       {mobileOpen && <div className="sidebar-overlay" onClick={onCloseMobile} aria-hidden="true" />}
@@ -22,7 +23,7 @@ export default function Sidebar({ theme, onThemeToggle, mobileOpen, onCloseMobil
               key={path}
               to={path}
               end={path !== '/profiles'}
-              className={({ isActive }) => (isActive ? 'active' : '')}
+              className={({ isActive }) => (isActive || (path === '/profiles' && location.pathname.startsWith('/profiles/')) ? 'active' : '')}
               onClick={onCloseMobile}
             >
               <NavIcon name={key} />

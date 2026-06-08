@@ -149,6 +149,10 @@ func linuxCPUPercent() (float64, bool) {
 		lastCPUSample = sample
 		return 0, true
 	}
+	if time.Since(lastCPUSample.at) > 60*time.Second {
+		lastCPUSample = sample
+		return 0, true
+	}
 	deltaTotal := sample.total - lastCPUSample.total
 	deltaIdle := sample.idle - lastCPUSample.idle
 	lastCPUSample = sample
@@ -213,6 +217,10 @@ func linuxNetworkIO() (sent, recv, txBps, rxBps uint64, ok bool) {
 	now := time.Now()
 	netMu.Lock()
 	defer netMu.Unlock()
+	if !lastNetSample.at.IsZero() && time.Since(lastNetSample.at) > 60*time.Second {
+		lastNetSample = netCounters{sent: sent, recv: recv, at: now}
+		return sent, recv, 0, 0, true
+	}
 	if !lastNetSample.at.IsZero() {
 		secs := now.Sub(lastNetSample.at).Seconds()
 		if secs > 0 {

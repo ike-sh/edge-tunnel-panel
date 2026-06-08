@@ -1,9 +1,13 @@
+import { useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Card from '../components/Card.jsx';
 import CodeBlock from '../components/CodeBlock.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { DEFAULT_VERSION } from '../utils/format.js';
 
 export default function Settings() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const {
     apiBase,
     setApiBase,
@@ -17,18 +21,39 @@ export default function Settings() {
     handleCopyValue,
   } = useApp();
 
+  const fromPath = location.state?.from;
+  const needsLogin = strictAuth && !token;
+
+  useEffect(() => {
+    if (needsLogin && fromPath) {
+      document.getElementById('settings-token')?.focus();
+    }
+  }, [needsLogin, fromPath]);
+
+  async function handleSave() {
+    await saveSettings();
+    if (fromPath && fromPath !== '/settings') {
+      navigate(fromPath, { replace: true });
+    }
+  }
+
   const controllerInstall = `curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | bash -s -- \\\n  --version ${DEFAULT_VERSION}`;
   const agentPurge = `curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-agent.sh | bash -s -- --purge --remove-easytier-binaries`;
 
   return (
     <div className="page-stack">
+      {needsLogin && (
+        <div className="alert info banner-alert settings-login-hint">
+          当前启用了严格鉴权，请先填写 Operator Token 并保存，保存后将返回：<code>{fromPath || '/dashboard'}</code>
+        </div>
+      )}
       <Card title="设置" description="API、Token、运行模式和常用安装命令。">
         <div className="form-grid drawer-form">
           <label>API Base（默认同源）<input value={apiBase} onChange={(event) => setApiBase(event.target.value)} placeholder="留空表示同源" /></label>
-          <label>Operator Token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder={strictAuth ? '严格鉴权时需要' : '测试模式可留空'} /></label>
+          <label>Operator Token<input id="settings-token" type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder={strictAuth ? '严格鉴权时需要' : '测试模式可留空'} /></label>
         </div>
         <div className="actions">
-          <button type="button" onClick={saveSettings}>保存设置</button>
+          <button type="button" onClick={handleSave}>保存设置</button>
           <button type="button" className="secondary" onClick={clearToken}>清除 Token</button>
           <button type="button" className="secondary" onClick={() => refreshHealth()}>测试连接</button>
         </div>

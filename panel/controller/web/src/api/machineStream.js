@@ -14,9 +14,14 @@ export function watchMachineStream(apiBase, token, { onSnapshot, onOpen, onClose
   let stopped = false;
   let reconnectTimer = null;
   let attempts = 0;
+  let lastMessageAt = 0;
 
   function connect() {
     if (stopped) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      reconnectTimer = window.setTimeout(connect, 3000);
+      return;
+    }
     const base = wsBase(apiBase);
     const qs = token ? `?token=${encodeURIComponent(token)}` : '';
     const url = `${base}/api/v2/stream/machines${qs}`;
@@ -31,10 +36,12 @@ export function watchMachineStream(apiBase, token, { onSnapshot, onOpen, onClose
 
     ws.onopen = () => {
       attempts = 0;
+      lastMessageAt = Date.now();
       onOpen?.();
     };
 
     ws.onmessage = (event) => {
+      lastMessageAt = Date.now();
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'snapshot') {
@@ -46,7 +53,7 @@ export function watchMachineStream(apiBase, token, { onSnapshot, onOpen, onClose
     };
 
     ws.onerror = () => {
-      onError?.(new Error('websocket error'));
+      if (!stopped) onError?.(new Error('websocket error'));
     };
 
     ws.onclose = () => {
@@ -63,10 +70,18 @@ export function watchMachineStream(apiBase, token, { onSnapshot, onOpen, onClose
     reconnectTimer = window.setTimeout(connect, delay);
   }
 
+  const staleChecker = window.setInterval(() => {
+    if (stopped || !lastMessageAt) return;
+    if (Date.now() - lastMessageAt > 15000 && ws?.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+  }, 5000);
+
   connect();
 
   return () => {
     stopped = true;
+    window.clearInterval(staleChecker);
     if (reconnectTimer) window.clearTimeout(reconnectTimer);
     if (ws) {
       ws.onopen = null;

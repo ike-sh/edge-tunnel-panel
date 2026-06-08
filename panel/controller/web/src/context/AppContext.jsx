@@ -37,9 +37,9 @@ export function AppProvider({ children }) {
   const [showWizard, setShowWizard] = useState(false);
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [streamLive, setStreamLive] = useState(false);
+  const [bootstrapped, setBootstrapped] = useState(false);
   const stopStreamsRef = useRef(null);
   const machineStreamRef = useRef(null);
-  const failedToastRef = useRef(new Set());
 
   const api = useMemo(() => createApiClient({ apiBase, token }), [apiBase, token]);
   const apiV2 = useMemo(() => createApiV2Client({ apiBase, token }), [apiBase, token]);
@@ -129,8 +129,7 @@ export function AppProvider({ children }) {
     const ids = taskIDsFromResponse(data);
     if (!ids.length) return;
     setPendingTaskIds((prev) => [...new Set([...prev, ...ids])]);
-    stopStreamsRef.current?.();
-    stopStreamsRef.current = watchTasks(apiBase, token, ids, {
+    const stops = ids.filter(Boolean).map((taskId) => watchTasks(apiBase, token, [taskId], {
       onUpdate: (task) => mergeTaskUpdate(task),
       onDone: async (task) => {
         mergeTaskUpdate(task);
@@ -143,14 +142,26 @@ export function AppProvider({ children }) {
         }
       },
       onError: () => refreshTasks().catch(() => {}),
-    });
+    }));
+    const prevStop = stopStreamsRef.current;
+    stopStreamsRef.current = () => {
+      prevStop?.();
+      stops.forEach((stop) => stop());
+    };
   }, [apiBase, token, mergeTaskUpdate, refreshIxProfiles, refreshTasks]);
 
   useEffect(() => () => stopStreamsRef.current?.(), []);
 
   useEffect(() => {
-    refreshAll().catch(() => {});
-  }, []);
+    let cancelled = false;
+    setBootstrapped(false);
+    refreshAll()
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setBootstrapped(true);
+      });
+    return () => { cancelled = true; };
+  }, [token, apiBase, refreshAll]);
 
   useEffect(() => {
     if (health === null) return undefined;
@@ -181,15 +192,6 @@ export function AppProvider({ children }) {
     return () => window.clearInterval(timer);
   }, [refreshNodes, refreshMachines, streamLive]);
 
-  useEffect(() => {
-    const recentFailed = tasks.filter((t) => t.status === 'failed').slice(0, 3);
-    recentFailed.forEach((task) => {
-      if (failedToastRef.current.has(task.id)) return;
-      failedToastRef.current.add(task.id);
-      toast.error(`任务失败：${task.action}`, { id: `fail-${task.id}` });
-    });
-  }, [tasks]);
-
   const handleCopyValue = useCallback(async (text, title = '内容') => {
     const ok = await copyText(text);
     if (ok) toast.success(`已复制 ${title}`);
@@ -214,7 +216,7 @@ export function AppProvider({ children }) {
   }, [apiV2, run]);
 
   const createIxProfileFromWizard = useCallback(async (body) => {
-    const data = await run('创建线路', async () => apiV2('/profiles', { body }));
+    const data = await run('创建线路', async () => apiV2('/profiles', { body }), { silent: true });
     if (!data) return false;
     trackTasks(data, '创建线路');
     await Promise.all([refreshIxProfiles(), refreshTasks()]);
@@ -222,7 +224,7 @@ export function AppProvider({ children }) {
   }, [apiV2, run, trackTasks, refreshIxProfiles, refreshTasks]);
 
   const importIxProfileFromWizard = useCallback(async (body) => {
-    const data = await run('导入接入码', async () => apiV2('/profiles', { body }));
+    const data = await run('导入接入码', async () => apiV2('/profiles', { body }), { silent: true });
     if (!data) return false;
     trackTasks(data, '导入接入码');
     await Promise.all([refreshIxProfiles(), refreshTasks()]);
@@ -279,11 +281,12 @@ export function AppProvider({ children }) {
     return data;
   }, [apiV2, run, trackTasks, refreshTasks]);
 
-  const saveSettings = useCallback(() => {
+  const saveSettings = useCallback(async () => {
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(API_BASE_KEY, apiBase);
     toast.success('设置已保存');
-  }, [token, apiBase]);
+    await refreshAll();
+  }, [token, apiBase, refreshAll]);
 
   const clearToken = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
@@ -320,6 +323,7 @@ export function AppProvider({ children }) {
     showImportWizard,
     setShowImportWizard,
     streamLive,
+    bootstrapped,
     run,
     refreshAll,
     refreshMachines,

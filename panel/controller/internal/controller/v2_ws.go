@@ -37,14 +37,17 @@ func (s *Server) handleV2MachineStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Minute))
+	deadline := time.Now().Add(6 * time.Minute)
+	_ = conn.SetReadDeadline(deadline)
 	conn.SetPongHandler(func(string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(6 * time.Minute))
 		return nil
 	})
 
 	ticker := time.NewTicker(2 * time.Second)
+	pingTicker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	defer pingTicker.Stop()
 
 	sendSnapshot := func() error {
 		payload, _ := json.Marshal(map[string]any{
@@ -63,6 +66,10 @@ func (s *Server) handleV2MachineStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-pingTicker.C:
+			if err := conn.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(5*time.Second)); err != nil {
+				return
+			}
 		case <-ticker.C:
 			if err := sendSnapshot(); err != nil {
 				return
