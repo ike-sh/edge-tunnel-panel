@@ -43,6 +43,23 @@ func (s *Store) matchMachineToken(token string) bool {
 	return false
 }
 
+func (s *Store) rotateIXMachineToken(id string) (IXMachine, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.IXMachines {
+		if s.data.IXMachines[i].ID != id {
+			continue
+		}
+		s.data.IXMachines[i].Token = randomSecret()
+		m := s.data.IXMachines[i]
+		if err := s.saveLocked(); err != nil {
+			return IXMachine{}, err
+		}
+		return m, nil
+	}
+	return IXMachine{}, fmt.Errorf("machine not found")
+}
+
 func (s *Store) createIXMachine(name, role string) (IXMachine, error) {
 	if name == "" {
 		return IXMachine{}, fmt.Errorf("name is required")

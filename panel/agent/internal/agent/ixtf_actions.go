@@ -12,7 +12,7 @@ import (
 
 func dispatchIXAction(ctx context.Context, cfg Config, runner CommandRunner, task Task) TaskResult {
 	if ixnative.NativeEnabled() {
-		if result, handled := dispatchNativeIXAction(task); handled {
+		if result, handled := dispatchNativeIXAction(ctx, cfg, runner, task); handled {
 			return result
 		}
 	}
@@ -31,26 +31,31 @@ func dispatchIXAction(ctx context.Context, cfg Config, runner CommandRunner, tas
 	return TaskResult{Status: "succeeded", Result: string(raw), Stdout: result.Stdout, Stderr: result.Stderr}
 }
 
-func dispatchNativeIXAction(task Task) (TaskResult, bool) {
+func dispatchNativeIXAction(ctx context.Context, cfg Config, runner CommandRunner, task Task) (TaskResult, bool) {
+	sysRunner := systemdRunnerAdapter{inner: runner}
 	switch task.Action {
 	case "ix_write_create_nat":
-		cfg, err := ixnative.ProfileConfigFromPayload(task.Payload)
+		profileCfg, err := ixnative.ProfileConfigFromPayload(task.Payload)
 		if err != nil {
 			return TaskResult{Status: "failed", Error: err.Error()}, true
 		}
-		path, err := ixnative.WriteProfileEnv(cfg)
+		path, err := ixnative.WriteProfileEnv(profileCfg)
 		if err != nil {
 			return TaskResult{Status: "failed", Error: err.Error()}, true
 		}
 		etCfg, _ := ixnative.EasyTierConfigFromPayload(task.Payload)
 		etPath, etErr := ixnative.WriteEasyTierConfig(etCfg)
 		unitPath, unitErr := ixnative.WriteSystemdUnit(etCfg.ProfileID, etPath, "")
-		out := map[string]any{"native": true, "path": path, "profile_id": cfg.ProfileID}
+		out := map[string]any{"native": true, "path": path, "profile_id": profileCfg.ProfileID}
 		if etErr == nil {
 			out["easytier_config"] = etPath
 		}
 		if unitErr == nil {
 			out["systemd_unit"] = unitPath
+			if applyErr := ixnative.ApplySystemdUnit(ctx, sysRunner, etCfg.ProfileID); applyErr != nil {
+				return TaskResult{Status: "failed", Error: applyErr.Error()}, true
+			}
+			out["systemd_applied"] = ixnative.SystemdApplyEnabled()
 		}
 		raw, _ := json.Marshal(out)
 		msg := fmt.Sprintf("wrote profile env: %s\n", path)
@@ -122,4 +127,20 @@ func (r ixCommandRunner) Run(ctx context.Context, name string, args ...string) (
 func isIXAction(action string) bool {
 	_, ok := ixtf.SubcommandForAction(action)
 	return ok
+}
+
+type systemdRunnerAdapter struct {
+	inner CommandRunner
+}
+
+func (a systemdRunnerAdapter) Run(ctx context.Context, name string, args ...string) (string, string, int, error) {
+	res := a.inner.Run(ctx, name, args...)
+	exitCode := res.ExitCode
+	if res.Err != nil && exitCode == 0 {
+		return res.Stdout, res.Stderr, -1, res.Err
+	}
+	if exitCode != 0 {
+		return res.Stdout, res.Stderr, exitCode, fmt.Errorf("exit code %d", exitCode)
+	}
+	return res.Stdout, res.Stderr, 0, nil
 }

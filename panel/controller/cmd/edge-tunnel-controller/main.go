@@ -32,7 +32,7 @@ func main() {
 	webDir := getenv("EDGE_WEB_DIR", filepath.Join(dataDir, "web"))
 	operatorToken := getenv("EDGE_OPERATOR_TOKEN", "edge-operator-token")
 	agentToken := getenv("EDGE_CONTROLLER_TOKEN", "edge-agent-token")
-	strict := getenv("EDGE_STRICT_AUTH", "false") == "true"
+	strict := getenv("EDGE_STRICT_AUTH", "true") == "true"
 	store, err := controller.OpenStore(filepath.Join(dataDir, "store.json"))
 	if err != nil {
 		log.Fatal(err)

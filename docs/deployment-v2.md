@@ -29,7 +29,7 @@ export EDGE_DATA_DIR=/var/lib/edge-tunnel/controller
 export EDGE_WEB_DIR=/path/to/panel/controller/web/dist
 export EDGE_OPERATOR_TOKEN=your-operator-token
 export EDGE_CONTROLLER_TOKEN=your-agent-token
-export EDGE_STRICT_AUTH=true   # 生产环境建议开启
+export EDGE_STRICT_AUTH=true   # 默认 true；本地 E2E 可设为 false
 
 ./edge-tunnel-controller
 ```
@@ -84,7 +84,7 @@ cd panel/controller/web && npm run dev
 | GET/POST | `/api/v2/machines` | 机器 CRUD |
 | GET/POST | `/api/v2/profiles` | 线路 CRUD（ingress 传 `code`） |
 | POST | `/api/v2/profiles/:id/sync` | 同步（3 任务） |
-| GET | `/api/v2/tasks/:id/stream` | SSE 任务流 |
+| POST | `/api/v2/machines/:id/rotate-token` | 轮换机器 Agent Token（一次性返回） |
 | POST | `/api/v2/diagnostics/run` | 按机器诊断 |
 
 ## 7. 故障排查

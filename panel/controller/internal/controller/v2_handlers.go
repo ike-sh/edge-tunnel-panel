@@ -23,11 +23,25 @@ func (s *Server) handleV2Machines(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperator(w, r) {
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		if strings.TrimPrefix(r.URL.Path, "/api/v2/machines/") != r.URL.Path {
-			id := strings.TrimPrefix(r.URL.Path, "/api/v2/machines/")
-			id = strings.TrimSuffix(id, "/")
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v2/machines")
+	rest = strings.Trim(rest, "/")
+	if rest != "" {
+		parts := strings.SplitN(rest, "/", 2)
+		id := parts[0]
+		sub := ""
+		if len(parts) > 1 {
+			sub = parts[1]
+		}
+		if sub == "rotate-token" && r.Method == http.MethodPost {
+			m, err := s.store.rotateIXMachineToken(id)
+			if err != nil {
+				writeErr(w, 404, "not_found", err.Error())
+				return
+			}
+			writeOK(w, 200, map[string]any{"machine_id": m.ID, "token": m.Token, "note": "请立即更新 Agent 配置并重启"})
+			return
+		}
+		if sub == "" && r.Method == http.MethodGet {
 			m, ok := s.store.getIXMachine(id)
 			if !ok {
 				writeErr(w, 404, "not_found", "machine not found")
@@ -36,6 +50,11 @@ func (s *Server) handleV2Machines(w http.ResponseWriter, r *http.Request) {
 			writeOK(w, 200, m)
 			return
 		}
+		writeErr(w, 404, "not_found", "unknown sub-resource")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
 		writeOK(w, 200, s.store.listIXMachines())
 	case http.MethodPost:
 		var body struct {
