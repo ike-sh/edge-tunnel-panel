@@ -42,9 +42,25 @@ func dispatchNativeIXAction(task Task) (TaskResult, bool) {
 		if err != nil {
 			return TaskResult{Status: "failed", Error: err.Error()}, true
 		}
+		etCfg, _ := ixnative.EasyTierConfigFromPayload(task.Payload)
+		etPath, etErr := ixnative.WriteEasyTierConfig(etCfg)
+		unitPath, unitErr := ixnative.WriteSystemdUnit(etCfg.ProfileID, etPath, "")
 		out := map[string]any{"native": true, "path": path, "profile_id": cfg.ProfileID}
+		if etErr == nil {
+			out["easytier_config"] = etPath
+		}
+		if unitErr == nil {
+			out["systemd_unit"] = unitPath
+		}
 		raw, _ := json.Marshal(out)
-		return TaskResult{Status: "succeeded", Result: string(raw), Stdout: fmt.Sprintf("wrote profile env: %s\n", path)}, true
+		msg := fmt.Sprintf("wrote profile env: %s\n", path)
+		if etErr == nil {
+			msg += fmt.Sprintf("wrote easytier config: %s\n", etPath)
+		}
+		if unitErr == nil {
+			msg += fmt.Sprintf("wrote systemd unit: %s\n", unitPath)
+		}
+		return TaskResult{Status: "succeeded", Result: string(raw), Stdout: msg}, true
 	case "ix_write_apply_rules":
 		rules := ixnative.ForwardRulesFromPayload(task.Payload)
 		if len(rules) == 0 {

@@ -29,6 +29,20 @@ func (s *Store) getIXMachine(id string) (IXMachine, bool) {
 	return IXMachine{}, false
 }
 
+func (s *Store) matchMachineToken(token string) bool {
+	if strings.TrimSpace(token) == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.data.IXMachines {
+		if m.Token != "" && tokenMatches(token, m.Token) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) createIXMachine(name, role string) (IXMachine, error) {
 	if name == "" {
 		return IXMachine{}, fmt.Errorf("name is required")

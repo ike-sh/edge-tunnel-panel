@@ -225,7 +225,11 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 func (s *Server) requireAgent(w http.ResponseWriter, r *http.Request) bool {
-	if tokenMatches(bearerToken(r), s.agentToken) {
+	tok := bearerToken(r)
+	if tokenMatches(tok, s.agentToken) {
+		return true
+	}
+	if s.store.matchMachineToken(tok) {
 		return true
 	}
 	writeErr(w, 401, "UNAUTHORIZED", "agent token required")
