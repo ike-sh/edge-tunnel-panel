@@ -109,11 +109,12 @@ VERSION=v0.3.1 bash panel/scripts/build-release.sh
 
 或推送 tag 后由 GitHub Actions 自动发布（`.github/workflows/release.yml`）；也可在 Actions 页手动 **Run workflow** 指定版本。
 
-**Docker 本地验证**（无需 Release 资产，需能拉取 `debian:bookworm-slim`）：
+**Docker 本地验证**（无需 Release 资产；国内拉不到 docker.io 时可指定镜像源）：
 
 ```bash
 docker build -f panel/examples/docker/Dockerfile.local \
   --build-arg VERSION=v0.3.1 \
+  --build-arg BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim \
   -t edge-tunnel-panel:local panel/dist
 ```
 
