@@ -17,7 +17,7 @@ services:
       - --entrypoints.web.address=:80
 
   controller:
-    image: edge-tunnel-panel:v0.3.1
+    image: edge-tunnel-panel:v0.3.2
     restart: unless-stopped
     environment:
       EDGE_LISTEN: 0.0.0.0:18080

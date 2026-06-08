@@ -207,7 +207,7 @@ docker compose -f panel/examples/docker-compose.traefik.yml logs -f controller
 **本地 smoke test（HTTP，无需域名）**：
 
 ```bash
-# 需先构建镜像 edge-tunnel-panel:v0.3.1（见 README 维护者章节）
+# 需先构建镜像 edge-tunnel-panel:v0.3.2（见 README 维护者章节）
 cd panel/examples
 docker compose -f docker-compose.traefik.local.yml up -d
 curl -fsS http://127.0.0.1:18088/api/v1/health
@@ -226,13 +226,13 @@ curl -fsS http://127.0.0.1:18088/api/v1/health
 ```bash
 # 1. 构建并推送镜像（见 panel/examples/docker/Dockerfile.local）
 docker build -f panel/examples/docker/Dockerfile.local \
-  --build-arg VERSION=v0.3.1 \
-  -t your-registry/edge-tunnel-panel:v0.3.1 panel/dist
-docker push your-registry/edge-tunnel-panel:v0.3.1
+  --build-arg VERSION=v0.3.2 \
+  -t your-registry/edge-tunnel-panel:v0.3.2 panel/dist
+docker push your-registry/edge-tunnel-panel:v0.3.2
 
 helm upgrade --install etp panel/examples/helm/edge-tunnel-panel \
   --set image.repository=your-registry/edge-tunnel-panel \
-  --set image.tag=v0.3.1 \
+  --set image.tag=v0.3.2 \
   --set ingress.hosts[0].host=panel.example.com \
   --set env.EDGE_OPERATOR_TOKEN=YOUR_TOKEN
 ```

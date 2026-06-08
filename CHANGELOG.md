@@ -1,3 +1,31 @@
+# Changelog — v0.3.2
+
+文档与安全补丁：审查修复、CI 门禁、Traefik 本地验证。
+
+## 文档
+
+- README 更新为 v2 使用流程（机器 / 线路 Profile / 接入码）
+- `deployment-v2.md` 修正 WebSocket 鉴权说明、端口与章节编号
+- Helm 镜像 tag 统一为 `v0.3.2`，补充 build/push 说明
+
+## 安全
+
+- `EDGE_STRICT_AUTH=true` 时拒绝默认硬编码 Token，须使用 `quick-install.sh` 或自定义环境变量
+
+## CI / 发布
+
+- 新增 `.github/workflows/ci.yml`（go test + web build）
+- Release workflow 增加测试门禁
+- 新增 Traefik 本地 smoke compose（端口 18088，file provider）
+
+## 其他
+
+- `e2e-v2-smoke.sh` 默认端口改为 18080
+- Topbar 文案对齐 v2
+- `.gitignore` 忽略 `tmp/`
+
+---
+
 # Changelog — v0.3.1
 
 正式版发布：v2 UI、一键安装、安全加固、生产反代示例。
