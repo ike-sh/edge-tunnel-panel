@@ -43,27 +43,21 @@ func dispatchNativeIXAction(ctx context.Context, cfg Config, runner CommandRunne
 		if err != nil {
 			return TaskResult{Status: "failed", Error: err.Error()}, true
 		}
-		etCfg, _ := ixnative.EasyTierConfigFromPayload(task.Payload)
-		etPath, etErr := ixnative.WriteEasyTierConfig(etCfg)
-		unitPath, unitErr := ixnative.WriteSystemdUnit(etCfg.ProfileID, etPath, "")
 		out := map[string]any{"native": true, "path": path, "profile_id": profileCfg.ProfileID}
-		if etErr == nil {
-			out["easytier_config"] = etPath
-		}
-		if unitErr == nil {
-			out["systemd_unit"] = unitPath
-			if applyErr := ixnative.ApplySystemdUnit(ctx, sysRunner, etCfg.ProfileID); applyErr != nil {
-				return TaskResult{Status: "failed", Error: applyErr.Error()}, true
+		if lifecycle, lcErr := ixnative.ProvisionEasyTierLifecycle(ctx, sysRunner, task.Payload); lcErr == nil {
+			for k, v := range lifecycle {
+				out[k] = v
 			}
-			out["systemd_applied"] = ixnative.SystemdApplyEnabled()
+		} else if ixnative.SystemdApplyEnabled() {
+			return TaskResult{Status: "failed", Error: lcErr.Error()}, true
 		}
 		raw, _ := json.Marshal(out)
 		msg := fmt.Sprintf("wrote profile env: %s\n", path)
-		if etErr == nil {
-			msg += fmt.Sprintf("wrote easytier config: %s\n", etPath)
+		if v, ok := out["easytier_config"].(string); ok {
+			msg += fmt.Sprintf("wrote easytier config: %s\n", v)
 		}
-		if unitErr == nil {
-			msg += fmt.Sprintf("wrote systemd unit: %s\n", unitPath)
+		if v, ok := out["systemd_unit"].(string); ok {
+			msg += fmt.Sprintf("wrote systemd unit: %s\n", v)
 		}
 		return TaskResult{Status: "succeeded", Result: string(raw), Stdout: msg}, true
 	case "ix_write_apply_rules":
