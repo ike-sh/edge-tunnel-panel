@@ -4,7 +4,8 @@
 #     --build-arg VERSION=v0.3.1 \
 #     -t edge-tunnel-panel:local panel/dist
 ARG VERSION=v0.3.1
-FROM debian:bookworm-slim
+ARG BASE_IMAGE=debian:bookworm-slim
+FROM ${BASE_IMAGE}
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
