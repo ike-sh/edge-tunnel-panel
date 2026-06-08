@@ -725,6 +725,26 @@ small { display: block; color: var(--text-secondary); overflow-wrap: anywhere; }
 .rule-row-dragging { background: var(--table-hover); }
 .rules-sortable th:first-child,
 .rules-sortable td:first-child { width: 2.5rem; text-align: center; }
+.install-wizard { width: min(720px, 100%); }
+.install-checklist { margin: 0.5rem 0 1rem; padding-left: 1.25rem; color: var(--text-secondary); }
+.install-checklist li { margin: 0.35rem 0; }
+.install-step-panel { min-height: 12rem; }
+.install-verify-box {
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  background: var(--glass-bg-subtle);
+}
+.install-verify-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  font-size: 0.875rem;
+}
+.install-tip { font-size: 0.8125rem; margin-top: 0.75rem; }
+.kv-grid.compact { font-size: 0.875rem; }
 button.linkish { background: transparent; border: 0; color: var(--mac-blue); padding: 0; box-shadow: none; font-weight: 600; }
 button.linkish:hover { text-decoration: underline; transform: none; }
 .topbar-actions button.secondary:disabled {

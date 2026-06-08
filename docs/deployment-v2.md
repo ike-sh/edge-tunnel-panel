@@ -175,7 +175,7 @@ PowerShell 等价：`EDGE_LISTEN=127.0.0.1:8080` + `Invoke-RestMethod` 调用 v2
 | ~~**P0**~~ | forward 暂停/恢复/诊断 | ProfileDetail 暂停/恢复/诊断 | ✅ |
 | ~~**P1**~~ | dashboard 过期 toast | 机器 stale/离线、线路失败 toast | ✅ |
 | ~~**P1**~~ | forward 复制接入地址 Modal | 接入码 Tab CopyModal | ✅ |
-| **P1** | node 安装命令分步 Modal | 机器页安装 Modal 加分步说明 | 待做 |
+| ~~**P1**~~ | node 安装命令分步 Modal | 机器页 InstallWizardModal 四步向导 | ✅ |
 | **P2** | H5 底部 Tab 布局 | 可选 `?h5=true` 移动布局 | 待做 |
 | **P2** | 多用户 RBAC + JWT | 暂不需要（单 Operator） | — |
 | **P2** | HeroUI 组件库 | 保留 macOS Glass，不整站迁移 | — |

@@ -5,6 +5,7 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import Modal from '../components/Modal.jsx';
 import CopyModal from '../components/CopyModal.jsx';
+import InstallWizardModal from '../components/InstallWizardModal.jsx';
 import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { timeAgo } from '../utils/format.js';
@@ -58,7 +59,7 @@ export default function Machines() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
-  const [installModal, setInstallModal] = useState(null);
+  const [installWizard, setInstallWizard] = useState(null);
   const [tokenModal, setTokenModal] = useState(null);
   const [rotateTarget, setRotateTarget] = useState(null);
 
@@ -84,10 +85,7 @@ export default function Machines() {
   async function showInstall(machine) {
     const data = await installMachine(machine);
     if (data?.root_command) {
-      setInstallModal({
-        machine,
-        content: `${data.root_command}\n# Agent 注册 payload 携带 machine_id=${machine.id}`,
-      });
+      setInstallWizard({ machine, data });
     }
   }
 
@@ -226,13 +224,15 @@ export default function Machines() {
         </div>
       </Modal>
 
-      <CopyModal
-        open={!!installModal}
-        title={`安装命令 · ${installModal?.machine?.name || ''}`}
-        description="在目标服务器以 root 执行以下命令。"
-        content={installModal?.content || ''}
-        onClose={() => setInstallModal(null)}
-        onCopy={(text) => handleCopyValue(text, '安装命令')}
+      <InstallWizardModal
+        open={!!installWizard}
+        machine={installWizard?.machine}
+        installData={installWizard?.data}
+        liveMachine={installWizard?.machine ? machines.find((m) => m.id === installWizard.machine.id) : null}
+        loading={loading}
+        onClose={() => setInstallWizard(null)}
+        onCopy={handleCopyValue}
+        onRefresh={refreshMachines}
       />
 
       <CopyModal
