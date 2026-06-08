@@ -3,9 +3,12 @@ import { Toaster } from 'react-hot-toast';
 import { useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar.jsx';
 import Topbar from './Topbar.jsx';
+import H5Layout from './H5Layout.jsx';
+import { useH5Layout } from '../hooks/useH5Layout.js';
 import { useApp } from '../context/AppContext.jsx';
 
 export default function Layout({ children }) {
+  const h5 = useH5Layout();
   const {
     theme,
     toggleTheme,
@@ -22,6 +25,31 @@ export default function Layout({ children }) {
 
   function handleTopbarAction(action) {
     if (action === 'menu') setMobileOpen((v) => !v);
+  }
+
+  const toaster = (
+    <Toaster
+      position={h5 ? 'bottom-center' : 'top-right'}
+      toastOptions={{
+        duration: 3500,
+        style: {
+          background: 'var(--glass-bg-strong)',
+          color: 'var(--text-primary)',
+          border: '1px solid var(--glass-border)',
+          backdropFilter: 'blur(20px)',
+        },
+      }}
+    />
+  );
+
+  if (h5) {
+    return (
+      <>
+        <div className="mac-wallpaper" aria-hidden="true" />
+        <H5Layout>{children}</H5Layout>
+        {toaster}
+      </>
+    );
   }
 
   return (
@@ -53,18 +81,7 @@ export default function Layout({ children }) {
           </main>
         </div>
       </div>
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          duration: 3500,
-          style: {
-            background: 'var(--glass-bg-strong)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--glass-border)',
-            backdropFilter: 'blur(20px)',
-          },
-        }}
-      />
+      {toaster}
     </>
   );
 }
