@@ -56,6 +56,7 @@ export default function Settings() {
           <button type="button" onClick={handleSave}>保存设置</button>
           <button type="button" className="secondary" onClick={clearToken}>清除 Token</button>
           <button type="button" className="secondary" onClick={() => refreshHealth()}>测试连接</button>
+          <button type="button" className="secondary" onClick={() => navigate('/diagnostics')}>诊断工具</button>
         </div>
         <dl className="kv-grid">
           <dt>Controller</dt><dd>{health?.name || 'Edge Tunnel Controller'}</dd>
