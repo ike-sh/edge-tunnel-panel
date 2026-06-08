@@ -1,4 +1,4 @@
-﻿# Edge Tunnel Panel v0.3.1
+# Edge Tunnel Panel v0.3.1
 
 Edge Tunnel Panel 是一个面向节点组网、端口转发和出口策略的轻量 Web 面板。它用于把外部访问流量从 A 公网入口节点转发到 B 落地节点，再转发到最终落地服务器 IP/域名和端口。
 
@@ -29,12 +29,12 @@ Edge Tunnel Panel 是一个面向节点组网、端口转发和出口策略的�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash
+```
 
-**生产反代一键（本机 18080 + 防火墙，配合 Nginx/Caddy）：**
+**生产反代一键**（本机 18080 + 防火墙，配合 Nginx/Caddy）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/quick-install.sh | sudo bash -s -- --production --production-proxy nginx
-```
 ```
 
 **国内服务器**（GitHub 镜像 + 自动放行 ufw 18080）：
@@ -83,6 +83,38 @@ curl -fsSL https://gh.llkk.cc/https://raw.githubusercontent.com/ike-sh/edge-tunn
 curl -fsSL https://raw.githubusercontent.com/ike-sh/edge-tunnel-panel/main/panel/scripts/install-controller.sh | sudo bash -s -- \
   --version latest \
   --strict-auth
+```
+
+## 维护者：构建与发布 Release
+
+**本地构建**（Linux / Git Bash）：
+
+```bash
+VERSION=v0.3.1 bash panel/scripts/build-release.sh
+```
+
+**Windows PowerShell**（无 bash 时）：
+
+```powershell
+.\panel\scripts\build-release.ps1 -Version v0.3.1
+```
+
+产物位于 `panel/dist/`（`*.tar.gz` + `SHA256SUMS`）。
+
+**发布到 GitHub**（需 `gh auth login` 或 `GH_TOKEN`）：
+
+```powershell
+.\panel\scripts\publish-release.ps1 -Version v0.3.1 -SkipBuild
+```
+
+或推送 tag 后由 GitHub Actions 自动发布（`.github/workflows/release.yml`）；也可在 Actions 页手动 **Run workflow** 指定版本。
+
+**Docker 本地验证**（无需 Release 资产，需能拉取 `debian:bookworm-slim`）：
+
+```bash
+docker build -f panel/examples/docker/Dockerfile.local \
+  --build-arg VERSION=v0.3.1 \
+  -t edge-tunnel-panel:local panel/dist
 ```
 
 ## 卸载 Controller

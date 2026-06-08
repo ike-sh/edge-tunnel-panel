@@ -1,0 +1,30 @@
+# 从本地 panel/dist 构建（无需 GitHub Release 资产，适合 CI / 离线验证）
+# 构建（在仓库根目录）：
+#   docker build -f panel/examples/docker/Dockerfile.local \
+#     --build-arg VERSION=v0.3.1 \
+#     -t edge-tunnel-panel:local panel/dist
+ARG VERSION=v0.3.1
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+ARG TARGETARCH=amd64
+ARG VERSION
+COPY edge-tunnel-panel-${VERSION}-linux-${TARGETARCH}.tar.gz /tmp/release.tar.gz
+RUN mkdir -p /opt/edge-tunnel-panel \
+  && tar -xzf /tmp/release.tar.gz -C /opt/edge-tunnel-panel \
+  && rm /tmp/release.tar.gz \
+  && install -m 0755 /opt/edge-tunnel-panel/edge-tunnel-controller /usr/local/bin/edge-tunnel-controller
+
+ENV EDGE_LISTEN=0.0.0.0:18080 \
+    EDGE_DATA_DIR=/var/lib/edge-tunnel/controller \
+    EDGE_WEB_DIR=/opt/edge-tunnel-panel/web \
+    EDGE_STRICT_AUTH=true \
+    EDGE_FORCE_HTTPS=1
+
+RUN mkdir -p /var/lib/edge-tunnel/controller
+VOLUME ["/var/lib/edge-tunnel/controller"]
+EXPOSE 18080
+CMD ["edge-tunnel-controller"]

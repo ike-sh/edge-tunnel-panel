@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v0.3.1)"
+        required: true
+        default: v0.3.1
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: panel/controller/web/package-lock.json
+
+      - name: Build release packages
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: bash panel/scripts/build-release.sh
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          gh release view "$VERSION" >/dev/null 2>&1 || \
+            gh release create "$VERSION" --title "$VERSION" --notes-file CHANGELOG.md
+          gh release upload "$VERSION" panel/dist/*.tar.gz panel/dist/SHA256SUMS --clobber
