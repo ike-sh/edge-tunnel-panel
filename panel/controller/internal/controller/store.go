@@ -261,6 +261,9 @@ func (s *Store) updateTaskResult(id string, req map[string]any) (Task, bool, err
 			case "apply_pbr_policy", "verify_pbr_policy", "disable_pbr_policy":
 				s.updatePBRStatusForTaskLocked(*t)
 			}
+			if strings.HasPrefix(t.Action, "ix_") {
+				s.applyIXTaskResultLocked(*t)
+			}
 			return *t, true, s.saveLocked()
 		}
 	}

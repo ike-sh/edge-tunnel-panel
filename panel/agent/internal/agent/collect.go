@@ -101,6 +101,7 @@ func ReportFromStatus(cfg Config, status AgentStatus) ReportRequest {
 		ID:                    cfg.NodeID,
 		Name:                  cfg.NodeName,
 		Role:                  cfg.NodeRole,
+		MachineID:             cfg.MachineID,
 		PrivateIP:             status.PrivateIP,
 		AgentVersion:          Version,
 		Hostname:              status.Hostname,

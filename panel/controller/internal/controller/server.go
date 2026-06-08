@@ -18,10 +18,16 @@ type Server struct {
 	operatorToken string
 	strictAuth    bool
 	webDir        string
+	legacyV1API   bool
+}
+
+func legacyV1Enabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("EDGE_LEGACY_V1_API")))
+	return v == "1" || v == "true" || v == "yes"
 }
 
 func NewServer(store *Store, agentToken, operatorToken string, strictAuth bool, webDir string) http.Handler {
-	s := &Server{store: store, agentToken: agentToken, operatorToken: operatorToken, strictAuth: strictAuth, webDir: webDir}
+	s := &Server{store: store, agentToken: agentToken, operatorToken: operatorToken, strictAuth: strictAuth, webDir: webDir, legacyV1API: legacyV1Enabled()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/login", s.handleLogin)
@@ -34,23 +40,38 @@ func NewServer(store *Store, agentToken, operatorToken string, strictAuth bool, 
 	mux.HandleFunc("/api/v1/agent/unregister", s.handleAgentUnregister)
 	mux.HandleFunc("/api/v1/agent/tasks", s.handleAgentTasks)
 	mux.HandleFunc("/api/v1/agent/tasks/", s.handleAgentTaskResult)
-	mux.HandleFunc("/api/v1/network-profiles", s.handleNetworkProfiles)
-	mux.HandleFunc("/api/v1/network-profiles/", s.handleNetworkProfiles)
-	mux.HandleFunc("/api/v1/network-links", s.handleNetworkLinks)
-	mux.HandleFunc("/api/v1/network-links/", s.handleNetworkLinks)
-	mux.HandleFunc("/api/v1/entries", s.handleEntries)
-	mux.HandleFunc("/api/v1/entries/", s.handleEntries)
-	mux.HandleFunc("/api/v1/forwards", s.handleForwards)
-	mux.HandleFunc("/api/v1/forwards/", s.handleForwards)
-	mux.HandleFunc("/api/v1/pbr-policies", s.handlePBRPolicies)
-	mux.HandleFunc("/api/v1/pbr-policies/", s.handlePBRPolicies)
+	if s.legacyV1API {
+		mux.HandleFunc("/api/v1/network-profiles", s.handleNetworkProfiles)
+		mux.HandleFunc("/api/v1/network-profiles/", s.handleNetworkProfiles)
+		mux.HandleFunc("/api/v1/network-links", s.handleNetworkLinks)
+		mux.HandleFunc("/api/v1/network-links/", s.handleNetworkLinks)
+		mux.HandleFunc("/api/v1/entries", s.handleEntries)
+		mux.HandleFunc("/api/v1/entries/", s.handleEntries)
+		mux.HandleFunc("/api/v1/forwards", s.handleForwards)
+		mux.HandleFunc("/api/v1/forwards/", s.handleForwards)
+		mux.HandleFunc("/api/v1/pbr-policies", s.handlePBRPolicies)
+		mux.HandleFunc("/api/v1/pbr-policies/", s.handlePBRPolicies)
+	} else {
+		deprecated := s.handleDeprecatedV1
+		mux.HandleFunc("/api/v1/network-profiles", deprecated)
+		mux.HandleFunc("/api/v1/network-profiles/", deprecated)
+		mux.HandleFunc("/api/v1/network-links", deprecated)
+		mux.HandleFunc("/api/v1/network-links/", deprecated)
+		mux.HandleFunc("/api/v1/entries", deprecated)
+		mux.HandleFunc("/api/v1/entries/", deprecated)
+		mux.HandleFunc("/api/v1/forwards", deprecated)
+		mux.HandleFunc("/api/v1/forwards/", deprecated)
+		mux.HandleFunc("/api/v1/pbr-policies", deprecated)
+		mux.HandleFunc("/api/v1/pbr-policies/", deprecated)
+	}
 	mux.HandleFunc("/api/v1/diagnostics/run", s.handleDiagnosticsRun)
 	mux.HandleFunc("/api/v1/diagnostics/", s.handleDiagnostics)
 	mux.HandleFunc("/api/v1/tasks", s.handleTasks)
 	mux.HandleFunc("/api/v1/tasks/", s.handleTasks)
 	mux.HandleFunc("/api/v1/ddns", s.handleDDNS)
+	s.registerV2Routes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1/") {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/") || strings.HasPrefix(r.URL.Path, "/api/v2/") {
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -220,7 +241,11 @@ func decodeBody(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeOK(w, 200, HealthResponse{Name: "edge-tunnel-controller", Version: Version, BuildCommit: Commit, BuildTime: Date, StrictAuth: s.strictAuth})
+	writeOK(w, 200, HealthResponse{Name: "edge-tunnel-controller", Version: Version, BuildCommit: Commit, BuildTime: Date, StrictAuth: s.strictAuth, LegacyV1API: s.legacyV1API})
+}
+
+func (s *Server) handleDeprecatedV1(w http.ResponseWriter, r *http.Request) {
+	writeErr(w, 410, "deprecated", "v1 API 已废弃，请使用 /api/v2（设置 EDGE_LEGACY_V1_API=1 可临时恢复）")
 }
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -377,6 +402,11 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
 	}
+	if machineID := stringValue(req["machine_id"], ""); machineID != "" {
+		if activated, err := s.store.linkMachineToNode(machineID, node.ID); err == nil {
+			node.Labels = map[string]string{"machine_id": machineID, "activated_tasks": strconv.Itoa(activated)}
+		}
+	}
 	writeOK(w, 200, node)
 }
 func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request) {
@@ -404,6 +434,9 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, 500, "STORE_ERROR", err.Error())
 		return
+	}
+	if machineID := stringValue(req["machine_id"], ""); machineID != "" {
+		_, _ = s.store.linkMachineToNode(machineID, node.ID)
 	}
 	writeOK(w, 200, node)
 }

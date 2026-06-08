@@ -1,18 +1,18 @@
-﻿import { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Card from '../components/Card.jsx';
 import DataTable from '../components/DataTable.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import DetailDrawer from '../components/DetailDrawer.jsx';
 import CodeBlock from '../components/CodeBlock.jsx';
-import { actionLabel, labelStatus, nodeLabel, formatTime, parseJSON, displayLatency, cleanLoss, displayTunnels, displayRoute, pretty, easyTierActions, pbrActions, forwardingActions } from '../utils/format.js';
+import { actionLabel, labelStatus, nodeLabel, formatTime, parseJSON, displayLatency, cleanLoss, displayTunnels, displayRoute, pretty, easyTierActions, pbrActions, forwardingActions, ixActions } from '../utils/format.js';
 
-export default function Tasks({ tasks, nodes, nodeMap, taskFilter, setTaskFilter, taskNodeFilter, setTaskNodeFilter, taskEasyTierOnly, setTaskEasyTierOnly, onRefresh, onCopy }) {
+export default function Tasks({ tasks, nodes, nodeMap, taskFilter, setTaskFilter, taskNodeFilter, setTaskNodeFilter, taskIxOnly, setTaskIxOnly, onRefresh, onCopy }) {
   const [detailTask, setDetailTask] = useState(null);
   const filteredTasks = useMemo(() => tasks.filter((task) =>
     (taskFilter === 'all' || task.status === taskFilter) &&
     (taskNodeFilter === 'all' || task.node_id === taskNodeFilter) &&
-    (!taskEasyTierOnly || easyTierActions.includes(task.action) || pbrActions.includes(task.action))
-  ), [tasks, taskFilter, taskNodeFilter, taskEasyTierOnly]);
+    (!taskIxOnly || ixActions.includes(task.action) || task.action?.startsWith('ix_'))
+  ), [tasks, taskFilter, taskNodeFilter, taskIxOnly]);
 
   return (
     <div className="page-stack">
@@ -21,7 +21,7 @@ export default function Tasks({ tasks, nodes, nodeMap, taskFilter, setTaskFilter
           <label>状态<select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}><option value="all">全部状态</option>{['pending', 'running', 'succeeded', 'failed', 'expired', 'cancelled'].map((status) => <option key={status} value={status}>{labelStatus(status)}</option>)}</select></label>
           <label>节点<select value={taskNodeFilter} onChange={(event) => setTaskNodeFilter(event.target.value)}><option value="all">全部节点</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name || node.id} / {labelStatus(node.status)}</option>)}</select></label>
           <button className="secondary" onClick={() => setTaskFilter('failed')}>只看失败</button>
-          <button className={taskEasyTierOnly ? '' : 'secondary'} onClick={() => setTaskEasyTierOnly(!taskEasyTierOnly)}>EasyTier/PBR 相关</button>
+          <button className={taskIxOnly ? '' : 'secondary'} onClick={() => setTaskIxOnly(!taskIxOnly)}>IX 任务</button>
         </div>
         <DataTable
           rows={filteredTasks}

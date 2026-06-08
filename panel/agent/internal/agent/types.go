@@ -24,6 +24,7 @@ type Config struct {
 	NodeID             string
 	NodeName           string
 	NodeRole           string
+	MachineID          string
 	EnableTasks        bool
 	EnableWriteActions bool
 	ConfigDir          string
@@ -35,16 +36,18 @@ type Config struct {
 }
 
 type RegisterRequest struct {
-	ID       string `json:"id,omitempty"`
-	Name     string `json:"name"`
-	Role     string `json:"role"`
-	Hostname string `json:"hostname"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	Hostname  string `json:"hostname"`
+	MachineID string `json:"machine_id,omitempty"`
 }
 
 type ReportRequest struct {
 	ID                    string          `json:"id,omitempty"`
 	Name                  string          `json:"name"`
 	Role                  string          `json:"role"`
+	MachineID             string          `json:"machine_id,omitempty"`
 	PublicIP              string          `json:"public_ip,omitempty"`
 	PrivateIP             string          `json:"private_ip,omitempty"`
 	AgentVersion          string          `json:"agent_version"`

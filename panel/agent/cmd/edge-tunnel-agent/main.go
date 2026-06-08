@@ -23,6 +23,7 @@ func main() {
 	flag.StringVar(&cfg.NodeID, "node-id", cfg.NodeID, "node id")
 	flag.StringVar(&cfg.NodeName, "node-name", cfg.NodeName, "node name")
 	flag.StringVar(&cfg.NodeRole, "role", cfg.NodeRole, "node role")
+	flag.StringVar(&cfg.MachineID, "machine-id", cfg.MachineID, "ix machine id for controller binding")
 	flag.BoolVar(&cfg.EnableTasks, "enable-tasks", cfg.EnableTasks, "enable task polling")
 	flag.BoolVar(&cfg.EnableWriteActions, "enable-write-actions", cfg.EnableWriteActions, "enable write actions")
 	flag.StringVar(&cfg.ConfigDir, "config-dir", cfg.ConfigDir, "config dir")

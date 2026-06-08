@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+func init() {
+	_ = os.Setenv("EDGE_LEGACY_V1_API", "1")
+}
+
 func testServer(t *testing.T) http.Handler {
 	return testServerWithWebDir(t, t.TempDir())
 }

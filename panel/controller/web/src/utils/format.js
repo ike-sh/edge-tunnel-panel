@@ -2,13 +2,25 @@ export const DEFAULT_VERSION = 'v0.3.1-test';
 
 export const tabs = [
   ['dashboard', '总览'],
+  ['machines', '机器'],
+  ['profiles', '线路'],
+  ['diagnostics', '诊断'],
+  ['tasks', '任务'],
+  ['settings', '设置'],
+];
+
+export const ixActions = [
+  'ix_read_list_profiles', 'ix_read_show_config', 'ix_read_port_map', 'ix_read_health',
+  'ix_read_diagnose', 'ix_read_list_rules', 'ix_read_show_code', 'ix_write_create_nat',
+  'ix_write_apply_rules', 'ix_write_import_code', 'ix_write_refresh_code',
+];
+
+/** @deprecated v1 tabs — kept for reference during migration */
+export const legacyTabs = [
   ['nodes', '节点'],
   ['networks', '组网链路'],
   ['forwards', '转发规则'],
   ['pbr', '出口策略 / PBR'],
-  ['diagnostics', '诊断'],
-  ['tasks', '任务'],
-  ['settings', '设置'],
 ];
 
 export const readActions = [

@@ -79,6 +79,9 @@ func DispatchAction(ctx context.Context, cfg Config, runner CommandRunner, task 
 	case "reboot_node":
 		return runFixed(ctx, runner, "systemctl", "reboot")
 	default:
+		if isIXAction(task.Action) {
+			return dispatchIXAction(ctx, cfg, runner, task)
+		}
 		return TaskResult{Status: "failed", Error: "unknown action"}
 	}
 }

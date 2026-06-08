@@ -31,6 +31,7 @@ func ConfigFromEnv() Config {
 	cfg.NodeID = strings.TrimSpace(os.Getenv("EDGE_NODE_ID"))
 	cfg.NodeName = envOrDefault("EDGE_NODE_NAME", cfg.NodeName)
 	cfg.NodeRole = envOrDefault("EDGE_NODE_ROLE", cfg.NodeRole)
+	cfg.MachineID = strings.TrimSpace(os.Getenv("EDGE_MACHINE_ID"))
 	cfg.ConfigDir = envOrDefault("EDGE_AGENT_CONFIG_DIR", cfg.ConfigDir)
 	cfg.StateDir = envOrDefault("EDGE_AGENT_STATE_DIR", cfg.StateDir)
 	cfg.EnableTasks = parseBool(os.Getenv("EDGE_ENABLE_TASKS"))
@@ -47,6 +48,7 @@ func (cfg *Config) Normalize() error {
 	cfg.NodeID = strings.TrimSpace(cfg.NodeID)
 	cfg.NodeName = strings.TrimSpace(cfg.NodeName)
 	cfg.NodeRole = normalizeRole(cfg.NodeRole)
+	cfg.MachineID = strings.TrimSpace(cfg.MachineID)
 	if cfg.NodeName == "" {
 		cfg.NodeName = "edge-node"
 	}

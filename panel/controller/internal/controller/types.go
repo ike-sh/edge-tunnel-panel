@@ -24,7 +24,8 @@ type HealthResponse struct {
 	Version     string `json:"version"`
 	BuildCommit string `json:"build_commit"`
 	BuildTime   string `json:"build_time"`
-	StrictAuth  bool   `json:"strict_auth"`
+	StrictAuth    bool `json:"strict_auth"`
+	LegacyV1API   bool `json:"legacy_v1_api"`
 }
 
 type LoginRequest struct {
@@ -254,4 +255,6 @@ type StoreFile struct {
 	PBRPolicies     []PBRPolicy      `json:"pbr_policies"`
 	DDNSProfiles    []DDNSProfile    `json:"ddns_profiles"`
 	Tasks           []Task           `json:"tasks"`
+	IXMachines      []IXMachine      `json:"ix_machines,omitempty"`
+	IXProfiles      []IXProfile      `json:"ix_profiles,omitempty"`
 }

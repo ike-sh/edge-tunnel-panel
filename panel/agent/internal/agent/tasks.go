@@ -24,6 +24,17 @@ var readonlyActions = map[string]bool{
 	"verify_pbr_rules":            true,
 	"verify_pbr_policy":           true,
 	"verify_ddns_status":          true,
+	"ix_read_list_profiles":       true,
+	"ix_read_show_config":         true,
+	"ix_read_port_map":            true,
+	"ix_read_health":              true,
+	"ix_read_diagnose":            true,
+	"ix_read_list_rules":          true,
+	"ix_read_show_code":           true,
+	"ix_read_ddns_status":         true,
+	"ix_read_traffic":             true,
+	"ix_read_latency":             true,
+	"ix_read_export_diagnostic":   true,
 }
 
 var writeActions = map[string]bool{
@@ -47,6 +58,20 @@ var writeActions = map[string]bool{
 	"restart_easytier":               true,
 	"restart_agent":                  true,
 	"reboot_node":                    true,
+	"ix_write_create_nat":            true,
+	"ix_write_import_code":           true,
+	"ix_write_add_rule":              true,
+	"ix_write_edit_rule":             true,
+	"ix_write_delete_rule":           true,
+	"ix_write_enable_rule":           true,
+	"ix_write_disable_rule":          true,
+	"ix_write_apply_rules":           true,
+	"ix_write_refresh_code":          true,
+	"ix_write_enable_profile":        true,
+	"ix_write_disable_profile":       true,
+	"ix_write_delete_profile":        true,
+	"ix_write_ddns_refresh":          true,
+	"ix_write_install_cli":           true,
 }
 
 var blockedActions = map[string]bool{

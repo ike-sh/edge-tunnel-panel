@@ -13,8 +13,13 @@ CONTROLLER_TOKEN="${EDGE_CONTROLLER_TOKEN:-}"
 NODE_ID="${EDGE_NODE_ID:-}"
 NODE_NAME="${EDGE_NODE_NAME:-$(hostname 2>/dev/null || printf 'edge-node')}"
 NODE_ROLE="${EDGE_NODE_ROLE:-backend}"
+MACHINE_ID="${EDGE_MACHINE_ID:-}"
 ENABLE_TASKS="${EDGE_ENABLE_TASKS:-false}"
 ENABLE_WRITE_ACTIONS="${EDGE_ENABLE_WRITE_ACTIONS:-false}"
+INSTALL_IXTF="${EDGE_INSTALL_IXTF:-auto}"
+IXTF_REPO="${IXTF_REPO:-ike-sh/ix-transit-fabric}"
+IXTF_VERSION="${IXTF_VERSION:-v1.2.0}"
+IXTF_INSTALL_DIR="${IXTF_INSTALL_DIR:-/opt/ix-transit-fabric}"
 REPORT_INTERVAL="${EDGE_REPORT_INTERVAL:-30s}"
 TASK_POLL_INTERVAL="${EDGE_TASK_POLL_INTERVAL:-10s}"
 SOURCE_BUILD=false
@@ -33,9 +38,13 @@ Options:
   --token TOKEN                 Controller token, required
   --node-id ID                  Optional node id
   --node-name NAME              Node name
+  --machine-id ID               IX machine id for controller binding
   --role ROLE                   entry, relay, exit, backend
   --enable-tasks                Enable task polling
   --enable-write-actions        Enable write actions
+  --install-ixtf                Install ix-transit-fabric CLI (default: auto when --enable-write-actions)
+  --skip-ixtf                   Skip ix-transit-fabric installation
+  --ixtf-version VERSION        ix-transit-fabric version tag, default: v1.2.0
   --config-dir DIR              Agent config directory
   --state-dir DIR               Agent state directory
   --install-dir DIR             Binary install directory
@@ -275,6 +284,35 @@ install_from_source() {
   (cd "$root/panel/agent" && go build -o "$INSTALL_DIR/edge-tunnel-agent" ./cmd/edge-tunnel-agent)
 }
 
+install_ixtf() {
+  local url tmp
+  install -d -m 0755 "$IXTF_INSTALL_DIR"
+  url="https://raw.githubusercontent.com/${IXTF_REPO}/${IXTF_VERSION}/install.sh"
+  tmp="$(mktemp)"
+  log "installing ix-transit-fabric ${IXTF_VERSION} to ${IXTF_INSTALL_DIR}"
+  if ! download_file "$url" "$tmp"; then
+    fail "cannot download ix-transit-fabric install.sh"
+  fi
+  install -m 0755 "$tmp" "$IXTF_INSTALL_DIR/install.sh"
+  rm -f "$tmp"
+  if ! bash "$IXTF_INSTALL_DIR/install.sh" install-ix-cli; then
+    log "install-ix-cli failed; ixtf may still work via install.sh directly"
+  fi
+  log "ix-transit-fabric installed at ${IXTF_INSTALL_DIR}/install.sh"
+}
+
+should_install_ixtf() {
+  case "$INSTALL_IXTF" in
+    true|1|yes) return 0 ;;
+    false|0|no) return 1 ;;
+    auto)
+      [ "$ENABLE_WRITE_ACTIONS" = true ] && return 0
+      return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 write_env() {
   ensure_node_id
   install -d -m 0755 "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
@@ -290,7 +328,11 @@ EDGE_AGENT_CONFIG_DIR=${CONFIG_DIR}
 EDGE_AGENT_STATE_DIR=${STATE_DIR}
 EDGE_REPORT_INTERVAL=${REPORT_INTERVAL}
 EDGE_TASK_POLL_INTERVAL=${TASK_POLL_INTERVAL}
+IXTF_INSTALL_PATH=${IXTF_INSTALL_DIR}/install.sh
 EOF
+  if [ -n "$MACHINE_ID" ]; then
+    printf 'EDGE_MACHINE_ID=%s\n' "$MACHINE_ID" >>"$CONFIG_DIR/agent.env"
+  fi
   chmod 0600 "$CONFIG_DIR/agent.env"
 }
 
@@ -326,6 +368,9 @@ run_once_registration_check() {
     --once
   )
   args+=(--node-id "$NODE_ID")
+  if [ -n "$MACHINE_ID" ]; then
+    args+=(--machine-id "$MACHINE_ID")
+  fi
   if [ "$ENABLE_TASKS" = true ]; then
     args+=(--enable-tasks)
   fi
@@ -353,9 +398,13 @@ while [ "$#" -gt 0 ]; do
     --token) CONTROLLER_TOKEN="$2"; shift 2 ;;
     --node-id) NODE_ID="$2"; shift 2 ;;
     --node-name) NODE_NAME="$2"; shift 2 ;;
+    --machine-id) MACHINE_ID="$2"; shift 2 ;;
     --role) NODE_ROLE="$2"; shift 2 ;;
     --enable-tasks) ENABLE_TASKS=true; shift ;;
     --enable-write-actions) ENABLE_WRITE_ACTIONS=true; shift ;;
+    --install-ixtf) INSTALL_IXTF=true; shift ;;
+    --skip-ixtf) INSTALL_IXTF=false; shift ;;
+    --ixtf-version) IXTF_VERSION="$2"; shift 2 ;;
     --config-dir) CONFIG_DIR="$2"; shift 2 ;;
     --state-dir) STATE_DIR="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
@@ -381,6 +430,9 @@ if [ "$SOURCE_BUILD" = true ]; then
   install_from_source
 else
   install_from_release
+fi
+if should_install_ixtf; then
+  install_ixtf
 fi
 write_env
 write_service

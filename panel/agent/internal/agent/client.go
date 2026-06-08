@@ -34,7 +34,7 @@ func NewHTTPClient(cfg Config) *HTTPClient {
 }
 
 func (c *HTTPClient) Register(ctx context.Context, report ReportRequest) error {
-	req := RegisterRequest{ID: report.ID, Name: report.Name, Role: report.Role, Hostname: report.Hostname}
+	req := RegisterRequest{ID: report.ID, Name: report.Name, Role: report.Role, Hostname: report.Hostname, MachineID: report.MachineID}
 	return c.do(ctx, http.MethodPost, "/api/v1/agent/register", req, nil)
 }
 
