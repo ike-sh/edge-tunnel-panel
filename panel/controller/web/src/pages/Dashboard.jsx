@@ -4,6 +4,7 @@ import DataTable from '../components/DataTable.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { StatCard } from '../components/ui/GlassPanel.jsx';
 import { useApp } from '../context/AppContext.jsx';
+import { useH5Layout } from '../hooks/useH5Layout.js';
 import { actionLabel, formatTime, labelStatus } from '../utils/format.js';
 
 const DashboardCharts = lazy(() => import('../components/DashboardCharts.jsx'));
@@ -60,6 +61,7 @@ export default function Dashboard({
   onRefresh,
 }) {
   const { bootstrapped } = useApp();
+  const h5 = useH5Layout();
   const recent = tasks.filter((t) => t.action?.startsWith('ix_')).slice(0, 6);
   const healthy = profiles.filter((p) => p.status === 'healthy').length;
   const natCount = profiles.filter((p) => p.role === 'nat-transit').length;
@@ -79,6 +81,14 @@ export default function Dashboard({
         </Card>
       )}
       <div className={bootstrapped ? 'page-ready' : 'page-loading'}>
+      {h5 && (
+        <Card title="运维工具" description="H5 布局下诊断不在底部 Tab，可从此处进入。">
+          <div className="quick-actions">
+            <button type="button" onClick={() => onNavigate('/diagnostics')}>诊断工具</button>
+            <button type="button" className="secondary" onClick={() => onNavigate('/tasks')}>任务日志</button>
+          </div>
+        </Card>
+      )}
       <div className="metric-grid">
         <StatCard label="机器" value={machines.length} detail={`在线 ${stats.online} / 待注册 ${stats.stale}`} />
         <StatCard label="线路" value={profiles.length} detail={`健康 ${healthy} · NAT ${natCount} / 入口 ${ingressCount}`} />
@@ -112,7 +122,7 @@ export default function Dashboard({
           <button type="button" onClick={onOpenWizard}>创建 NAT IX 线路</button>
           <button type="button" className="secondary" onClick={onOpenImport}>导入接入码</button>
           <button type="button" onClick={() => onNavigate('/profiles')}>线路列表</button>
-          <button type="button" onClick={() => onNavigate('/diagnostics')}>一键诊断</button>
+          <button type="button" onClick={() => onNavigate('/diagnostics')}>诊断工具</button>
         </div>
       </Card>
 
