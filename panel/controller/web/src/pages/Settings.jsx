@@ -57,6 +57,9 @@ export default function Settings() {
           <button type="button" className="secondary" onClick={clearToken}>清除 Token</button>
           <button type="button" className="secondary" onClick={() => refreshHealth()}>测试连接</button>
           <button type="button" className="secondary" onClick={() => navigate('/diagnostics')}>诊断工具</button>
+          {strictAuth && !token && (
+            <button type="button" className="secondary" onClick={() => navigate('/login')}>前往登录</button>
+          )}
         </div>
         <dl className="kv-grid">
           <dt>Controller</dt><dd>{health?.name || 'Edge Tunnel Controller'}</dd>

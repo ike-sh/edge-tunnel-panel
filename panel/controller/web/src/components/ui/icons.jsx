@@ -10,18 +10,6 @@ export const NavIcons = {
   profiles: () => (
     <svg {...iconProps} viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h14" /><circle cx="19" cy="12" r="2" /></svg>
   ),
-  nodes: () => (
-    <svg {...iconProps} viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="7" cy="12" r="1.5" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" /><circle cx="17" cy="12" r="1.5" fill="currentColor" stroke="none" /></svg>
-  ),
-  networks: () => (
-    <svg {...iconProps} viewBox="0 0 24 24"><circle cx="5" cy="12" r="2" /><circle cx="19" cy="6" r="2" /><circle cx="19" cy="18" r="2" /><path d="M7 12h4m2-4l4-2m-4 8l4 2" /></svg>
-  ),
-  forwards: () => (
-    <svg {...iconProps} viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-  ),
-  pbr: () => (
-    <svg {...iconProps} viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h14" /><circle cx="19" cy="12" r="2" /></svg>
-  ),
   tasks: () => (
     <svg {...iconProps} viewBox="0 0 24 24"><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" /></svg>
   ),

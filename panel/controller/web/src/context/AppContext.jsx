@@ -6,6 +6,7 @@ import { createApiV2Client } from '../api/v2.js';
 import { watchTasks } from '../api/taskStream.js';
 import { watchMachineStream } from '../api/machineStream.js';
 import { copyText } from '../utils/copy.js';
+import { setUnauthorizedHandler, taskBelongsToProfile, taskOutput } from '../utils/auth.js';
 import { DEFAULT_VERSION, safeList } from '../utils/format.js';
 
 const THEME_KEY = 'etp-theme';
@@ -49,6 +50,7 @@ export function AppProvider({ children }) {
   const stats = useMemo(() => ({
     online: machines.filter((m) => m.status === 'online').length,
     stale: machines.filter((m) => m.status === 'stale').length,
+    pending: machines.filter((m) => m.status === 'pending').length,
     offline: machines.filter((m) => m.status === 'offline').length,
     failed: tasks.filter((task) => task.status === 'failed').length,
     profiles: ixProfiles.length,
@@ -111,6 +113,16 @@ export function AppProvider({ children }) {
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      localStorage.removeItem(TOKEN_KEY);
+      setToken('');
+      toast.error('登录已失效，请重新输入 Token');
+      navigate('/login', { replace: true, state: { from: window.location.pathname } });
+    });
+    return () => setUnauthorizedHandler(() => {});
+  }, [navigate]);
+
   const toggleTheme = useCallback(() => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   }, []);
@@ -125,6 +137,13 @@ export function AppProvider({ children }) {
       return next;
     });
   }, []);
+
+  const getProfilePendingTaskIds = useCallback((profileId) => {
+    const pending = new Set(pendingTaskIds);
+    return tasks
+      .filter((t) => pending.has(t.id) && taskBelongsToProfile(t, profileId))
+      .map((t) => t.id);
+  }, [pendingTaskIds, tasks]);
 
   const trackTasks = useCallback((data, label) => {
     const ids = taskIDsFromResponse(data);
@@ -265,13 +284,6 @@ export function AppProvider({ children }) {
     return true;
   }, [apiV2, run, trackTasks, refreshIxProfiles, refreshTasks]);
 
-  const createIxProfile = useCallback(async (body) => {
-    const data = await run('创建线路', async () => apiV2('/profiles', { body }));
-    trackTasks(data, '创建线路');
-    await Promise.all([refreshIxProfiles(), refreshTasks()]);
-    return data;
-  }, [apiV2, run, trackTasks, refreshIxProfiles, refreshTasks]);
-
   const applyIxProfile = useCallback(async (profile, extra = {}) => {
     const data = await run('应用线路', async () => apiV2(`/profiles/${encodeURIComponent(profile.id)}/apply`, {
       body: extra,
@@ -306,26 +318,47 @@ export function AppProvider({ children }) {
 
   const pauseIxProfile = useCallback(async (profile) => {
     const data = await run('暂停线路', async () => apiV2(`/profiles/${encodeURIComponent(profile.id)}/pause`, { body: {} }), { silent: true });
-    setIxProfiles((prev) => prev.map((p) => (p.id === profile.id ? { ...p, enabled: false, status: 'paused' } : p)));
     trackTasks(data, '暂停线路');
-    await refreshTasks();
+    await Promise.all([refreshIxProfiles(), refreshTasks()]);
     return data;
-  }, [apiV2, run, trackTasks, refreshTasks]);
+  }, [apiV2, run, trackTasks, refreshIxProfiles, refreshTasks]);
 
   const resumeIxProfile = useCallback(async (profile) => {
     const data = await run('恢复线路', async () => apiV2(`/profiles/${encodeURIComponent(profile.id)}/resume`, { body: {} }), { silent: true });
-    setIxProfiles((prev) => prev.map((p) => (p.id === profile.id ? { ...p, enabled: true, status: 'healthy' } : p)));
     trackTasks(data, '恢复线路');
-    await refreshTasks();
+    await Promise.all([refreshIxProfiles(), refreshTasks()]);
     return data;
-  }, [apiV2, run, trackTasks, refreshTasks]);
+  }, [apiV2, run, trackTasks, refreshIxProfiles, refreshTasks]);
 
-  const diagnoseIxProfile = useCallback(async (profile) => {
-    const data = await run('线路诊断', async () => apiV2(`/profiles/${encodeURIComponent(profile.id)}/diagnose`, { body: {} }), { silent: true });
-    trackTasks(data, '线路诊断');
-    await refreshTasks();
-    return data;
-  }, [apiV2, run, trackTasks, refreshTasks]);
+  const diagnoseIxProfile = useCallback((profile) => new Promise((resolve, reject) => {
+    (async () => {
+      try {
+        const data = await apiV2(`/profiles/${encodeURIComponent(profile.id)}/diagnose`, { body: {} });
+        const taskId = data?.task?.id;
+        if (!taskId) {
+          reject(new Error('未创建诊断任务'));
+          return;
+        }
+        setPendingTaskIds((prev) => [...new Set([...prev, taskId])]);
+        watchTasks(apiBase, token, [taskId], {
+          onUpdate: (task) => mergeTaskUpdate(task),
+          onDone: async (task) => {
+            mergeTaskUpdate(task);
+            setPendingTaskIds((prev) => prev.filter((id) => id !== task.id));
+            await refreshTasks();
+            if (task.status === 'succeeded') {
+              resolve(taskOutput(task));
+            } else {
+              reject(new Error(task.error || task.result || '诊断失败'));
+            }
+          },
+          onError: (err) => reject(err),
+        });
+      } catch (error) {
+        reject(error);
+      }
+    })();
+  }), [apiV2, apiBase, token, mergeTaskUpdate, refreshTasks]);
 
   const fetchIxProfileCode = useCallback((profile) => new Promise((resolve, reject) => {
     (async () => {
@@ -380,7 +413,10 @@ export function AppProvider({ children }) {
     localStorage.removeItem(TOKEN_KEY);
     setToken('');
     toast.success('Token 已清除');
-  }, []);
+    if (strictAuth) {
+      navigate('/login', { replace: true });
+    }
+  }, [strictAuth, navigate]);
 
   const value = {
     theme,
@@ -399,6 +435,7 @@ export function AppProvider({ children }) {
     machines,
     ixProfiles,
     pendingTaskIds,
+    getProfilePendingTaskIds,
     taskFilter,
     setTaskFilter,
     taskNodeFilter,
@@ -424,7 +461,6 @@ export function AppProvider({ children }) {
     rotateMachineToken,
     createIxProfileFromWizard,
     importIxProfileFromWizard,
-    createIxProfile,
     applyIxProfile,
     syncIxProfile,
     refreshIxProfileCode,

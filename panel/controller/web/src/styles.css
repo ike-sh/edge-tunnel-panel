@@ -813,7 +813,15 @@ small { display: block; color: var(--text-secondary); overflow-wrap: anywhere; }
 }
 .h5-tab .nav-icon svg { width: 1.35rem; height: 1.35rem; }
 .h5-tab.active { color: var(--mac-blue); }
-.h5-tab:active { opacity: 0.75; }
+.login-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  position: relative;
+}
+.login-panel { width: min(420px, 100%); position: relative; z-index: 1; }
+.login-hint { font-size: 0.8125rem; margin-top: 0.75rem; }
 button.linkish { background: transparent; border: 0; color: var(--mac-blue); padding: 0; box-shadow: none; font-weight: 600; }
 button.linkish:hover { text-decoration: underline; transform: none; }
 .topbar-actions button.secondary:disabled {

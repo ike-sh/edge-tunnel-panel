@@ -90,7 +90,7 @@ export default function Dashboard({
         </Card>
       )}
       <div className="metric-grid">
-        <StatCard label="机器" value={machines.length} detail={`在线 ${stats.online} / 待注册 ${stats.stale}`} />
+        <StatCard label="机器" value={machines.length} detail={`在线 ${stats.online} · 延迟 ${stats.stale} · 待注册 ${stats.pending || 0}`} />
         <StatCard label="线路" value={profiles.length} detail={`健康 ${healthy} · NAT ${natCount} / 入口 ${ingressCount}`} />
         <StatCard label="任务" value={tasks.length} detail={`失败 ${stats.failed} 条`} />
         <StatCard label="Agent" value={stats.online} detail={`离线 ${stats.offline}`} />
