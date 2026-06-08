@@ -822,6 +822,18 @@ small { display: block; color: var(--text-secondary); overflow-wrap: anywhere; }
 }
 .login-panel { width: min(420px, 100%); position: relative; z-index: 1; }
 .login-hint { font-size: 0.8125rem; margin-top: 0.75rem; }
+.import-json-area {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  resize: vertical;
+}
 button.linkish { background: transparent; border: 0; color: var(--mac-blue); padding: 0; box-shadow: none; font-weight: 600; }
 button.linkish:hover { text-decoration: underline; transform: none; }
 .topbar-actions button.secondary:disabled {

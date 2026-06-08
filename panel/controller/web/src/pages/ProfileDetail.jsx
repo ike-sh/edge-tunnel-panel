@@ -13,6 +13,7 @@ import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import SortableRulesTable from '../components/SortableRulesTable.jsx';
 
 import { buildProfileAddressBlock } from '../utils/profileAddresses.js';
+import { buildRulesExport, parseRulesImport } from '../utils/profileRulesIo.js';
 
 
 
@@ -139,6 +140,9 @@ export default function ProfileDetail({
   const [codeLoading, setCodeLoading] = useState(false);
   const [diagModal, setDiagModal] = useState(null);
   const [diagLoading, setDiagLoading] = useState(false);
+  const [exportModal, setExportModal] = useState(null);
+  const [importModal, setImportModal] = useState(false);
+  const [importText, setImportText] = useState('');
 
 
 
@@ -268,6 +272,22 @@ export default function ProfileDetail({
 
   }
 
+  function openExportRules() {
+    setExportModal({ content: buildRulesExport(profile) });
+  }
+
+  async function submitImportRules() {
+    try {
+      const next = parseRulesImport(importText, profile.id);
+      setImportModal(false);
+      setImportText('');
+      await onSaveRules(profile, next);
+      toast.success(`已导入 ${next.length} 条规则并应用`);
+    } catch (error) {
+      toast.error(error.message || '导入失败');
+    }
+  }
+
 
 
   return (
@@ -377,6 +397,10 @@ export default function ProfileDetail({
               <button type="button" onClick={openAddRule} disabled={loading || paused}>添加规则</button>
 
               <button type="button" className="secondary" onClick={() => onSync(profile)} disabled={loading}>从机器同步</button>
+
+              <button type="button" className="secondary" onClick={openExportRules} disabled={!rules.length}>导出 JSON</button>
+
+              <button type="button" className="secondary" onClick={() => { setImportText(''); setImportModal(true); }} disabled={loading || paused}>导入 JSON</button>
 
             </div>
 
@@ -510,6 +534,37 @@ export default function ProfileDetail({
 
         </div>
 
+      </Modal>
+
+      <CopyModal
+        open={!!exportModal}
+        title="导出转发规则"
+        description="参考 flux-panel 转发导出，JSON 含规则顺序与端口配置，可备份或迁移到其他线路。"
+        content={exportModal?.content || ''}
+        onClose={() => setExportModal(null)}
+        onCopy={(text) => onCopy?.(text, '规则 JSON')}
+      />
+
+      <Modal
+        open={importModal}
+        title="导入转发规则"
+        description="粘贴 flux/ETP 导出的 JSON，或仅含 rules 数组的 JSON。导入后将覆盖当前规则并 apply。"
+        onClose={() => setImportModal(false)}
+        wide
+        footer={(
+          <div className="actions right">
+            <button type="button" className="secondary" onClick={() => setImportModal(false)}>取消</button>
+            <button type="button" onClick={submitImportRules} disabled={loading || !importText.trim()}>导入并应用</button>
+          </div>
+        )}
+      >
+        <textarea
+          className="import-json-area"
+          rows={12}
+          value={importText}
+          onChange={(e) => setImportText(e.target.value)}
+          placeholder='{"version":1,"rules":[...]}'
+        />
       </Modal>
 
       <CopyModal
