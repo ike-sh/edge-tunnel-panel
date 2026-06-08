@@ -19,8 +19,6 @@ services:
   controller:
     image: edge-tunnel-panel:v0.3.1
     restart: unless-stopped
-    ports:
-      - "18080:18080"
     environment:
       EDGE_LISTEN: 0.0.0.0:18080
       EDGE_DATA_DIR: /var/lib/edge-tunnel/controller
