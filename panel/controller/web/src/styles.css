@@ -703,6 +703,28 @@ small { display: block; color: var(--text-secondary); overflow-wrap: anywhere; }
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
 }
+.warn-banner {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(255, 149, 0, 0.12);
+  border: 1px solid rgba(255, 149, 0, 0.25);
+  margin-bottom: 0.75rem;
+}
+.drag-handle {
+  cursor: grab;
+  touch-action: none;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: var(--text-secondary);
+  padding: 0.15rem 0.35rem;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.drag-handle:active { cursor: grabbing; }
+.rule-row-dragging { background: var(--table-hover); }
+.rules-sortable th:first-child,
+.rules-sortable td:first-child { width: 2.5rem; text-align: center; }
 button.linkish { background: transparent; border: 0; color: var(--mac-blue); padding: 0; box-shadow: none; font-weight: 600; }
 button.linkish:hover { text-decoration: underline; transform: none; }
 .topbar-actions button.secondary:disabled {

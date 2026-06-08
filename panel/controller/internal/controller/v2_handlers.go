@@ -171,6 +171,53 @@ func (s *Server) handleV2ProfileSub(w http.ResponseWriter, r *http.Request, path
 			return
 		}
 		writeOK(w, 202, map[string]any{"task": task})
+	case sub == "diagnose" && r.Method == http.MethodPost:
+		p, ok := s.store.getIXProfile(profileID)
+		if !ok {
+			writeErr(w, 404, "not_found", "profile not found")
+			return
+		}
+		payload := map[string]any{"profile_id": profileID, "machine_id": p.MachineID}
+		task, err := s.store.enqueueIXTask(p.MachineID, "ix_read_diagnose", payload)
+		if err != nil {
+			writeErr(w, 400, "bad_request", err.Error())
+			return
+		}
+		writeOK(w, 202, map[string]any{"task": task})
+	case sub == "pause" && r.Method == http.MethodPost:
+		p, ok := s.store.getIXProfile(profileID)
+		if !ok {
+			writeErr(w, 404, "not_found", "profile not found")
+			return
+		}
+		if _, err := s.store.setIXProfileEnabled(profileID, false); err != nil {
+			writeErr(w, 400, "bad_request", err.Error())
+			return
+		}
+		payload := map[string]any{"profile_id": profileID, "config": p.Config}
+		task, err := s.store.enqueueIXTask(p.MachineID, "ix_write_disable_profile", payload)
+		if err != nil {
+			writeErr(w, 400, "bad_request", err.Error())
+			return
+		}
+		writeOK(w, 202, map[string]any{"task": task, "enabled": false})
+	case sub == "resume" && r.Method == http.MethodPost:
+		p, ok := s.store.getIXProfile(profileID)
+		if !ok {
+			writeErr(w, 404, "not_found", "profile not found")
+			return
+		}
+		if _, err := s.store.setIXProfileEnabled(profileID, true); err != nil {
+			writeErr(w, 400, "bad_request", err.Error())
+			return
+		}
+		payload := map[string]any{"profile_id": profileID, "config": p.Config}
+		task, err := s.store.enqueueIXTask(p.MachineID, "ix_write_enable_profile", payload)
+		if err != nil {
+			writeErr(w, 400, "bad_request", err.Error())
+			return
+		}
+		writeOK(w, 202, map[string]any{"task": task, "enabled": true})
 	case strings.HasPrefix(sub, "code"):
 		s.handleV2ProfileCode(w, r, profileID, sub)
 	default:

@@ -340,6 +340,12 @@ func (s *Store) applyIXTaskResultLocked(task Task) {
 			p.Rules = parseIXRules(content, profileID)
 		case "ix_write_create_nat", "ix_write_apply_rules", "ix_write_import_code":
 			p.Status = "healthy"
+		case "ix_write_enable_profile":
+			p.Enabled = true
+			p.Status = "healthy"
+		case "ix_write_disable_profile":
+			p.Enabled = false
+			p.Status = "paused"
 		}
 		return
 	}
@@ -383,6 +389,31 @@ func parseIXRules(raw, profileID string) []IXRule {
 		return envelope.Rules
 	}
 	return nil
+}
+
+func (s *Store) setIXProfileEnabled(profileID string, enabled bool) (IXProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.IXProfiles {
+		if s.data.IXProfiles[i].ID != profileID {
+			continue
+		}
+		s.data.IXProfiles[i].Enabled = enabled
+		s.data.IXProfiles[i].UpdatedAt = now()
+		if enabled {
+			if s.data.IXProfiles[i].Status == "paused" {
+				s.data.IXProfiles[i].Status = "healthy"
+			}
+		} else {
+			s.data.IXProfiles[i].Status = "paused"
+		}
+		p := s.data.IXProfiles[i]
+		if err := s.saveLocked(); err != nil {
+			return IXProfile{}, err
+		}
+		return p, nil
+	}
+	return IXProfile{}, fmt.Errorf("profile not found")
 }
 
 func (s *Store) updateIXProfileRules(profileID string, rules []IXRule) error {

@@ -26,6 +26,7 @@ function ProfileDetailRoute() {
   const {
     ixProfiles,
     machines,
+    nodeMap,
     pendingTaskIds,
     loading,
     bootstrapped,
@@ -33,10 +34,16 @@ function ProfileDetailRoute() {
     syncIxProfile,
     refreshIxProfileCode,
     saveProfileRules,
+    pauseIxProfile,
+    resumeIxProfile,
+    diagnoseIxProfile,
+    fetchIxProfileCode,
+    handleCopyValue,
     navigate,
   } = useApp();
   const profile = getProfileById(ixProfiles, id);
   const machine = machines.find((m) => m.id === profile?.machine_id) || null;
+  const node = machine?.node_id ? nodeMap[machine.node_id] : null;
 
   if (!bootstrapped) {
     return (
@@ -60,12 +67,18 @@ function ProfileDetailRoute() {
     <ProfileDetail
       profile={profile}
       machine={machine}
+      node={node}
       pendingTaskIds={pendingTaskIds}
       onBack={() => navigate('/profiles')}
       onApply={applyIxProfile}
       onSync={syncIxProfile}
       onRefreshCode={refreshIxProfileCode}
       onSaveRules={saveProfileRules}
+      onPause={pauseIxProfile}
+      onResume={resumeIxProfile}
+      onDiagnose={diagnoseIxProfile}
+      onFetchCode={fetchIxProfileCode}
+      onCopy={handleCopyValue}
       loading={loading}
     />
   );

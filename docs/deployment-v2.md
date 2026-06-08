@@ -162,19 +162,23 @@ PowerShell 等价：`EDGE_LISTEN=127.0.0.1:8080` + `Invoke-RestMethod` 调用 v2
 - WebSocket 节点 snapshot（flux: `/system-info` → ETP: `/stream/machines`）
 - Dashboard Recharts（懒加载 chunk）
 - 移动端侧栏抽屉（768px 以下）
+- Profile 规则 dnd-kit 拖拽排序 → `ix_write_apply_rules`
+- ProfileDetail 暂停/恢复/诊断（`ix_write_disable_profile` / `enable` / `ix_read_diagnose`）
+- 机器 stale/离线 + 线路异常 toast 告警
+- 接入码 Tab「复制完整码」CopyModal + 接入地址推导
 
 ### 待借鉴（优先级）
 
-| 优先级 | flux 特性 | ETP 建议 |
-|--------|-----------|----------|
-| **P0** | forward 拖拽排序 | Profile 规则 Tab 加 dnd-kit 排序后 apply |
-| **P0** | forward 暂停/恢复/诊断按钮 | ProfileDetail 加「暂停线路」「诊断」enqueue ix_read_diagnose |
-| **P1** | dashboard 过期 toast 提醒 | Profile/机器长时间 stale 时 toast |
-| **P1** | forward 复制接入地址 Modal | 接入码 Tab 一键复制完整地址 |
-| **P1** | node 安装命令分步 Modal | 机器页安装 Modal 加分步说明 |
-| **P2** | H5 底部 Tab 布局 | 可选 `?h5=true` 移动布局 |
-| **P2** | 多用户 RBAC + JWT | 暂不需要（单 Operator） |
-| **P2** | HeroUI 组件库 | 保留 macOS Glass，不整站迁移 |
+| 优先级 | flux 特性 | ETP 建议 | 状态 |
+|--------|-----------|----------|------|
+| ~~**P0**~~ | forward 拖拽排序 | Profile 规则 Tab dnd-kit | ✅ |
+| ~~**P0**~~ | forward 暂停/恢复/诊断 | ProfileDetail 暂停/恢复/诊断 | ✅ |
+| ~~**P1**~~ | dashboard 过期 toast | 机器 stale/离线、线路失败 toast | ✅ |
+| ~~**P1**~~ | forward 复制接入地址 Modal | 接入码 Tab CopyModal | ✅ |
+| **P1** | node 安装命令分步 Modal | 机器页安装 Modal 加分步说明 | 待做 |
+| **P2** | H5 底部 Tab 布局 | 可选 `?h5=true` 移动布局 | 待做 |
+| **P2** | 多用户 RBAC + JWT | 暂不需要（单 Operator） | — |
+| **P2** | HeroUI 组件库 | 保留 macOS Glass，不整站迁移 | — |
 
 ### 数据模型差异（勿照搬 API）
 

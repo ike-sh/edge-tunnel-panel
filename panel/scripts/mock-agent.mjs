@@ -49,6 +49,8 @@ function mockResult(action, payload) {
     case 'ix_write_create_nat':
     case 'ix_write_apply_rules':
     case 'ix_write_import_code':
+    case 'ix_write_enable_profile':
+    case 'ix_write_disable_profile':
       return { status: 'succeeded', result: JSON.stringify({ native: true, mock: true }) };
     default:
       return { status: 'succeeded', result: '{}' };

@@ -40,6 +40,7 @@ export function AppProvider({ children }) {
   const [bootstrapped, setBootstrapped] = useState(false);
   const stopStreamsRef = useRef(null);
   const machineStreamRef = useRef(null);
+  const alertKeysRef = useRef(new Set());
 
   const api = useMemo(() => createApiClient({ apiBase, token }), [apiBase, token]);
   const apiV2 = useMemo(() => createApiV2Client({ apiBase, token }), [apiBase, token]);
@@ -47,7 +48,7 @@ export function AppProvider({ children }) {
   const nodeMap = useMemo(() => Object.fromEntries(nodes.map((node) => [node.id, node])), [nodes]);
   const stats = useMemo(() => ({
     online: machines.filter((m) => m.status === 'online').length,
-    stale: machines.filter((m) => m.status === 'pending').length,
+    stale: machines.filter((m) => m.status === 'stale').length,
     offline: machines.filter((m) => m.status === 'offline').length,
     failed: tasks.filter((task) => task.status === 'failed').length,
     profiles: ixProfiles.length,
@@ -192,6 +193,39 @@ export function AppProvider({ children }) {
     return () => window.clearInterval(timer);
   }, [refreshNodes, refreshMachines, streamLive]);
 
+  useEffect(() => {
+    if (!bootstrapped) return;
+    machines.forEach((m) => {
+      if (m.status !== 'stale' && m.status !== 'offline') return;
+      const key = `machine:${m.id}:${m.status}`;
+      if (alertKeysRef.current.has(key)) return;
+      alertKeysRef.current.add(key);
+      const label = m.status === 'stale' ? '心跳延迟（stale）' : '已离线';
+      toast.error(`机器「${m.name || m.id}」${label}`, { id: key, duration: 8000 });
+    });
+    ixProfiles.forEach((p) => {
+      const machine = machines.find((m) => m.id === p.machine_id);
+      if (p.status === 'failed') {
+        const key = `profile-failed:${p.id}`;
+        if (!alertKeysRef.current.has(key)) {
+          alertKeysRef.current.add(key);
+          toast.error(`线路「${p.name}」应用失败，请检查任务日志`, { id: key, duration: 8000 });
+        }
+      }
+      if (machine && (machine.status === 'stale' || machine.status === 'offline') && p.status === 'healthy') {
+        const key = `profile-stale:${p.id}:${machine.status}`;
+        if (!alertKeysRef.current.has(key)) {
+          alertKeysRef.current.add(key);
+          toast(`线路「${p.name}」绑定机器 ${machine.status === 'stale' ? '心跳延迟' : '离线'}`, {
+            id: key,
+            icon: '⚠️',
+            duration: 8000,
+          });
+        }
+      }
+    });
+  }, [machines, ixProfiles, bootstrapped]);
+
   const handleCopyValue = useCallback(async (text, title = '内容') => {
     const ok = await copyText(text);
     if (ok) toast.success(`已复制 ${title}`);
@@ -270,6 +304,60 @@ export function AppProvider({ children }) {
     return data;
   }, [apiV2, run, trackTasks, refreshTasks]);
 
+  const pauseIxProfile = useCallback(async (profile) => {
+    const data = await run('暂停线路', async () => apiV2(`/profiles/${encodeURIComponent(profile.id)}/pause`, { body: {} }), { silent: true });
+    setIxProfiles((prev) => prev.map((p) => (p.id === profile.id ? { ...p, enabled: false, status: 'paused' } : p)));
+    trackTasks(data, '暂停线路');
+    await refreshTasks();
+    return data;
+  }, [apiV2, run, trackTasks, refreshTasks]);
+
+  const resumeIxProfile = useCallback(async (profile) => {
+    const data = await run('恢复线路', async () => apiV2(`/profiles/${encodeURIComponent(profile.id)}/resume`, { body: {} }), { silent: true });
+    setIxProfiles((prev) => prev.map((p) => (p.id === profile.id ? { ...p, enabled: true, status: 'healthy' } : p)));
+    trackTasks(data, '恢复线路');
+    await refreshTasks();
+    return data;
+  }, [apiV2, run, trackTasks, refreshTasks]);
+
+  const diagnoseIxProfile = useCallback(async (profile) => {
+    const data = await run('线路诊断', async () => apiV2(`/profiles/${encodeURIComponent(profile.id)}/diagnose`, { body: {} }), { silent: true });
+    trackTasks(data, '线路诊断');
+    await refreshTasks();
+    return data;
+  }, [apiV2, run, trackTasks, refreshTasks]);
+
+  const fetchIxProfileCode = useCallback((profile) => new Promise((resolve, reject) => {
+    (async () => {
+      try {
+        const data = await apiV2(`/profiles/${encodeURIComponent(profile.id)}/code`);
+        const taskId = data?.task?.id;
+        if (!taskId) {
+          reject(new Error('未创建拉取任务'));
+          return;
+        }
+        setPendingTaskIds((prev) => [...new Set([...prev, taskId])]);
+        watchTasks(apiBase, token, [taskId], {
+          onUpdate: (task) => mergeTaskUpdate(task),
+          onDone: async (task) => {
+            mergeTaskUpdate(task);
+            setPendingTaskIds((prev) => prev.filter((id) => id !== task.id));
+            await refreshIxProfiles();
+            if (task.status === 'succeeded') {
+              const text = (task.stdout || task.result || '').trim();
+              resolve(text || profile.code_redacted || '');
+            } else {
+              reject(new Error(task.error || task.result || '拉取接入码失败'));
+            }
+          },
+          onError: (err) => reject(err),
+        });
+      } catch (error) {
+        reject(error);
+      }
+    })();
+  }), [apiV2, apiBase, token, mergeTaskUpdate, refreshIxProfiles]);
+
   const openProfile = useCallback((profile) => {
     navigate(`/profiles/${profile.id}`);
   }, [navigate]);
@@ -341,6 +429,10 @@ export function AppProvider({ children }) {
     syncIxProfile,
     refreshIxProfileCode,
     saveProfileRules,
+    pauseIxProfile,
+    resumeIxProfile,
+    diagnoseIxProfile,
+    fetchIxProfileCode,
     openProfile,
     runDiagnostics,
     saveSettings,
